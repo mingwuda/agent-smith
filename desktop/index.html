@@ -86,6 +86,9 @@
   .step-details { display:none; padding:8px 12px; background:#f8f8fa; border:1px solid #e0e0e3; border-top:none; border-radius:0 0 8px 8px; font-size:13px; }
   .step-details.open { display:block; }
   .step-details .thought { color:#666; font-style:italic; margin-bottom:6px; white-space:pre-wrap; word-break:break-word; }
+  .step-details .thought h1,.step-details .thought h2,.step-details .thought h3 { font-size:inherit; font-weight:600; }
+  .step-details .thought p { margin:2px 0; }
+  .step-details .thought code { background:#d4d4d9; padding:1px 4px; border-radius:3px; font-size:12px; }
   .step-details .args { background:#1c1c1e; color:#e8e8ed; padding:8px; border-radius:6px; font-size:12px; font-family:"SF Mono",Menlo,monospace; overflow-x:auto; margin-bottom:6px; }
   .step-details .result { background:#e8f5e9; color:#2e7d32; padding:8px; border-radius:6px; font-size:12px; white-space:pre-wrap; word-break:break-word; }
   
@@ -341,6 +344,33 @@ function handleStreamEvent(data) {
   const container = document.getElementById('messages');
   
   switch (data.type) {
+    case 'thought':
+      hideTyping();
+      // 创建步骤容器
+      if (!currentStepsEl) {
+        currentStepsEl = document.createElement('div');
+        currentStepsEl.className = 'steps-container';
+        container.appendChild(currentStepsEl);
+      }
+      // 添加思考步骤
+      const thoughtText = data.thought || '';
+      const thoughtDiv = document.createElement('div');
+      thoughtDiv.style.marginBottom = '4px';
+      thoughtDiv.dataset.step = data.step || '0';
+      thoughtDiv.innerHTML = `
+        <div class="step-toggle open" onclick="toggleStep(this)">
+          <span class="arrow">▶</span>
+          <span class="tool-icon">🤔</span>
+          <span class="tool-name">思考</span>
+          <span style="color:#999;font-size:11px;margin-left:auto;">第 ${data.step || '?'} 步</span>
+        </div>
+        <div class="step-details open">
+          <div class="thought">${renderMarkdown(thoughtText)}</div>
+        </div>`;
+      currentStepsEl.appendChild(thoughtDiv);
+      container.scrollTop = container.scrollHeight;
+      break;
+    
     case 'tool_start':
       // 移除 typing
       hideTyping();
