@@ -266,7 +266,12 @@ function hideTyping() {
   if (el) el.remove();
 }
 
-// ---------- API 调用 ----------
+// ---------- API 调用（流式） ----------
+
+let currentBotMsgEl = null;       // 当前 bot 消息 DOM
+let currentStepsEl = null;        // 当前步骤容器 DOM
+let currentFinalContent = '';     // 累积的最终回复
+let streamingActive = false;
 
 async function send() {
   const text = input.value.trim();
@@ -276,28 +281,55 @@ async function send() {
   input.value = '';
   isLoading = true;
   sendBtn.disabled = true;
-  showTyping();
+  streamingActive = true;
+  
+  // 初始化步骤容器和 bot 消息
+  currentStepsEl = null;
+  currentBotMsgEl = null;
+  currentFinalContent = '';
   
   try {
-    const res = await fetch(`/run`, {
+    const res = await fetch(`/run/stream`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message: text, thread_id: threadId }),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    hideTyping();
-    // 显示中间步骤
-    if (data.steps && data.steps.length > 0) {
-      renderSteps(data.steps);
+    
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+      
+      for (const line of lines) {
+        if (line.startsWith('data: ') && line !== 'data: [DONE]') {
+          const data = JSON.parse(line.slice(6));
+          handleStreamEvent(data);
+        }
+      }
     }
-    addMessage(data.result || '（无响应）', 'bot');
+    
+    // 处理 buffer 中剩余内容
+    if (buffer.startsWith('data: ') && buffer !== 'data: [DONE]') {
+      const data = JSON.parse(buffer.slice(6));
+      handleStreamEvent(data);
+    }
+    
   } catch (e) {
-    hideTyping();
-    addMessage('⚠️ 连接 Agent 失败，请确认 Python 服务正在运行（python main.py）', 'system');
-    setStatus('error');
+    if (streamingActive) {
+      hideTyping();
+      addMessage('⚠️ 连接中断', 'system');
+    }
   }
   
+  streamingActive = false;
   isLoading = false;
   sendBtn.disabled = false;
   input.focus();
@@ -305,56 +337,90 @@ async function send() {
   loadSessions();
 }
 
-// ---------- 步骤渲染 ----------
-
-function renderSteps(steps) {
+function handleStreamEvent(data) {
   const container = document.getElementById('messages');
-  const wrapper = document.createElement('div');
-  wrapper.className = 'steps-container';
   
-  steps.forEach((step, i) => {
-    if (step.type === 'tool_call') {
-      const toolIcon = getToolIcon(step.tool);
-      const thoughtHtml = step.thought ? `<div class="thought">🤔 ${escapeHtml(step.thought)}</div>` : '';
-      const argsHtml = step.args && Object.keys(step.args).length > 0
-        ? `<div class="args">${escapeHtml(JSON.stringify(step.args, null, 2))}</div>`
-        : '';
+  switch (data.type) {
+    case 'tool_start':
+      // 移除 typing
+      hideTyping();
+      // 创建步骤容器
+      if (!currentStepsEl) {
+        currentStepsEl = document.createElement('div');
+        currentStepsEl.className = 'steps-container';
+        container.appendChild(currentStepsEl);
+      }
       
-      wrapper.innerHTML += `
-        <div style="margin-bottom:4px;">
-          <div class="step-toggle" onclick="toggleStep(this)">
-            <span class="arrow">▶</span>
-            <span class="tool-icon">${toolIcon}</span>
-            <span class="tool-name">${escapeHtml(step.tool)}</span>
-            <span style="color:#999;font-size:11px;margin-left:auto;">工具调用</span>
-          </div>
-          <div class="step-details">
-            ${thoughtHtml}
-            ${argsHtml}
-          </div>
-        </div>`;
-    } else if (step.type === 'tool_result') {
-      const resultHtml = step.result
-        ? `<div class="result">✅ ${escapeHtml(step.result)}</div>`
-        : '';
+      const toolIcon = getToolIcon(data.tool);
+      const thoughtHtml = data.thought ? `<div class="thought">🤔 ${escapeHtml(data.thought)}</div>` : '';
+      const argsHtml = data.args ? `<div class="args">${escapeHtml(JSON.stringify(data.args, null, 2))}</div>` : '';
       
-      wrapper.innerHTML += `
-        <div style="margin-bottom:4px;margin-left:20px;">
-          <div class="step-toggle" onclick="toggleStep(this)">
-            <span class="arrow">▶</span>
-            <span class="tool-icon">📤</span>
-            <span class="tool-name">结果</span>
-            <span style="color:#999;font-size:11px;margin-left:auto;">${escapeHtml(step.tool || '')}</span>
-          </div>
-          <div class="step-details">
-            ${resultHtml}
-          </div>
+      const stepDiv = document.createElement('div');
+      stepDiv.style.marginBottom = '4px';
+      stepDiv.dataset.step = data.step || '0';
+      stepDiv.innerHTML = `
+        <div class="step-toggle open" onclick="toggleStep(this)">
+          <span class="arrow">▶</span>
+          <span class="tool-icon">${toolIcon}</span>
+          <span class="tool-name">${escapeHtml(data.tool)}</span>
+          <span style="color:#999;font-size:11px;margin-left:auto;">⏳ 执行中...</span>
+        </div>
+        <div class="step-details open">
+          ${thoughtHtml}
+          ${argsHtml}
         </div>`;
-    }
-  });
-  
-  container.appendChild(wrapper);
-  container.scrollTop = container.scrollHeight;
+      currentStepsEl.appendChild(stepDiv);
+      container.scrollTop = container.scrollHeight;
+      break;
+    
+    case 'tool_result':
+      // 更新对应的工具调用状态
+      if (currentStepsEl) {
+        const toggles = currentStepsEl.querySelectorAll('.step-toggle');
+        const lastToggle = toggles[toggles.length - 1];
+        if (lastToggle) {
+          const statusSpan = lastToggle.querySelector('span:last-child');
+          if (statusSpan) statusSpan.textContent = '✅ 完成';
+          
+          // 添加结果到详情
+          const details = lastToggle.nextElementSibling;
+          if (details && data.result) {
+            const resultDiv = document.createElement('div');
+            resultDiv.className = 'result';
+            resultDiv.textContent = '✅ ' + data.result;
+            details.appendChild(resultDiv);
+          }
+        }
+      }
+      container.scrollTop = container.scrollHeight;
+      break;
+    
+    case 'token':
+      hideTyping();
+      if (!currentBotMsgEl) {
+        currentBotMsgEl = document.createElement('div');
+        currentBotMsgEl.className = 'msg bot';
+        container.appendChild(currentBotMsgEl);
+      }
+      currentFinalContent += data.content;
+      // 实时渲染 Markdown
+      currentBotMsgEl.innerHTML = renderMarkdown(currentFinalContent);
+      container.scrollTop = container.scrollHeight;
+      break;
+    
+    case 'error':
+      hideTyping();
+      addMessage('❌ ' + data.content, 'system');
+      break;
+    
+    case 'done':
+      hideTyping();
+      // 最终确认渲染
+      if (currentBotMsgEl && data.content) {
+        currentBotMsgEl.innerHTML = renderMarkdown(data.content);
+      }
+      break;
+  }
 }
 
 function getToolIcon(toolName) {

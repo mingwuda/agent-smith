@@ -130,7 +130,7 @@ class ReloadResponse(BaseModel):
 
 # ---------- 桌面 UI 路由 ----------
 
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
 def serve_ui():
@@ -184,6 +184,67 @@ async def run_agent(req: RunRequest):
         session_store.rename_session(session_id, title)
     
     return RunResponse(result=result, steps=steps)
+
+
+@app.post("/run/stream")
+async def run_agent_stream(req: RunRequest):
+    """流式处理消息（SSE）"""
+    if not agent:
+        init_agent()
+    if not agent:
+        raise HTTPException(503, "Agent 初始化失败")
+    
+    session_id = req.thread_id
+    # 确保会话存在
+    session = session_store.get_session(session_id)
+    if session is None:
+        meta_path = Path.home() / ".desktop_agent" / "sessions" / f"{session_id}.json"
+        msgs_path = Path.home() / ".desktop_agent" / "sessions" / f"{session_id}_messages.json"
+        if not meta_path.exists():
+            now = __import__('datetime').datetime.now().isoformat()
+            meta = {"id": session_id, "title": f"会话 {session_id[:8]}", "created_at": now, "updated_at": now, "message_count": 0}
+            meta_path.parent.mkdir(parents=True, exist_ok=True)
+            meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+            msgs_path.write_text("[]", encoding="utf-8")
+    
+    # 保存用户消息
+    session_store.add_message(session_id, "user", req.message)
+    
+    agent.switch_thread(session_id)
+    
+    async def event_stream():
+        final_content = ""
+        async for sse_event in agent.stream_run(req.message):
+            yield sse_event
+            # 收集最终内容
+            if '"type": "done"' in sse_event:
+                try:
+                    import re
+                    m = re.search(r'data: ({.*})', sse_event)
+                    if m:
+                        data = json.loads(m.group(1))
+                        final_content = data.get("content", "")
+                except Exception:
+                    pass
+        
+        # 保存 AI 回复
+        if final_content:
+            session_store.add_message(session_id, "assistant", final_content)
+            # 更新会话标题
+            session = session_store.get_session(session_id)
+            if session and session.get("message_count", 0) <= 2:
+                title = req.message[:30] + ("..." if len(req.message) > 30 else "")
+                session_store.rename_session(session_id, title)
+    
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.get("/skills", response_model=list[SkillInfo])

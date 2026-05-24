@@ -1,5 +1,6 @@
 """桌面 AI 智能体核心"""
-from typing import Optional
+import json
+from typing import AsyncGenerator, Optional
 
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
@@ -155,6 +156,105 @@ class DesktopAgent:
             return final_content, steps
         except Exception as e:
             return f"❌ 执行出错: {type(e).__name__}: {e}", []
+    
+    async def stream_run(self, message: str) -> AsyncGenerator[str, None]:
+        """流式处理用户消息，yield SSE 格式事件"""
+        run_config = {"configurable": {"thread_id": self._thread_id}}
+        input_data = {"messages": [("human", message)]}
+        
+        # 记录输入 token
+        self.tracker.record(
+            model=self.config.model, input_tokens=len(message),
+            output_tokens=0, tool_name="user_input",
+        )
+        
+        tool_call_buffers: dict[str, dict] = {}  # name -> {args_accum, thought_accum}
+        final_content = ""
+        step_count = 0
+        
+        try:
+            async for event in self._graph.astream_events(
+                input_data, run_config, version="v2",
+            ):
+                kind = event["event"]
+                node = event.get("metadata", {}).get("langgraph_node", "")
+                
+                # ── LLM 流式 token ──
+                if kind == "on_chat_model_stream" and node == "agent":
+                    chunk = event["data"]["chunk"]
+                    
+                    # 收集 tool call 信息
+                    if hasattr(chunk, "tool_call_chunks") and chunk.tool_call_chunks:
+                        for tc in chunk.tool_call_chunks:
+                            idx = tc.get("index", 0)
+                            name = tc.get("name", "") or ""
+                            args_str = tc.get("args", "") or ""
+                            
+                            if idx not in tool_call_buffers:
+                                tool_call_buffers[idx] = {"name": name, "args": "", "thought": ""}
+                            buf = tool_call_buffers[idx]
+                            if name:
+                                buf["name"] = name
+                            buf["args"] += args_str
+                    
+                    # 收集纯文本 token
+                    if chunk.content and not getattr(chunk, "tool_call_chunks", None):
+                        final_content += chunk.content
+                        yield f"data: {json.dumps({'type': 'token', 'content': chunk.content}, ensure_ascii=False)}\n\n"
+                
+                # ── 工具开始 ──
+                elif kind == "on_tool_start":
+                    step_count += 1
+                    # 从 buffer 中取出该工具的信息
+                    tool_name = event.get("name", "")
+                    # 从输入参数中提取
+                    inp = event.get("data", {}).get("input", {})
+                    if isinstance(inp, dict):
+                        # 获取第一个非空的字符串参数
+                        args_preview = {k: str(v)[:80] for k, v in inp.items() if not k.startswith("_")}
+                    else:
+                        args_preview = {"input": str(inp)[:80]}
+                    
+                    # 取出之前缓存的 thought
+                    thought = ""
+                    for buf in tool_call_buffers.values():
+                        if buf["name"] == tool_name:
+                            thought = buf.get("thought", "")
+                            break
+                    
+                    yield f"data: {json.dumps({
+                        'type': 'tool_start',
+                        'tool': tool_name,
+                        'args': args_preview,
+                        'thought': thought,
+                        'step': step_count,
+                    }, ensure_ascii=False)}\n\n"
+                
+                # ── 工具结束 ──
+                elif kind == "on_tool_end":
+                    output = event.get("data", {}).get("output", "")
+                    output_str = str(output)[:500]
+                    tool_name = event.get("name", "")
+                    
+                    # 记录用量
+                    self.tracker.record(
+                        model=self.config.model, input_tokens=0,
+                        output_tokens=len(output_str), tool_name=tool_name,
+                    )
+                    
+                    yield f"data: {json.dumps({
+                        'type': 'tool_result',
+                        'tool': tool_name,
+                        'result': _truncate(output_str, 400),
+                    }, ensure_ascii=False)}\n\n"
+        
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'content': f'{type(e).__name__}: {e}'}, ensure_ascii=False)}\n\n"
+        
+        finally:
+            # 发送完成事件
+            yield f"data: {json.dumps({'type': 'done', 'content': final_content}, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
     
     def switch_thread(self, thread_id: str):
         self._thread_id = thread_id
