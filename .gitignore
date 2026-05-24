@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# 环境
+.env
+*.venv/
+
+# 系统
+.DS_Store
+Thumbs.db
+
+# 会话数据
+.desktop_agent/
+
+# 桌面壳
+desktop/node_modules/
+desktop/package-lock.json
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo

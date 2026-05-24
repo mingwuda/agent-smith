@@ -1,0 +1,8 @@
+{
+  "name": "desktop-agent-ui",
+  "version": "1.0.0",
+  "description": "桌面 AI 智能体 - 浏览器端",
+  "scripts": {
+    "start": "请直接打开浏览器访问 http://127.0.0.1:8899"
+  }
+}
