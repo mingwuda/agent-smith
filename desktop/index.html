@@ -74,6 +74,20 @@
   .typing-indicator span:nth-child(2) { animation-delay:0.2s; }
   .typing-indicator span:nth-child(3) { animation-delay:0.4s; }
   @keyframes bounce { 0%,80%,100% { transform:translateY(0); } 40% { transform:translateY(-6px); } }
+
+  /* 工具调用/思考步骤 */
+  .steps-container { margin:8px 0; max-width:85%; }
+  .step-toggle { display:flex; align-items:center; gap:6px; width:100%; padding:6px 12px; background:#f0f0f2; border:1px solid #e0e0e3; border-radius:8px; font-size:12px; cursor:pointer; color:#555; transition:background .15s; }
+  .step-toggle:hover { background:#e5e5ea; }
+  .step-toggle .arrow { transition:transform .2s; font-size:10px; }
+  .step-toggle.open .arrow { transform:rotate(90deg); }
+  .step-toggle .tool-icon { font-size:14px; }
+  .step-toggle .tool-name { font-weight:500; color:#333; }
+  .step-details { display:none; padding:8px 12px; background:#f8f8fa; border:1px solid #e0e0e3; border-top:none; border-radius:0 0 8px 8px; font-size:13px; }
+  .step-details.open { display:block; }
+  .step-details .thought { color:#666; font-style:italic; margin-bottom:6px; white-space:pre-wrap; word-break:break-word; }
+  .step-details .args { background:#1c1c1e; color:#e8e8ed; padding:8px; border-radius:6px; font-size:12px; font-family:"SF Mono",Menlo,monospace; overflow-x:auto; margin-bottom:6px; }
+  .step-details .result { background:#e8f5e9; color:#2e7d32; padding:8px; border-radius:6px; font-size:12px; white-space:pre-wrap; word-break:break-word; }
   
   /* 设置弹窗 */
   .modal-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.4); z-index:100; align-items:center; justify-content:center; }
@@ -273,6 +287,10 @@ async function send() {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     hideTyping();
+    // 显示中间步骤
+    if (data.steps && data.steps.length > 0) {
+      renderSteps(data.steps);
+    }
     addMessage(data.result || '（无响应）', 'bot');
   } catch (e) {
     hideTyping();
@@ -285,6 +303,79 @@ async function send() {
   input.focus();
   refreshStats();
   loadSessions();
+}
+
+// ---------- 步骤渲染 ----------
+
+function renderSteps(steps) {
+  const container = document.getElementById('messages');
+  const wrapper = document.createElement('div');
+  wrapper.className = 'steps-container';
+  
+  steps.forEach((step, i) => {
+    if (step.type === 'tool_call') {
+      const toolIcon = getToolIcon(step.tool);
+      const thoughtHtml = step.thought ? `<div class="thought">🤔 ${escapeHtml(step.thought)}</div>` : '';
+      const argsHtml = step.args && Object.keys(step.args).length > 0
+        ? `<div class="args">${escapeHtml(JSON.stringify(step.args, null, 2))}</div>`
+        : '';
+      
+      wrapper.innerHTML += `
+        <div style="margin-bottom:4px;">
+          <div class="step-toggle" onclick="toggleStep(this)">
+            <span class="arrow">▶</span>
+            <span class="tool-icon">${toolIcon}</span>
+            <span class="tool-name">${escapeHtml(step.tool)}</span>
+            <span style="color:#999;font-size:11px;margin-left:auto;">工具调用</span>
+          </div>
+          <div class="step-details">
+            ${thoughtHtml}
+            ${argsHtml}
+          </div>
+        </div>`;
+    } else if (step.type === 'tool_result') {
+      const resultHtml = step.result
+        ? `<div class="result">✅ ${escapeHtml(step.result)}</div>`
+        : '';
+      
+      wrapper.innerHTML += `
+        <div style="margin-bottom:4px;margin-left:20px;">
+          <div class="step-toggle" onclick="toggleStep(this)">
+            <span class="arrow">▶</span>
+            <span class="tool-icon">📤</span>
+            <span class="tool-name">结果</span>
+            <span style="color:#999;font-size:11px;margin-left:auto;">${escapeHtml(step.tool || '')}</span>
+          </div>
+          <div class="step-details">
+            ${resultHtml}
+          </div>
+        </div>`;
+    }
+  });
+  
+  container.appendChild(wrapper);
+  container.scrollTop = container.scrollHeight;
+}
+
+function getToolIcon(toolName) {
+  const icons = {
+    'read_file': '📖',
+    'write_file': '✏️',
+    'append_to_file': '📝',
+    'list_files': '📂',
+    'delete_file': '🗑️',
+    'search_files': '🔍',
+    'get_workspace_path': '📁',
+    'run_python': '🐍',
+    'get_system_info': '💻',
+  };
+  return icons[toolName] || '🔧';
+}
+
+function toggleStep(el) {
+  el.classList.toggle('open');
+  const details = el.nextElementSibling;
+  if (details) details.classList.toggle('open');
 }
 
 // ---------- 会话管理 ----------

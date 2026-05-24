@@ -93,6 +93,7 @@ class RunRequest(BaseModel):
 
 class RunResponse(BaseModel):
     result: str
+    steps: list[dict] = []
 
 
 class SkillInfo(BaseModel):
@@ -171,7 +172,7 @@ async def run_agent(req: RunRequest):
     session_store.add_message(session_id, "user", req.message)
     
     agent.switch_thread(session_id)
-    result = await agent.run(req.message)
+    result, steps = await agent.run(req.message)
     
     # 保存 AI 回复
     session_store.add_message(session_id, "assistant", result)
@@ -182,7 +183,7 @@ async def run_agent(req: RunRequest):
         title = req.message[:30] + ("..." if len(req.message) > 30 else "")
         session_store.rename_session(session_id, title)
     
-    return RunResponse(result=result)
+    return RunResponse(result=result, steps=steps)
 
 
 @app.get("/skills", response_model=list[SkillInfo])

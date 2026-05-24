@@ -10,6 +10,66 @@ from monitoring.usage_tracker import get_tracker, UsageTracker
 from skills.registry import get_registry, SkillRegistry
 
 
+def _extract_tool_name(msg) -> str:
+    """从消息中提取工具名"""
+    if hasattr(msg, "tool_calls") and msg.tool_calls:
+        return msg.tool_calls[0].get("name", "") if isinstance(msg.tool_calls[0], dict) else msg.tool_calls[0].name
+    return ""
+
+
+def _extract_tool_args(msg) -> dict:
+    """从消息中提取工具参数"""
+    if hasattr(msg, "tool_calls") and msg.tool_calls:
+        tc = msg.tool_calls[0]
+        if isinstance(tc, dict):
+            return tc.get("args", {}) or tc.get("parameters", {})
+        return getattr(tc, "args", {})
+    return {}
+
+
+def _truncate(text: str, max_len: int = 300) -> str:
+    if len(text) <= max_len:
+        return text
+    return text[:max_len] + "..."
+
+
+def _extract_steps_from_messages(messages: list) -> list[dict]:
+    """从消息历史中提取中间步骤（工具调用 + 思考）"""
+    steps = []
+    for msg in messages:
+        if msg.type == "ai" and hasattr(msg, "tool_calls") and msg.tool_calls:
+            # AI 调用工具 —— 这是"思考"步骤
+            name = _extract_tool_name(msg)
+            args = _extract_tool_args(msg)
+            thought = msg.content or ""
+            steps.append({
+                "type": "tool_call",
+                "tool": name,
+                "args": args,
+                "thought": thought,
+            })
+        elif msg.type == "tool":
+            # 工具返回结果
+            tool_name = getattr(msg, "name", "") or ""
+            raw = msg.content
+            try:
+                import json
+                result_text = json.dumps(json.loads(raw), ensure_ascii=False) if raw.startswith("{") else raw
+            except (json.JSONDecodeError, ValueError):
+                result_text = raw
+            steps.append({
+                "type": "tool_result",
+                "tool": tool_name,
+                "result": _truncate(result_text),
+                "result_full": result_text,
+            })
+        elif msg.type == "ai" and msg.content and not getattr(msg, "tool_calls", None):
+            # AI 的纯文本思考（非工具调用）
+            pass  # 不做特殊处理，因为最终回复会包含
+    
+    return steps
+
+
 class DesktopAgent:
     """桌面 AI 智能体"""
     
@@ -52,8 +112,8 @@ class DesktopAgent:
             checkpointer=self.memory,
         )
     
-    async def run(self, message: str) -> str:
-        """处理用户消息，返回结果"""
+    async def run(self, message: str) -> tuple[str, list[dict]]:
+        """处理用户消息，返回 (最终回复, 中间步骤列表)"""
         config = {"configurable": {"thread_id": self._thread_id}}
         
         try:
@@ -61,10 +121,16 @@ class DesktopAgent:
                 {"messages": [("human", message)]},
                 config,
             )
-            # 提取 AI 的最后一条消息
-            for msg in reversed(result["messages"]):
+            messages = result["messages"]
+            
+            # 提取中间步骤
+            steps = _extract_steps_from_messages(messages)
+            
+            # 提取 AI 的最后一条消息作为最终回复
+            final_content = "（Agent 未产生输出）"
+            for msg in reversed(messages):
                 if hasattr(msg, "content") and msg.type == "ai" and msg.content:
-                    # 尝试获取 token 用量
+                    # 记录 token 用量
                     try:
                         usage = getattr(msg, "usage_metadata", None) or {}
                         if hasattr(usage, "input_tokens"):
@@ -83,11 +149,12 @@ class DesktopAgent:
                         output_tokens=output_tok,
                         tool_name="agent_response",
                     )
-                    return msg.content
+                    final_content = msg.content
+                    break
             
-            return "（Agent 未产生输出）"
+            return final_content, steps
         except Exception as e:
-            return f"❌ 执行出错: {type(e).__name__}: {e}"
+            return f"❌ 执行出错: {type(e).__name__}: {e}", []
     
     def switch_thread(self, thread_id: str):
         self._thread_id = thread_id
