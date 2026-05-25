@@ -11,6 +11,7 @@ set "BUILD_ROOT=%ROOT%\dist"
 set "PACKAGE_ROOT=%BUILD_ROOT%\windows"
 set "PACKAGE_DIR=%PACKAGE_ROOT%\DesktopAgent-Windows"
 set "ZIP_PATH=%PACKAGE_ROOT%\DesktopAgent-Windows.zip"
+set "WHEEL_TAG_FILE=%ROOT%\.venv-windows-build\wheel-tag.txt"
 
 cd /d "%ROOT%" || exit /b 1
 
@@ -33,7 +34,20 @@ if not exist "%PYTHON%" (
 "%PYTHON%" -m pip install --upgrade pip
 if errorlevel 1 exit /b 1
 
-"%PYTHON%" -m pip install -r "%ROOT%\requirements.txt" -r "%ROOT%\requirements-build.txt"
+"%PYTHON%" -c "import platform,sys; print('cp%d%d-%s' % (sys.version_info[0], sys.version_info[1], 'win_amd64' if platform.machine().lower() in ('amd64','x86_64') else 'win32'))" > "%WHEEL_TAG_FILE%"
+set /p WHEEL_TAG=<"%WHEEL_TAG_FILE%"
+set "WHEEL_DIR=%ROOT%\dep\windows\%WHEEL_TAG%"
+
+if exist "%WHEEL_DIR%" (
+  echo Installing dependencies from local wheelhouse:
+  echo   %WHEEL_DIR%
+  "%PYTHON%" -m pip install --no-index --find-links "%WHEEL_DIR%" -r "%ROOT%\requirements.txt" -r "%ROOT%\requirements-build.txt"
+) else (
+  echo Local wheelhouse not found, installing dependencies from package index.
+  echo Expected local wheelhouse:
+  echo   %WHEEL_DIR%
+  "%PYTHON%" -m pip install -r "%ROOT%\requirements.txt" -r "%ROOT%\requirements-build.txt"
+)
 if errorlevel 1 exit /b 1
 
 "%PYINSTALLER%" --clean --noconfirm "%SPEC%"

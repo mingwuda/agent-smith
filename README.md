@@ -86,6 +86,20 @@ python main.py
 packaging\windows\build.cmd
 ```
 
+如果 Windows 机器不能联网，可以先在 macOS 上下载 Windows wheel 依赖：
+
+```bash
+PY_VERSION=311 PLATFORM=win_amd64 bash packaging/windows/download-deps-macos.sh
+```
+
+然后把整个 `dep/` 目录和项目代码一起拷到 Windows 机器。`build.cmd` 会优先从以下目录离线安装依赖：
+
+```text
+dep\windows\cp311-win_amd64
+```
+
+`PY_VERSION` 必须和 Windows 构建机的 Python 版本一致，例如 Python 3.10 用 `310`，Python 3.11 用 `311`，Python 3.12 用 `312`。
+
 也可以用 PowerShell：
 
 ```powershell
