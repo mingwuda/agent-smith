@@ -57,6 +57,18 @@ start.cmd
 
 它会自动创建 `.venv`、安装依赖并启动服务。如果项目里带有 `dep\windows\cp版本-win_amd64` 离线依赖目录，会优先离线安装。
 
+如果要排查 Windows 依赖安装问题，可以先执行一个全新的在线验证环境：
+
+```cmd
+packaging\windows\verify-venv.cmd
+```
+
+验证通过后，也可以直接用这个环境启动：
+
+```cmd
+packaging\windows\verify-venv.cmd run
+```
+
 ### 4. 配置 API Key
 
 打开页面后，点击右上角 **⚙️ 设置**，选择模型厂商并填写对应配置：
