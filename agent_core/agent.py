@@ -34,6 +34,10 @@ def _truncate(text: str, max_len: int = 300) -> str:
     return text[:max_len] + "..."
 
 
+def _sse(data: dict) -> str:
+    return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
 def _extract_steps_from_messages(messages: list) -> list[dict]:
     """从消息历史中提取中间步骤（工具调用 + 思考）"""
     steps = []
@@ -196,7 +200,7 @@ class DesktopAgent:
                         thinking_buffer += chunk.content
                         # 暂时作为 token 流式输出，但最终如果发现是推理会转为 thought
                         final_buffer += chunk.content
-                        yield f"data: {json.dumps({'type': 'token', 'content': chunk.content}, ensure_ascii=False)}\n\n"
+                        yield _sse({"type": "token", "content": chunk.content})
                     elif has_content and in_tool_call:
                         # 工具调用后还在输出文本 → 这是下一轮思考或最终回复
                         # 这里不会走到，因为 tool start/end 会重置状态
@@ -217,11 +221,11 @@ class DesktopAgent:
                         if final_buffer.endswith(thought):
                             final_buffer = final_buffer[:-len(thought)]
                         # 发送 thought 事件
-                        yield f"data: {json.dumps({
-                            'type': 'thought',
-                            'thought': thought,
-                            'step': step_count,
-                        }, ensure_ascii=False)}\n\n"
+                        yield _sse({
+                            "type": "thought",
+                            "thought": thought,
+                            "step": step_count,
+                        })
                     
                     # 工具参数
                     inp = event.get("data", {}).get("input", {})
@@ -230,12 +234,12 @@ class DesktopAgent:
                     else:
                         args_preview = {"input": str(inp)[:80]}
                     
-                    yield f"data: {json.dumps({
-                        'type': 'tool_start',
-                        'tool': tool_name,
-                        'args': args_preview,
-                        'step': step_count,
-                    }, ensure_ascii=False)}\n\n"
+                    yield _sse({
+                        "type": "tool_start",
+                        "tool": tool_name,
+                        "args": args_preview,
+                        "step": step_count,
+                    })
                 
                 # ── 工具结束 ──
                 elif kind == "on_tool_end":
@@ -248,24 +252,24 @@ class DesktopAgent:
                         output_tokens=len(output_str), tool_name=tool_name,
                     )
                     
-                    yield f"data: {json.dumps({
-                        'type': 'tool_result',
-                        'tool': tool_name,
-                        'result': _truncate(output_str, 400),
-                    }, ensure_ascii=False)}\n\n"
+                    yield _sse({
+                        "type": "tool_result",
+                        "tool": tool_name,
+                        "result": _truncate(output_str, 400),
+                    })
                     
                     # 重置状态，准备接收下一轮推理
                     in_tool_call = False
         
         except Exception as e:
-            yield f"data: {json.dumps({'type': 'error', 'content': f'{type(e).__name__}: {e}'}, ensure_ascii=False)}\n\n"
+            yield _sse({"type": "error", "content": f"{type(e).__name__}: {e}"})
         
         finally:
             # 发送完成事件（thinking_buffer 中剩余的是最终回复）
             remaining = thinking_buffer.strip()
             if remaining:
                 final_buffer = remaining
-            yield f"data: {json.dumps({'type': 'done', 'content': final_buffer}, ensure_ascii=False)}\n\n"
+            yield _sse({"type": "done", "content": final_buffer})
             yield "data: [DONE]\n\n"
     
     def switch_thread(self, thread_id: str):

@@ -60,7 +60,7 @@ if errorlevel 1 exit /b 1
 
 echo.
 echo Installing runtime dependencies from package index...
-echo This step uses pip --isolated with an explicit internal index, so global no-dependencies=yes is ignored.
+echo This step uses a temporary pip config with no-dependencies=false.
 "%PYTHON%" -m pip install --index-url "%DESKTOP_AGENT_PIP_INDEX_URL%" --trusted-host "%DESKTOP_AGENT_PIP_TRUSTED_HOST%" --upgrade --force-reinstall --no-cache-dir -r "%ROOT%\requirements.txt"
 if errorlevel 1 (
   echo.
