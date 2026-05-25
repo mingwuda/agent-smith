@@ -13,6 +13,10 @@ set "PACKAGE_DIR=%PACKAGE_ROOT%\DesktopAgent-Windows"
 set "ZIP_PATH=%PACKAGE_ROOT%\DesktopAgent-Windows.zip"
 set "WHEEL_TAG_FILE=%ROOT%\.venv-windows-build\wheel-tag.txt"
 
+set "PIP_NO_DEPS="
+set "PIP_CONFIG_FILE="
+set "PIP_ONLY_BINARY="
+
 cd /d "%ROOT%" || exit /b 1
 
 if not exist "%PYTHON%" (
@@ -31,7 +35,7 @@ if not exist "%PYTHON%" (
   )
 )
 
-"%PYTHON%" -m pip install --upgrade pip
+"%PYTHON%" -m pip --isolated install --upgrade pip
 if errorlevel 1 exit /b 1
 
 "%PYTHON%" -c "import platform,sys; arch='win_amd64' if platform.machine().lower() in ('amd64','x86_64') else 'win32'; print(f'cp{sys.version_info[0]}{sys.version_info[1]}-{arch}')" > "%WHEEL_TAG_FILE%"
@@ -45,12 +49,12 @@ set "WHEEL_DIR=%ROOT%\dep\windows\%WHEEL_TAG%"
 if exist "%WHEEL_DIR%" (
   echo Installing dependencies from local wheelhouse:
   echo   %WHEEL_DIR%
-  "%PYTHON%" -m pip install --no-index --find-links "%WHEEL_DIR%" -r "%ROOT%\requirements.txt" -r "%ROOT%\requirements-build.txt"
+  "%PYTHON%" -m pip --isolated install --no-index --find-links "%WHEEL_DIR%" -r "%ROOT%\requirements.txt" -r "%ROOT%\requirements-build.txt"
 ) else (
   echo Local wheelhouse not found, installing dependencies from package index.
   echo Expected local wheelhouse:
   echo   %WHEEL_DIR%
-  "%PYTHON%" -m pip install -r "%ROOT%\requirements.txt" -r "%ROOT%\requirements-build.txt"
+  "%PYTHON%" -m pip --isolated install -r "%ROOT%\requirements.txt" -r "%ROOT%\requirements-build.txt"
 )
 if errorlevel 1 exit /b 1
 
@@ -75,10 +79,10 @@ if errorlevel 1 (
   exit /b 1
 )
 
-"%PYTHON%" -m pip check
+"%PYTHON%" -m pip --isolated check
 if errorlevel 1 (
   echo Error: installed packages have dependency conflicts.
-  "%PYTHON%" -m pip list
+  "%PYTHON%" -m pip --isolated list
   exit /b 1
 )
 
@@ -86,7 +90,7 @@ if errorlevel 1 (
 if errorlevel 1 (
   echo Error: runtime web dependencies are missing from the build environment.
   echo.
-  "%PYTHON%" -m pip list
+  "%PYTHON%" -m pip --isolated list
   echo.
   echo If you are building offline, recreate the macOS wheelhouse and make sure these wheels exist:
   echo   %WHEEL_DIR%\fastapi-*.whl
