@@ -3,8 +3,10 @@ setlocal EnableExtensions
 
 set "ROOT=%~dp0"
 for %%I in ("%ROOT%") do set "ROOT=%%~fI"
+if "%ROOT:~-1%"=="\" set "ROOT=%ROOT:~0,-1%"
 set "VENV=%ROOT%\.venv"
 set "PYTHON=%VENV%\Scripts\python.exe"
+set "WHEEL_TAG_FILE=%VENV%\wheel-tag.txt"
 
 cd /d "%ROOT%" || exit /b 1
 
@@ -28,8 +30,13 @@ if not exist "%PYTHON%" (
 
 echo Installing dependencies...
 if exist "%ROOT%\dep\windows" (
-  "%PYTHON%" -c "import platform,sys; arch='win_amd64' if platform.machine().lower() in ('amd64','x86_64') else 'win32'; print(f'cp{sys.version_info[0]}{sys.version_info[1]}-{arch}')" > "%VENV%\wheel-tag.txt"
-  set /p WHEEL_TAG=<"%VENV%\wheel-tag.txt"
+  "%PYTHON%" -c "import platform,sys; arch='win_amd64' if platform.machine().lower() in ('amd64','x86_64') else 'win32'; print('cp{}{}-{}'.format(sys.version_info[0], sys.version_info[1], arch))" > "%WHEEL_TAG_FILE%"
+  set /p WHEEL_TAG=<"%WHEEL_TAG_FILE%"
+  if "%WHEEL_TAG%"=="" (
+    echo Error: failed to detect Python wheel tag.
+    pause
+    exit /b 1
+  )
   set "WHEEL_DIR=%ROOT%\dep\windows\%WHEEL_TAG%"
 )
 
