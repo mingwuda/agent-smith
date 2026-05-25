@@ -75,9 +75,18 @@ if errorlevel 1 (
   exit /b 1
 )
 
-"%PYTHON%" -c "import fastapi; import starlette; import uvicorn; import pydantic" >nul 2>nul
+"%PYTHON%" -m pip check
+if errorlevel 1 (
+  echo Error: installed packages have dependency conflicts.
+  "%PYTHON%" -m pip list
+  exit /b 1
+)
+
+"%PYTHON%" -c "import fastapi; import starlette; import uvicorn; import pydantic; print('Runtime web dependency imports OK')"
 if errorlevel 1 (
   echo Error: runtime web dependencies are missing from the build environment.
+  echo.
+  "%PYTHON%" -m pip list
   echo.
   echo If you are building offline, recreate the macOS wheelhouse and make sure these wheels exist:
   echo   %WHEEL_DIR%\fastapi-*.whl
