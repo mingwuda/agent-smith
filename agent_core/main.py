@@ -2,6 +2,9 @@
 import json
 import os
 import sys
+import threading
+import time
+import webbrowser
 from pathlib import Path
 from typing import Any, Optional
 
@@ -12,6 +15,13 @@ import uvicorn
 
 # 确保能找到 agent_core 内的模块
 sys.path.insert(0, str(Path(__file__).parent))
+
+
+def _app_base_dir() -> Path:
+    """Return project root in source mode and PyInstaller resource root when frozen."""
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        return Path(sys._MEIPASS)
+    return Path(__file__).parent.parent
 
 from config import AgentConfig
 from agent import DesktopAgent
@@ -44,7 +54,7 @@ app.add_middleware(
 )
 
 # 挂载桌面 UI 静态文件（先定义 API 路由，再挂载静态文件）
-UI_DIR = Path(__file__).parent.parent / "desktop"
+UI_DIR = _app_base_dir() / "desktop"
 _html_content: Optional[str] = None
 if UI_DIR.exists():
     ui_index = UI_DIR / "index.html"
@@ -479,5 +489,12 @@ if __name__ == "__main__":
     print(f"  📖 API 文档: http://{host}:{port}/docs")
     print(f"  🖥 桌面 UI: http://{host}:{port}/")
     print()
+
+    if os.getenv("AGENT_OPEN_BROWSER", "0") == "1":
+        def _open_browser():
+            time.sleep(1.2)
+            webbrowser.open(f"http://{host}:{port}/")
+
+        threading.Thread(target=_open_browser, daemon=True).start()
     
     uvicorn.run(app, host=host, port=port, log_level="info")

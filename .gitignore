@@ -9,6 +9,7 @@ build/
 # 环境
 .env
 *.venv/
+.venv-windows-build/
 
 # 系统
 .DS_Store

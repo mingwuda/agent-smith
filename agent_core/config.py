@@ -1,6 +1,7 @@
 """配置管理"""
 import json
 import os
+import sys
 from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -8,6 +9,12 @@ from typing import Any
 
 
 CONFIG_FILE = Path.home() / ".desktop_agent" / "config.json"
+
+
+def _bundled_samples_dir() -> Path:
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        return Path(sys._MEIPASS) / "agent_core" / "samples"
+    return Path(__file__).parent / "samples"
 
 DEFAULT_PROVIDERS: dict[str, dict[str, Any]] = {
     "openai": {
@@ -133,7 +140,7 @@ class AgentConfig:
         
         # 3. 填充默认值
         if not config.skills_dir:
-            config.skills_dir = str(Path(__file__).parent / "samples")
+            config.skills_dir = str(_bundled_samples_dir())
         
         # 4. 初始化目录
         Path(config.workspace).mkdir(parents=True, exist_ok=True)

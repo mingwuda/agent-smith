@@ -78,6 +78,30 @@ python main.py
 
 ---
 
+## Windows 一键运行包
+
+在 Windows 机器上执行以下命令生成可分发包：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\packaging\windows\build.ps1
+```
+
+构建完成后会生成：
+
+```text
+dist\windows\DesktopAgent-Windows\
+dist\windows\DesktopAgent-Windows.zip
+```
+
+把 `DesktopAgent-Windows.zip` 发给用户，用户解压后双击 **Start Desktop Agent.bat** 即可启动服务并自动打开浏览器。配置、会话和工作区默认保存在用户目录下：
+
+```text
+%USERPROFILE%\.desktop_agent
+%USERPROFILE%\agent_workspace
+```
+
+---
+
 ## 项目结构
 
 ```
