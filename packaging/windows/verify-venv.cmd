@@ -7,10 +7,11 @@ if "%ROOT:~-1%"=="\" set "ROOT=%ROOT:~0,-1%"
 
 set "VENV=%ROOT%\.venv-windows-verify"
 set "PYTHON=%VENV%\Scripts\python.exe"
+set "EMPTY_PIP_CONFIG=%VENV%\pip-empty.ini"
 if not defined DESKTOP_AGENT_PIP_INDEX_URL set "DESKTOP_AGENT_PIP_INDEX_URL=http://maven.paic.com.cn:8445/repository/pypi/simple/"
 if not defined DESKTOP_AGENT_PIP_TRUSTED_HOST set "DESKTOP_AGENT_PIP_TRUSTED_HOST=maven.paic.com.cn"
-set "PIP_CONFIG_FILE=NUL"
-set "PIP_NO_DEPS=0"
+set "PIP_CONFIG_FILE=%EMPTY_PIP_CONFIG%"
+set "PIP_NO_DEPS="
 set "PIP_ONLY_BINARY="
 
 cd /d "%ROOT%" || exit /b 1
@@ -35,6 +36,8 @@ if %ERRORLEVEL%==0 (
     exit /b 1
   )
 )
+
+type nul > "%EMPTY_PIP_CONFIG%"
 
 echo.
 echo Python:

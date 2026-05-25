@@ -12,11 +12,11 @@ set "PACKAGE_ROOT=%BUILD_ROOT%\windows"
 set "PACKAGE_DIR=%PACKAGE_ROOT%\DesktopAgent-Windows"
 set "ZIP_PATH=%PACKAGE_ROOT%\DesktopAgent-Windows.zip"
 set "WHEEL_TAG_FILE=%ROOT%\.venv-windows-build\wheel-tag.txt"
+set "EMPTY_PIP_CONFIG=%ROOT%\.venv-windows-build\pip-empty.ini"
 
 set "PIP_NO_DEPS="
-set "PIP_CONFIG_FILE=NUL"
+set "PIP_CONFIG_FILE=%EMPTY_PIP_CONFIG%"
 set "PIP_ONLY_BINARY="
-set "PIP_NO_DEPS=0"
 if not defined DESKTOP_AGENT_PIP_INDEX_URL set "DESKTOP_AGENT_PIP_INDEX_URL=http://maven.paic.com.cn:8445/repository/pypi/simple/"
 if not defined DESKTOP_AGENT_PIP_TRUSTED_HOST set "DESKTOP_AGENT_PIP_TRUSTED_HOST=maven.paic.com.cn"
 
@@ -37,6 +37,8 @@ if not exist "%PYTHON%" (
     )
   )
 )
+
+type nul > "%EMPTY_PIP_CONFIG%"
 
 "%PYTHON%" -m pip --isolated install --index-url "%DESKTOP_AGENT_PIP_INDEX_URL%" --trusted-host "%DESKTOP_AGENT_PIP_TRUSTED_HOST%" --upgrade pip
 if errorlevel 1 exit /b 1
