@@ -82,6 +82,12 @@ python main.py
 
 在 Windows 机器上执行以下命令生成可分发包：
 
+```cmd
+packaging\windows\build.cmd
+```
+
+也可以用 PowerShell：
+
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\packaging\windows\build.ps1
 ```

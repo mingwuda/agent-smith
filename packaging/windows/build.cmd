@@ -1,0 +1,66 @@
+@echo off
+setlocal EnableExtensions
+
+set "ROOT=%~dp0..\.."
+for %%I in ("%ROOT%") do set "ROOT=%%~fI"
+set "VENV=%ROOT%\.venv-windows-build"
+set "PYTHON=%VENV%\Scripts\python.exe"
+set "PYINSTALLER=%VENV%\Scripts\pyinstaller.exe"
+set "SPEC=%ROOT%\packaging\windows\DesktopAgent.spec"
+set "BUILD_ROOT=%ROOT%\dist"
+set "PACKAGE_ROOT=%BUILD_ROOT%\windows"
+set "PACKAGE_DIR=%PACKAGE_ROOT%\DesktopAgent-Windows"
+set "ZIP_PATH=%PACKAGE_ROOT%\DesktopAgent-Windows.zip"
+
+cd /d "%ROOT%" || exit /b 1
+
+if not exist "%PYTHON%" (
+  where py >nul 2>nul
+  if %ERRORLEVEL%==0 (
+    py -3 -m venv "%VENV%"
+  ) else (
+    where python >nul 2>nul
+    if %ERRORLEVEL%==0 (
+      python -m venv "%VENV%"
+    ) else (
+      echo Error: Python 3 was not found.
+      echo Install Python 3.10+ from https://www.python.org/downloads/windows/.
+      exit /b 1
+    )
+  )
+)
+
+"%PYTHON%" -m pip install --upgrade pip
+if errorlevel 1 exit /b 1
+
+"%PYTHON%" -m pip install -r "%ROOT%\requirements.txt" -r "%ROOT%\requirements-build.txt"
+if errorlevel 1 exit /b 1
+
+"%PYINSTALLER%" --clean --noconfirm "%SPEC%"
+if errorlevel 1 exit /b 1
+
+if exist "%PACKAGE_DIR%" rmdir /s /q "%PACKAGE_DIR%"
+if not exist "%PACKAGE_ROOT%" mkdir "%PACKAGE_ROOT%"
+
+xcopy "%BUILD_ROOT%\DesktopAgent" "%PACKAGE_DIR%\" /E /I /Y >nul
+if errorlevel 1 exit /b 1
+
+copy /Y "%ROOT%\packaging\windows\Start Desktop Agent.bat" "%PACKAGE_DIR%\Start Desktop Agent.bat" >nul
+copy /Y "%ROOT%\packaging\windows\README-Windows.txt" "%PACKAGE_DIR%\README-Windows.txt" >nul
+
+if exist "%ZIP_PATH%" del /f /q "%ZIP_PATH%"
+where powershell >nul 2>nul
+if %ERRORLEVEL%==0 (
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "Compress-Archive -Path '%PACKAGE_DIR%\*' -DestinationPath '%ZIP_PATH%' -Force" >nul 2>nul
+)
+
+echo.
+echo Windows package created:
+echo   %PACKAGE_DIR%
+if exist "%ZIP_PATH%" (
+  echo   %ZIP_PATH%
+) else (
+  echo Zip creation was skipped or blocked. Use the package directory above.
+)
+
+endlocal
