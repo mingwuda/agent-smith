@@ -6,6 +6,7 @@ PY_VERSION="${PY_VERSION:-311}"
 PLATFORM="${PLATFORM:-win_amd64}"
 WHEEL_DIR="$ROOT/dep/windows/cp${PY_VERSION}-${PLATFORM}"
 
+rm -rf "$WHEEL_DIR"
 mkdir -p "$WHEEL_DIR"
 
 python3 -m pip download \

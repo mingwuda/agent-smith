@@ -54,6 +54,22 @@ if exist "%WHEEL_DIR%" (
 )
 if errorlevel 1 exit /b 1
 
+"%PYTHON%" -c "import win32ctypes.pywin32" >nul 2>nul
+if errorlevel 1 (
+  echo Error: pywin32-ctypes is not installed in the build environment.
+  echo.
+  echo If you are building offline, make sure this wheel exists:
+  echo   %WHEEL_DIR%\pywin32_ctypes-*.whl
+  echo.
+  echo Recreate the macOS wheelhouse after updating requirements-build.txt:
+  echo   PY_VERSION=311 PLATFORM=win_amd64 bash packaging/windows/download-deps-macos.sh
+  echo.
+  echo Then delete the old Windows build venv and run again:
+  echo   rmdir /s /q "%VENV%"
+  echo   packaging\windows\build.cmd
+  exit /b 1
+)
+
 "%PYINSTALLER%" --clean --noconfirm "%SPEC%"
 if errorlevel 1 exit /b 1
 
