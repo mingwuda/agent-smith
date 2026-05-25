@@ -54,11 +54,12 @@ if exist "%WHEEL_DIR%" (
 )
 if errorlevel 1 exit /b 1
 
-"%PYTHON%" -c "import win32ctypes.pywin32" >nul 2>nul
+"%PYTHON%" -c "import pefile; import win32ctypes.pywin32" >nul 2>nul
 if errorlevel 1 (
-  echo Error: pywin32-ctypes is not installed in the build environment.
+  echo Error: PyInstaller Windows helper dependencies are missing.
   echo.
-  echo If you are building offline, make sure this wheel exists:
+  echo If you are building offline, make sure these wheels exist:
+  echo   %WHEEL_DIR%\pefile-*.whl
   echo   %WHEEL_DIR%\pywin32_ctypes-*.whl
   echo.
   echo Recreate the macOS wheelhouse after updating requirements-build.txt:
