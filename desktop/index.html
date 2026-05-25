@@ -578,8 +578,15 @@ function handleStreamEvent(data) {
       hideTyping();
       removeThinkingHint();
       removeGeneratingBadge();
-      // 更新进度为 100%
+      // 折叠所有步骤卡片
       if (currentStepsEl) {
+        const toggles = currentStepsEl.querySelectorAll('.step-toggle');
+        toggles.forEach(t => {
+          t.classList.remove('open');
+          const details = t.nextElementSibling;
+          if (details) details.classList.remove('open');
+        });
+        // 更新进度为 100%
         const prog = currentStepsEl.querySelector('.step-progress');
         if (prog) {
           const fill = prog.querySelector('.fill');
