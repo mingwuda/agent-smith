@@ -9,6 +9,9 @@ set "PYTHON=%VENV%\Scripts\python.exe"
 set "WHEEL_TAG_FILE=%VENV%\wheel-tag.txt"
 if not defined DESKTOP_AGENT_PIP_INDEX_URL set "DESKTOP_AGENT_PIP_INDEX_URL=http://maven.paic.com.cn:8445/repository/pypi/simple/"
 if not defined DESKTOP_AGENT_PIP_TRUSTED_HOST set "DESKTOP_AGENT_PIP_TRUSTED_HOST=maven.paic.com.cn"
+set "PIP_CONFIG_FILE=NUL"
+set "PIP_NO_DEPS=0"
+set "PIP_ONLY_BINARY="
 
 cd /d "%ROOT%" || exit /b 1
 

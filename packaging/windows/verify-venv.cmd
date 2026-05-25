@@ -9,6 +9,9 @@ set "VENV=%ROOT%\.venv-windows-verify"
 set "PYTHON=%VENV%\Scripts\python.exe"
 if not defined DESKTOP_AGENT_PIP_INDEX_URL set "DESKTOP_AGENT_PIP_INDEX_URL=http://maven.paic.com.cn:8445/repository/pypi/simple/"
 if not defined DESKTOP_AGENT_PIP_TRUSTED_HOST set "DESKTOP_AGENT_PIP_TRUSTED_HOST=maven.paic.com.cn"
+set "PIP_CONFIG_FILE=NUL"
+set "PIP_NO_DEPS=0"
+set "PIP_ONLY_BINARY="
 
 cd /d "%ROOT%" || exit /b 1
 
@@ -63,6 +66,7 @@ if errorlevel 1 (
 
 echo.
 echo Checking dependency consistency...
+"%PYTHON%" -c "import importlib.metadata as m; print('fastapi requires:', m.requires('fastapi'))"
 "%PYTHON%" -m pip --isolated check
 if errorlevel 1 (
   echo.
