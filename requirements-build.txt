@@ -1,1 +1,2 @@
 pyinstaller>=6.0
+pywin32-ctypes>=0.2.0
