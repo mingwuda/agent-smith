@@ -38,9 +38,12 @@ if not exist "%PYTHON%" (
   )
 )
 
-type nul > "%EMPTY_PIP_CONFIG%"
+(
+  echo [install]
+  echo no-dependencies = false
+) > "%EMPTY_PIP_CONFIG%"
 
-"%PYTHON%" -m pip --isolated install --index-url "%DESKTOP_AGENT_PIP_INDEX_URL%" --trusted-host "%DESKTOP_AGENT_PIP_TRUSTED_HOST%" --upgrade pip
+"%PYTHON%" -m pip install --index-url "%DESKTOP_AGENT_PIP_INDEX_URL%" --trusted-host "%DESKTOP_AGENT_PIP_TRUSTED_HOST%" --upgrade pip
 if errorlevel 1 exit /b 1
 
 "%PYTHON%" -c "import platform,sys; arch='win_amd64' if platform.machine().lower() in ('amd64','x86_64') else 'win32'; print(f'cp{sys.version_info[0]}{sys.version_info[1]}-{arch}')" > "%WHEEL_TAG_FILE%"
@@ -54,17 +57,17 @@ set "WHEEL_DIR=%ROOT%\dep\windows\%WHEEL_TAG%"
 if exist "%WHEEL_DIR%" (
   echo Installing dependencies from local wheelhouse:
   echo   %WHEEL_DIR%
-  "%PYTHON%" -m pip --isolated install --upgrade --force-reinstall --no-index --find-links "%WHEEL_DIR%" -r "%ROOT%\requirements.txt" -r "%ROOT%\requirements-build.txt"
+  "%PYTHON%" -m pip install --upgrade --force-reinstall --no-index --find-links "%WHEEL_DIR%" -r "%ROOT%\requirements.txt" -r "%ROOT%\requirements-build.txt"
 ) else (
   echo Local wheelhouse not found, installing dependencies from package index.
   echo Expected local wheelhouse:
   echo   %WHEEL_DIR%
-  "%PYTHON%" -m pip --isolated install --index-url "%DESKTOP_AGENT_PIP_INDEX_URL%" --trusted-host "%DESKTOP_AGENT_PIP_TRUSTED_HOST%" --upgrade --force-reinstall -r "%ROOT%\requirements.txt" -r "%ROOT%\requirements-build.txt"
+  "%PYTHON%" -m pip install --index-url "%DESKTOP_AGENT_PIP_INDEX_URL%" --trusted-host "%DESKTOP_AGENT_PIP_TRUSTED_HOST%" --upgrade --force-reinstall -r "%ROOT%\requirements.txt" -r "%ROOT%\requirements-build.txt"
 )
 if errorlevel 1 exit /b 1
 
 echo Installed packages:
-"%PYTHON%" -m pip --isolated list
+"%PYTHON%" -m pip list
 echo.
 
 "%PYTHON%" -c "import altgraph; import packaging; import pefile; import PyInstaller; import win32ctypes.pywin32" >nul 2>nul
@@ -88,10 +91,10 @@ if errorlevel 1 (
   exit /b 1
 )
 
-"%PYTHON%" -m pip --isolated check
+"%PYTHON%" -m pip check
 if errorlevel 1 (
   echo Error: installed packages have dependency conflicts.
-  "%PYTHON%" -m pip --isolated list
+  "%PYTHON%" -m pip list
   exit /b 1
 )
 
@@ -99,7 +102,7 @@ if errorlevel 1 (
 if errorlevel 1 (
   echo Error: runtime web dependencies are missing from the build environment.
   echo.
-  "%PYTHON%" -m pip --isolated list
+  "%PYTHON%" -m pip list
   echo.
   echo If you are building offline, recreate the macOS wheelhouse and make sure these wheels exist:
   echo   %WHEEL_DIR%\fastapi-*.whl

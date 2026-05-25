@@ -34,7 +34,10 @@ if not exist "%PYTHON%" (
   )
 )
 
-type nul > "%EMPTY_PIP_CONFIG%"
+(
+  echo [install]
+  echo no-dependencies = false
+) > "%EMPTY_PIP_CONFIG%"
 
 echo Installing dependencies...
 if exist "%ROOT%\dep\windows" (
@@ -52,12 +55,12 @@ if defined WHEEL_DIR (
   if exist "%WHEEL_DIR%" (
     echo Using local wheelhouse:
     echo   %WHEEL_DIR%
-    "%PYTHON%" -m pip --isolated install --upgrade --force-reinstall --no-index --find-links "%WHEEL_DIR%" -r "%ROOT%\requirements.txt"
+    "%PYTHON%" -m pip install --upgrade --force-reinstall --no-index --find-links "%WHEEL_DIR%" -r "%ROOT%\requirements.txt"
   ) else (
-    "%PYTHON%" -m pip --isolated install --index-url "%DESKTOP_AGENT_PIP_INDEX_URL%" --trusted-host "%DESKTOP_AGENT_PIP_TRUSTED_HOST%" --upgrade -r "%ROOT%\requirements.txt"
+    "%PYTHON%" -m pip install --index-url "%DESKTOP_AGENT_PIP_INDEX_URL%" --trusted-host "%DESKTOP_AGENT_PIP_TRUSTED_HOST%" --upgrade -r "%ROOT%\requirements.txt"
   )
 ) else (
-  "%PYTHON%" -m pip --isolated install --index-url "%DESKTOP_AGENT_PIP_INDEX_URL%" --trusted-host "%DESKTOP_AGENT_PIP_TRUSTED_HOST%" --upgrade -r "%ROOT%\requirements.txt"
+  "%PYTHON%" -m pip install --index-url "%DESKTOP_AGENT_PIP_INDEX_URL%" --trusted-host "%DESKTOP_AGENT_PIP_TRUSTED_HOST%" --upgrade -r "%ROOT%\requirements.txt"
 )
 if errorlevel 1 (
   echo.
@@ -66,11 +69,11 @@ if errorlevel 1 (
   exit /b 1
 )
 
-"%PYTHON%" -m pip --isolated check
+"%PYTHON%" -m pip check
 if errorlevel 1 (
   echo.
   echo Error: installed dependencies are incomplete or conflicting.
-  "%PYTHON%" -m pip --isolated list
+  "%PYTHON%" -m pip list
   pause
   exit /b 1
 )

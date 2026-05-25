@@ -37,7 +37,10 @@ if %ERRORLEVEL%==0 (
   )
 )
 
-type nul > "%EMPTY_PIP_CONFIG%"
+(
+  echo [install]
+  echo no-dependencies = false
+) > "%EMPTY_PIP_CONFIG%"
 
 echo.
 echo Python:
@@ -52,13 +55,13 @@ echo   %DESKTOP_AGENT_PIP_INDEX_URL%
 
 echo.
 echo Upgrading pip tooling...
-"%PYTHON%" -m pip --isolated install --index-url "%DESKTOP_AGENT_PIP_INDEX_URL%" --trusted-host "%DESKTOP_AGENT_PIP_TRUSTED_HOST%" --upgrade pip setuptools
+"%PYTHON%" -m pip install --index-url "%DESKTOP_AGENT_PIP_INDEX_URL%" --trusted-host "%DESKTOP_AGENT_PIP_TRUSTED_HOST%" --upgrade pip setuptools
 if errorlevel 1 exit /b 1
 
 echo.
 echo Installing runtime dependencies from package index...
 echo This step uses pip --isolated with an explicit internal index, so global no-dependencies=yes is ignored.
-"%PYTHON%" -m pip --isolated install --index-url "%DESKTOP_AGENT_PIP_INDEX_URL%" --trusted-host "%DESKTOP_AGENT_PIP_TRUSTED_HOST%" --upgrade --force-reinstall --no-cache-dir -r "%ROOT%\requirements.txt"
+"%PYTHON%" -m pip install --index-url "%DESKTOP_AGENT_PIP_INDEX_URL%" --trusted-host "%DESKTOP_AGENT_PIP_TRUSTED_HOST%" --upgrade --force-reinstall --no-cache-dir -r "%ROOT%\requirements.txt"
 if errorlevel 1 (
   echo.
   echo Error: dependency installation failed.
@@ -70,11 +73,11 @@ if errorlevel 1 (
 echo.
 echo Checking dependency consistency...
 "%PYTHON%" -c "import importlib.metadata as m; print('fastapi requires:', m.requires('fastapi'))"
-"%PYTHON%" -m pip --isolated check
+"%PYTHON%" -m pip check
 if errorlevel 1 (
   echo.
   echo Error: installed dependencies are incomplete or conflicting.
-  "%PYTHON%" -m pip --isolated list
+  "%PYTHON%" -m pip list
   pause
   exit /b 1
 )
@@ -85,7 +88,7 @@ echo Verifying imports...
 if errorlevel 1 (
   echo.
   echo Error: import verification failed.
-  "%PYTHON%" -m pip --isolated list
+  "%PYTHON%" -m pip list
   pause
   exit /b 1
 )
