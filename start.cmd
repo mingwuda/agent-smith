@@ -33,10 +33,14 @@ if exist "%ROOT%\dep\windows" (
   set "WHEEL_DIR=%ROOT%\dep\windows\%WHEEL_TAG%"
 )
 
-if defined WHEEL_DIR if exist "%WHEEL_DIR%" (
-  echo Using local wheelhouse:
-  echo   %WHEEL_DIR%
-  "%PYTHON%" -m pip install --upgrade --force-reinstall --no-index --find-links "%WHEEL_DIR%" -r "%ROOT%\requirements.txt"
+if defined WHEEL_DIR (
+  if exist "%WHEEL_DIR%" (
+    echo Using local wheelhouse:
+    echo   %WHEEL_DIR%
+    "%PYTHON%" -m pip install --upgrade --force-reinstall --no-index --find-links "%WHEEL_DIR%" -r "%ROOT%\requirements.txt"
+  ) else (
+    "%PYTHON%" -m pip install --upgrade -r "%ROOT%\requirements.txt"
+  )
 ) else (
   "%PYTHON%" -m pip install --upgrade -r "%ROOT%\requirements.txt"
 )
