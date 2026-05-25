@@ -16,6 +16,8 @@ set "WHEEL_TAG_FILE=%ROOT%\.venv-windows-build\wheel-tag.txt"
 set "PIP_NO_DEPS="
 set "PIP_CONFIG_FILE="
 set "PIP_ONLY_BINARY="
+if not defined DESKTOP_AGENT_PIP_INDEX_URL set "DESKTOP_AGENT_PIP_INDEX_URL=http://maven.paic.com.cn:8445/repository/pypi/simple/"
+if not defined DESKTOP_AGENT_PIP_TRUSTED_HOST set "DESKTOP_AGENT_PIP_TRUSTED_HOST=maven.paic.com.cn"
 
 cd /d "%ROOT%" || exit /b 1
 
@@ -35,7 +37,7 @@ if not exist "%PYTHON%" (
   )
 )
 
-"%PYTHON%" -m pip --isolated install --upgrade pip
+"%PYTHON%" -m pip --isolated install --index-url "%DESKTOP_AGENT_PIP_INDEX_URL%" --trusted-host "%DESKTOP_AGENT_PIP_TRUSTED_HOST%" --upgrade pip
 if errorlevel 1 exit /b 1
 
 "%PYTHON%" -c "import platform,sys; arch='win_amd64' if platform.machine().lower() in ('amd64','x86_64') else 'win32'; print(f'cp{sys.version_info[0]}{sys.version_info[1]}-{arch}')" > "%WHEEL_TAG_FILE%"
@@ -54,7 +56,7 @@ if exist "%WHEEL_DIR%" (
   echo Local wheelhouse not found, installing dependencies from package index.
   echo Expected local wheelhouse:
   echo   %WHEEL_DIR%
-  "%PYTHON%" -m pip --isolated install --upgrade --force-reinstall -r "%ROOT%\requirements.txt" -r "%ROOT%\requirements-build.txt"
+  "%PYTHON%" -m pip --isolated install --index-url "%DESKTOP_AGENT_PIP_INDEX_URL%" --trusted-host "%DESKTOP_AGENT_PIP_TRUSTED_HOST%" --upgrade --force-reinstall -r "%ROOT%\requirements.txt" -r "%ROOT%\requirements-build.txt"
 )
 if errorlevel 1 exit /b 1
 

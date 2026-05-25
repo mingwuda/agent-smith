@@ -7,6 +7,8 @@ if "%ROOT:~-1%"=="\" set "ROOT=%ROOT:~0,-1%"
 
 set "VENV=%ROOT%\.venv-windows-verify"
 set "PYTHON=%VENV%\Scripts\python.exe"
+if not defined DESKTOP_AGENT_PIP_INDEX_URL set "DESKTOP_AGENT_PIP_INDEX_URL=http://maven.paic.com.cn:8445/repository/pypi/simple/"
+if not defined DESKTOP_AGENT_PIP_TRUSTED_HOST set "DESKTOP_AGENT_PIP_TRUSTED_HOST=maven.paic.com.cn"
 
 cd /d "%ROOT%" || exit /b 1
 
@@ -38,20 +40,23 @@ echo Python:
 echo.
 echo Pip configuration:
 "%PYTHON%" -m pip config list
+echo.
+echo Using package index:
+echo   %DESKTOP_AGENT_PIP_INDEX_URL%
 
 echo.
 echo Upgrading pip tooling...
-"%PYTHON%" -m pip --isolated install --upgrade pip setuptools
+"%PYTHON%" -m pip --isolated install --index-url "%DESKTOP_AGENT_PIP_INDEX_URL%" --trusted-host "%DESKTOP_AGENT_PIP_TRUSTED_HOST%" --upgrade pip setuptools
 if errorlevel 1 exit /b 1
 
 echo.
 echo Installing runtime dependencies from package index...
-echo This step uses pip --isolated, so global pip config such as no-dependencies=yes is ignored.
-"%PYTHON%" -m pip --isolated install --upgrade --force-reinstall --no-cache-dir -r "%ROOT%\requirements.txt"
+echo This step uses pip --isolated with an explicit internal index, so global no-dependencies=yes is ignored.
+"%PYTHON%" -m pip --isolated install --index-url "%DESKTOP_AGENT_PIP_INDEX_URL%" --trusted-host "%DESKTOP_AGENT_PIP_TRUSTED_HOST%" --upgrade --force-reinstall --no-cache-dir -r "%ROOT%\requirements.txt"
 if errorlevel 1 (
   echo.
   echo Error: dependency installation failed.
-  echo If this machine cannot access public PyPI, use the offline dep wheelhouse instead.
+  echo If the internal index does not mirror a required package, use the offline dep wheelhouse instead.
   pause
   exit /b 1
 )

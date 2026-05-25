@@ -63,6 +63,13 @@ start.cmd
 packaging\windows\verify-venv.cmd
 ```
 
+如需使用内网 PyPI 镜像，可在执行脚本前设置：
+
+```cmd
+set DESKTOP_AGENT_PIP_INDEX_URL=http://your-internal-pypi/simple/
+set DESKTOP_AGENT_PIP_TRUSTED_HOST=your-internal-pypi-host
+```
+
 验证通过后，也可以直接用这个环境启动：
 
 ```cmd

@@ -7,6 +7,8 @@ if "%ROOT:~-1%"=="\" set "ROOT=%ROOT:~0,-1%"
 set "VENV=%ROOT%\.venv"
 set "PYTHON=%VENV%\Scripts\python.exe"
 set "WHEEL_TAG_FILE=%VENV%\wheel-tag.txt"
+if not defined DESKTOP_AGENT_PIP_INDEX_URL set "DESKTOP_AGENT_PIP_INDEX_URL=http://maven.paic.com.cn:8445/repository/pypi/simple/"
+if not defined DESKTOP_AGENT_PIP_TRUSTED_HOST set "DESKTOP_AGENT_PIP_TRUSTED_HOST=maven.paic.com.cn"
 
 cd /d "%ROOT%" || exit /b 1
 
@@ -46,10 +48,10 @@ if defined WHEEL_DIR (
     echo   %WHEEL_DIR%
     "%PYTHON%" -m pip --isolated install --upgrade --force-reinstall --no-index --find-links "%WHEEL_DIR%" -r "%ROOT%\requirements.txt"
   ) else (
-    "%PYTHON%" -m pip --isolated install --upgrade -r "%ROOT%\requirements.txt"
+    "%PYTHON%" -m pip --isolated install --index-url "%DESKTOP_AGENT_PIP_INDEX_URL%" --trusted-host "%DESKTOP_AGENT_PIP_TRUSTED_HOST%" --upgrade -r "%ROOT%\requirements.txt"
   )
 ) else (
-  "%PYTHON%" -m pip --isolated install --upgrade -r "%ROOT%\requirements.txt"
+  "%PYTHON%" -m pip --isolated install --index-url "%DESKTOP_AGENT_PIP_INDEX_URL%" --trusted-host "%DESKTOP_AGENT_PIP_TRUSTED_HOST%" --upgrade -r "%ROOT%\requirements.txt"
 )
 if errorlevel 1 (
   echo.
