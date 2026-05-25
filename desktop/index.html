@@ -94,6 +94,24 @@
   .step-details .thought code { background:#d4d4d9; padding:1px 4px; border-radius:3px; font-size:12px; }
   .step-details .args { background:#1c1c1e; color:#e8e8ed; padding:8px; border-radius:6px; font-size:12px; font-family:"SF Mono",Menlo,monospace; overflow-x:auto; margin-bottom:6px; }
   .step-details .result { background:#e8f5e9; color:#2e7d32; padding:8px; border-radius:6px; font-size:12px; white-space:pre-wrap; word-break:break-word; }
+
+  /* 步骤进度标签 */
+  .step-progress { display:flex; align-items:center; gap:8px; padding:6px 12px; margin-bottom:6px; font-size:12px; color:#8e8e93; background:#f8f8fa; border-radius:8px; }
+  .step-progress .progress-bar { flex:1; height:4px; background:#e0e0e3; border-radius:2px; overflow:hidden; }
+  .step-progress .progress-bar .fill { height:100%; background:#007aff; border-radius:2px; transition:width .4s ease; }
+
+  /* 分析中提示 */
+  .thinking-step { display:flex; align-items:center; gap:8px; padding:8px 12px; margin-bottom:4px; border-left:3px solid #007aff; background:#f0f5ff; border-radius:4px; font-size:13px; color:#555; }
+  .thinking-step .dots { display:flex; gap:3px; }
+  .thinking-step .dots span { width:5px; height:5px; border-radius:50%; background:#007aff; animation:throb 1.2s ease infinite; }
+  .thinking-step .dots span:nth-child(2) { animation-delay:0.2s; }
+  .thinking-step .dots span:nth-child(3) { animation-delay:0.4s; }
+  @keyframes throb { 0%,60%,100% { opacity:0.3; transform:scale(1); } 30% { opacity:1; transform:scale(1.3); } }
+
+  /* 生成回复中徽章 */
+  .generating-badge { display:inline-flex; align-items:center; gap:6px; padding:5px 12px; background:#e8f0fe; border-radius:12px; font-size:11px; color:#555; margin:4px 0 0 20px; }
+  .generating-badge .spin { width:10px; height:10px; border:2px solid #007aff; border-top-color:transparent; border-radius:50%; animation:spin .6s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
   
   /* 设置弹窗 */
   .modal-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.4); z-index:100; align-items:center; justify-content:center; }
@@ -304,6 +322,9 @@ let currentBotMsgEl = null;       // 当前 bot 消息 DOM
 let currentStepsEl = null;        // 当前步骤容器 DOM
 let currentFinalContent = '';     // 累积的最终回复
 let streamingActive = false;
+let totalSteps = 0;               // 已完成的步骤数
+let hasToolCalls = false;         // 本轮是否有工具调用
+let generatingBadgeEl = null;     // 生成中徽章 DOM
 
 async function send() {
   const text = input.value.trim();
@@ -319,6 +340,9 @@ async function send() {
   currentStepsEl = null;
   currentBotMsgEl = null;
   currentFinalContent = '';
+  totalSteps = 0;
+  hasToolCalls = false;
+  generatingBadgeEl = null;
   
   try {
     const res = await fetch(`/run/stream`, {
@@ -372,16 +396,73 @@ async function send() {
 function handleStreamEvent(data) {
   const container = document.getElementById('messages');
   
+  // 工具函数：创建进度条（如果有步骤容器且有步骤数）
+  function updateProgress() {
+    if (!currentStepsEl) return;
+    let prog = currentStepsEl.querySelector('.step-progress');
+    if (!prog) {
+      prog = document.createElement('div');
+      prog.className = 'step-progress';
+      prog.innerHTML = '<div class="progress-bar"><div class="fill" style="width:0%"></div></div><span class="progress-text">准备中...</span>';
+      currentStepsEl.prepend(prog);
+    }
+    const fill = prog.querySelector('.fill');
+    const text = prog.querySelector('.progress-text');
+    if (fill && text) {
+      const pct = totalSteps > 0 ? Math.min(90, Math.round((totalSteps / (totalSteps + 1)) * 100)) : 10;
+      fill.style.width = pct + '%';
+      text.textContent = `步骤 ${totalSteps}`;
+    }
+  }
+
+  // 工具函数：移除分析中提示
+  function removeThinkingHint() {
+    if (currentStepsEl) {
+      const hints = currentStepsEl.querySelectorAll('.thinking-step');
+      hints.forEach(el => el.remove());
+    }
+  }
+
+  // 工具函数：添加分析中提示
+  function showThinkingHint(text) {
+    removeThinkingHint();
+    if (!currentStepsEl) {
+      currentStepsEl = document.createElement('div');
+      currentStepsEl.className = 'steps-container';
+      container.appendChild(currentStepsEl);
+    }
+    const hint = document.createElement('div');
+    hint.className = 'thinking-step';
+    hint.innerHTML = `<span>${text}</span><span class="dots"><span></span><span></span><span></span></span>`;
+    // 放在进度条之后，但其他卡片之前
+    const prog = currentStepsEl.querySelector('.step-progress');
+    if (prog) {
+      prog.after(hint);
+    } else {
+      currentStepsEl.prepend(hint);
+    }
+    container.scrollTop = container.scrollHeight;
+  }
+
+  // 工具函数：移除生成中徽章
+  function removeGeneratingBadge() {
+    if (generatingBadgeEl) {
+      generatingBadgeEl.remove();
+      generatingBadgeEl = null;
+    }
+  }
+
   switch (data.type) {
     case 'thought':
       hideTyping();
-      // 创建步骤容器
+      removeThinkingHint();
+      hasToolCalls = true;
       if (!currentStepsEl) {
         currentStepsEl = document.createElement('div');
         currentStepsEl.className = 'steps-container';
         container.appendChild(currentStepsEl);
       }
-      // 添加思考步骤
+      updateProgress();
       const thoughtText = data.thought || '';
       const thoughtDiv = document.createElement('div');
       thoughtDiv.style.marginBottom = '4px';
@@ -401,17 +482,19 @@ function handleStreamEvent(data) {
       break;
     
     case 'tool_start':
-      // 移除 typing
       hideTyping();
-      // 创建步骤容器
+      removeThinkingHint();
+      removeGeneratingBadge();
+      hasToolCalls = true;
+      totalSteps = data.step || totalSteps + 1;
       if (!currentStepsEl) {
         currentStepsEl = document.createElement('div');
         currentStepsEl.className = 'steps-container';
         container.appendChild(currentStepsEl);
       }
+      updateProgress();
       
       const toolIcon = getToolIcon(data.tool);
-      const thoughtHtml = data.thought ? `<div class="thought">🤔 ${escapeHtml(data.thought)}</div>` : '';
       const argsHtml = data.args ? `<div class="args">${escapeHtml(JSON.stringify(data.args, null, 2))}</div>` : '';
       
       const stepDiv = document.createElement('div');
@@ -425,7 +508,6 @@ function handleStreamEvent(data) {
           <span style="color:#999;font-size:11px;margin-left:auto;">⏳ 执行中...</span>
         </div>
         <div class="step-details open">
-          ${thoughtHtml}
           ${argsHtml}
         </div>`;
       currentStepsEl.appendChild(stepDiv);
@@ -433,7 +515,7 @@ function handleStreamEvent(data) {
       break;
     
     case 'tool_result':
-      // 更新对应的工具调用状态
+      // 更新工具状态为完成
       if (currentStepsEl) {
         const toggles = currentStepsEl.querySelectorAll('.step-toggle');
         const lastToggle = toggles[toggles.length - 1];
@@ -441,7 +523,6 @@ function handleStreamEvent(data) {
           const statusSpan = lastToggle.querySelector('span:last-child');
           if (statusSpan) statusSpan.textContent = '✅ 完成';
           
-          // 添加结果到详情
           const details = lastToggle.nextElementSibling;
           if (details && data.result) {
             const resultDiv = document.createElement('div');
@@ -451,30 +532,62 @@ function handleStreamEvent(data) {
           }
         }
       }
+      // 显示"分析中，准备下一步..."
+      showThinkingHint('🤔 分析结果');
       container.scrollTop = container.scrollHeight;
       break;
     
     case 'token':
       hideTyping();
+      removeThinkingHint();
+      // 如果之前有工具调用，显示"正在生成回复"徽章
+      if (hasToolCalls && !generatingBadgeEl && !currentBotMsgEl) {
+        generatingBadgeEl = document.createElement('div');
+        generatingBadgeEl.className = 'generating-badge';
+        generatingBadgeEl.innerHTML = '<span class="spin"></span> 正在生成回复...';
+        if (currentStepsEl) {
+          currentStepsEl.after(generatingBadgeEl);
+        } else {
+          container.appendChild(generatingBadgeEl);
+        }
+        container.scrollTop = container.scrollHeight;
+      }
+      // 开始输出 token（此时移除徽章）
+      if (generatingBadgeEl && currentFinalContent === '') {
+        generatingBadgeEl.remove();
+        generatingBadgeEl = null;
+      }
       if (!currentBotMsgEl) {
         currentBotMsgEl = document.createElement('div');
         currentBotMsgEl.className = 'msg bot';
         container.appendChild(currentBotMsgEl);
       }
       currentFinalContent += data.content;
-      // 实时渲染 Markdown
       currentBotMsgEl.innerHTML = renderMarkdown(currentFinalContent);
       container.scrollTop = container.scrollHeight;
       break;
     
     case 'error':
       hideTyping();
+      removeThinkingHint();
+      removeGeneratingBadge();
       addMessage('❌ ' + data.content, 'system');
       break;
     
     case 'done':
       hideTyping();
-      // 最终确认渲染
+      removeThinkingHint();
+      removeGeneratingBadge();
+      // 更新进度为 100%
+      if (currentStepsEl) {
+        const prog = currentStepsEl.querySelector('.step-progress');
+        if (prog) {
+          const fill = prog.querySelector('.fill');
+          const text = prog.querySelector('.progress-text');
+          if (fill) fill.style.width = '100%';
+          if (text) text.textContent = `完成 ✓`;
+        }
+      }
       if (currentBotMsgEl && data.content) {
         currentBotMsgEl.innerHTML = renderMarkdown(data.content);
       }
