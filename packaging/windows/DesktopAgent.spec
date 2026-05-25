@@ -14,10 +14,18 @@ datas = [
 
 hiddenimports = []
 for package in (
+    "anyio",
+    "fastapi",
     "langchain",
     "langchain_core",
     "langchain_openai",
     "langgraph",
+    "pydantic",
+    "pydantic_core",
+    "sniffio",
+    "starlette",
+    "typing_extensions",
+    "uvicorn",
 ):
     hiddenimports += collect_submodules(package)
 

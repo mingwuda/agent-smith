@@ -75,6 +75,22 @@ if errorlevel 1 (
   exit /b 1
 )
 
+"%PYTHON%" -c "import fastapi; import starlette; import uvicorn; import pydantic" >nul 2>nul
+if errorlevel 1 (
+  echo Error: runtime web dependencies are missing from the build environment.
+  echo.
+  echo If you are building offline, recreate the macOS wheelhouse and make sure these wheels exist:
+  echo   %WHEEL_DIR%\fastapi-*.whl
+  echo   %WHEEL_DIR%\starlette-*.whl
+  echo   %WHEEL_DIR%\uvicorn-*.whl
+  echo   %WHEEL_DIR%\pydantic-*.whl
+  echo.
+  echo Then delete the old Windows build venv and run again:
+  echo   rmdir /s /q "%VENV%"
+  echo   packaging\windows\build.cmd
+  exit /b 1
+)
+
 "%PYINSTALLER%" --clean --noconfirm "%SPEC%"
 if errorlevel 1 exit /b 1
 
