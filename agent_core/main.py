@@ -25,7 +25,7 @@ def _app_base_dir() -> Path:
 
 from config import AgentConfig
 from agent import DesktopAgent
-from tools import file_tools, code_tools, system_tools
+from tools import file_tools, code_tools, system_tools, web_tools
 from monitoring.usage_tracker import get_tracker
 from skills.registry import get_registry
 import session_store
@@ -80,6 +80,7 @@ def init_agent():
     all_tools.extend(file_tools.TOOLS)
     all_tools.extend(code_tools.TOOLS)
     all_tools.extend(system_tools.TOOLS)
+    all_tools.extend(web_tools.TOOLS)
     
     # 初始化 Agent
     agent = DesktopAgent(config)
