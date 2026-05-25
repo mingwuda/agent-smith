@@ -41,26 +41,28 @@ echo Pip configuration:
 
 echo.
 echo Upgrading pip tooling...
-"%PYTHON%" -m pip install --upgrade pip setuptools
+"%PYTHON%" -m pip --isolated install --upgrade pip setuptools
 if errorlevel 1 exit /b 1
 
 echo.
 echo Installing runtime dependencies from package index...
-"%PYTHON%" -m pip install --upgrade --force-reinstall --no-cache-dir -r "%ROOT%\requirements.txt"
+echo This step uses pip --isolated, so global pip config such as no-dependencies=yes is ignored.
+"%PYTHON%" -m pip --isolated install --upgrade --force-reinstall --no-cache-dir -r "%ROOT%\requirements.txt"
 if errorlevel 1 (
   echo.
   echo Error: dependency installation failed.
+  echo If this machine cannot access public PyPI, use the offline dep wheelhouse instead.
   pause
   exit /b 1
 )
 
 echo.
 echo Checking dependency consistency...
-"%PYTHON%" -m pip check
+"%PYTHON%" -m pip --isolated check
 if errorlevel 1 (
   echo.
   echo Error: installed dependencies are incomplete or conflicting.
-  "%PYTHON%" -m pip list
+  "%PYTHON%" -m pip --isolated list
   pause
   exit /b 1
 )
@@ -71,7 +73,7 @@ echo Verifying imports...
 if errorlevel 1 (
   echo.
   echo Error: import verification failed.
-  "%PYTHON%" -m pip list
+  "%PYTHON%" -m pip --isolated list
   pause
   exit /b 1
 )

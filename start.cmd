@@ -44,12 +44,12 @@ if defined WHEEL_DIR (
   if exist "%WHEEL_DIR%" (
     echo Using local wheelhouse:
     echo   %WHEEL_DIR%
-    "%PYTHON%" -m pip install --upgrade --force-reinstall --no-index --find-links "%WHEEL_DIR%" -r "%ROOT%\requirements.txt"
+    "%PYTHON%" -m pip --isolated install --upgrade --force-reinstall --no-index --find-links "%WHEEL_DIR%" -r "%ROOT%\requirements.txt"
   ) else (
-    "%PYTHON%" -m pip install --upgrade -r "%ROOT%\requirements.txt"
+    "%PYTHON%" -m pip --isolated install --upgrade -r "%ROOT%\requirements.txt"
   )
 ) else (
-  "%PYTHON%" -m pip install --upgrade -r "%ROOT%\requirements.txt"
+  "%PYTHON%" -m pip --isolated install --upgrade -r "%ROOT%\requirements.txt"
 )
 if errorlevel 1 (
   echo.
@@ -58,11 +58,11 @@ if errorlevel 1 (
   exit /b 1
 )
 
-"%PYTHON%" -m pip check
+"%PYTHON%" -m pip --isolated check
 if errorlevel 1 (
   echo.
   echo Error: installed dependencies are incomplete or conflicting.
-  "%PYTHON%" -m pip list
+  "%PYTHON%" -m pip --isolated list
   pause
   exit /b 1
 )
