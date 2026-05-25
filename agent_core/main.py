@@ -386,6 +386,8 @@ def get_usage_history(days: int = 7):
 
 class SettingsRequest(BaseModel):
     """设置请求体"""
+    active_provider: str = "openai"
+    provider_name: str = ""
     api_key: str = ""
     model: str = ""
     base_url: str = ""
@@ -403,10 +405,13 @@ def save_settings(req: SettingsRequest):
     """保存设置并重启 Agent"""
     cfg = AgentConfig.load()
     
-    # 更新所有字段（即使用户没填也更新，清空旧值）
-    cfg.api_key = req.api_key if req.api_key else cfg.api_key
-    cfg.model = req.model if req.model else cfg.model
-    cfg.base_url = req.base_url if req.base_url else cfg.base_url
+    cfg.update_provider(
+        provider_id=req.active_provider,
+        provider_name=req.provider_name,
+        api_key=req.api_key,
+        model=req.model,
+        base_url=req.base_url,
+    )
     
     # 持久化到文件（现在包含 API Key）
     cfg.save()
@@ -415,8 +420,11 @@ def save_settings(req: SettingsRequest):
     os.environ["LLM_API_KEY"] = cfg.api_key
     os.environ["OPENAI_API_KEY"] = cfg.api_key
     os.environ["LLM_MODEL"] = cfg.model
+    os.environ["LLM_PROVIDER"] = cfg.active_provider
     if cfg.base_url:
         os.environ["LLM_BASE_URL"] = cfg.base_url
+    else:
+        os.environ.pop("LLM_BASE_URL", None)
     
     # 重启 Agent
     global agent
@@ -450,6 +458,8 @@ def health():
     }
     if cfg:
         result["model"] = cfg.model
+        result["provider"] = cfg.active_provider
+        result["provider_name"] = cfg.providers.get(cfg.active_provider, {}).get("name", cfg.active_provider)
     else:
         result["model"] = os.getenv("LLM_MODEL") or os.getenv("OPENAI_API_KEY", "未设置") and "gpt-4o" or "未配置"
     if error_msg:

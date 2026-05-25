@@ -36,6 +36,9 @@
   #status-dot.online { background:#30d158; }
   #status-dot.error { background:#ff453a; }
   #status-text { font-size:12px; color:#8e8e93; }
+  #header .right { display:flex; align-items:center; gap:8px; }
+  #quick-provider-select { min-width:220px; max-width:320px; padding:6px 10px; background:#fff; border:1px solid #ddd; border-radius:8px; font-size:13px; outline:none; }
+  #quick-provider-select:focus { border-color:#007aff; }
   #settings-btn { padding:6px 12px; background:#f0f0f0; border:1px solid #ddd; border-radius:8px; font-size:13px; cursor:pointer; transition:all .2s; }
   #settings-btn:hover { background:#e0e0e0; }
   
@@ -99,9 +102,16 @@
   .modal h2 { font-size:18px; margin-bottom:20px; }
   .form-group { margin-bottom:16px; }
   .form-group label { display:block; font-size:13px; font-weight:500; color:#555; margin-bottom:4px; }
-  .form-group input { width:100%; padding:10px 12px; border:1px solid #ddd; border-radius:8px; font-size:14px; outline:none; transition:border-color .2s; }
-  .form-group input:focus { border-color:#007aff; }
+  .form-group input,
+  .form-group select { width:100%; padding:10px 12px; border:1px solid #ddd; border-radius:8px; font-size:14px; outline:none; transition:border-color .2s; background:#fff; }
+  .form-group input:focus,
+  .form-group select:focus { border-color:#007aff; }
   .form-group .hint { font-size:11px; color:#999; margin-top:4px; }
+  .provider-row { display:flex; gap:8px; }
+  .provider-row select { flex:1; min-width:0; }
+  .provider-row button { padding:0 12px; border:1px solid #ddd; border-radius:8px; background:#f0f0f0; cursor:pointer; white-space:nowrap; }
+  .provider-row button:hover { background:#e0e0e0; }
+  .hidden { display:none; }
   .modal-actions { display:flex; gap:8px; justify-content:flex-end; margin-top:20px; }
   .modal-actions button { padding:8px 20px; border-radius:8px; font-size:14px; border:none; cursor:pointer; }
   .modal-actions .btn-primary { background:#007aff; color:#fff; }
@@ -172,7 +182,10 @@
       <span id="status-dot"></span>
       <span id="status-text">连接中...</span>
     </div>
-    <button id="settings-btn">⚙️ 设置</button>
+    <div class="right">
+      <select id="quick-provider-select" title="切换模型厂商" onchange="quickSwitchProvider()"></select>
+      <button id="settings-btn">⚙️ 设置</button>
+    </div>
   </div>
   
   <div id="messages"></div>
@@ -188,14 +201,28 @@
   <div class="modal">
     <h2>⚙️ 设置</h2>
     <div class="form-group">
+      <label for="s-provider">模型厂商</label>
+      <div class="provider-row">
+        <select id="s-provider" onchange="onProviderChange()"></select>
+        <button type="button" onclick="addCustomProvider()">新增自定义</button>
+      </div>
+      <div class="hint" id="s-provider-hint">选择要使用的模型厂商。</div>
+    </div>
+    <div class="form-group hidden" id="s-provider-name-group">
+      <label for="s-provider-name">厂商名称</label>
+      <input id="s-provider-name" placeholder="例如 Mimo / 本地 LM Studio / 公司网关" />
+      <div class="hint">自定义厂商会按这个名称显示在顶部切换器里。</div>
+    </div>
+    <div class="form-group">
       <label for="s-api-key">API Key</label>
       <input id="s-api-key" type="password" placeholder="sk-..." />
-      <div class="hint">你的 OpenAI 或兼容 API Key。支持 OpenAI、DeepSeek、通义千问等。</div>
+      <div class="hint" id="s-api-key-hint">留空则保留当前厂商已保存的 API Key。</div>
     </div>
     <div class="form-group">
       <label for="s-model">模型名称</label>
-      <input id="s-model" placeholder="gpt-4o / deepseek-chat / qwen-plus" />
-      <div class="hint">常用：gpt-4o、deepseek-chat、qwen-plus、glm-5 等</div>
+      <input id="s-model" list="s-model-options" placeholder="选择或输入模型名称" />
+      <datalist id="s-model-options"></datalist>
+      <div class="hint">可从候选中选择，也可以输入兼容接口支持的模型名。</div>
     </div>
     <div class="form-group">
       <label for="s-base-url">API 地址（可选）</label>
@@ -216,11 +243,13 @@ const input = document.getElementById('input');
 const sendBtn = document.getElementById('send');
 const statusDot = document.getElementById('status-dot');
 const statusText = document.getElementById('status-text');
+const quickProviderSelect = document.getElementById('quick-provider-select');
 
 let threadId = 'default';
 let isLoading = false;
 let sessionsCache = [];
 let currentSessionId = null;
+let settingsData = null;
 
 // 配置 Markdown 渲染（开启 XSS 过滤）
 marked.setOptions({
@@ -578,6 +607,93 @@ async function deleteSession(sessionId) {
 
 // ---------- 设置 ----------
 
+function providerLabel(provider, id) {
+  const name = provider.name || id;
+  const model = provider.model || '未配置模型';
+  return `${name} · ${model}`;
+}
+
+function populateProviderOptions(select, data, includeMissing = false) {
+  select.innerHTML = '';
+  Object.entries(data.providers || {}).forEach(([id, provider]) => {
+    if (!includeMissing && (!provider.model || !provider.api_key_configured)) return;
+    const option = document.createElement('option');
+    option.value = id;
+    option.textContent = providerLabel(provider, id);
+    select.appendChild(option);
+  });
+}
+
+function populateProviderSelect(data) {
+  const select = document.getElementById('s-provider');
+  populateProviderOptions(select, data, true);
+  select.value = data.active_provider || 'openai';
+}
+
+function refreshQuickProviderSelect(data) {
+  settingsData = data;
+  populateProviderOptions(quickProviderSelect, data, true);
+  quickProviderSelect.value = data.active_provider || 'openai';
+}
+
+async function loadSettingsForSwitcher() {
+  try {
+    const res = await fetch('/settings');
+    if (!res.ok) return null;
+    const data = await res.json();
+    refreshQuickProviderSelect(data);
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+function renderProviderFields(providerId) {
+  if (!settingsData || !settingsData.providers) return;
+  const provider = settingsData.providers[providerId] || {};
+  const isCustom = !!provider.is_custom;
+  const modelOptions = document.getElementById('s-model-options');
+  modelOptions.innerHTML = '';
+  (provider.models || []).forEach(modelName => {
+    const option = document.createElement('option');
+    option.value = modelName;
+    modelOptions.appendChild(option);
+  });
+  
+  document.getElementById('s-model').value = provider.model || '';
+  document.getElementById('s-base-url').value = provider.base_url || '';
+  document.getElementById('s-api-key').value = '';
+  document.getElementById('s-provider-name').value = provider.name || '';
+  document.getElementById('s-provider-name-group').classList.toggle('hidden', !isCustom);
+  document.getElementById('s-provider-hint').textContent = `当前厂商：${provider.name || providerId}`;
+  document.getElementById('s-api-key-hint').textContent = provider.api_key_configured
+    ? `已保存：${provider.api_key_preview}。留空则继续使用已保存的 API Key。`
+    : '尚未保存 API Key。';
+}
+
+function onProviderChange() {
+  renderProviderFields(document.getElementById('s-provider').value);
+}
+
+function addCustomProvider() {
+  if (!settingsData) settingsData = { providers: {} };
+  const id = `custom_${Date.now()}`;
+  settingsData.providers[id] = {
+    name: '新的自定义厂商',
+    is_custom: true,
+    api_key_configured: false,
+    api_key_preview: '未设置',
+    model: '',
+    base_url: '',
+    models: [],
+  };
+  settingsData.active_provider = id;
+  populateProviderSelect(settingsData);
+  renderProviderFields(id);
+  document.getElementById('s-provider-name').focus();
+  document.getElementById('s-provider-name').select();
+}
+
 function openSettings() {
   const modal = document.getElementById('settings-modal');
   modal.classList.add('active');
@@ -587,9 +703,10 @@ function openSettings() {
   
   // 加载当前配置
   fetch('/settings').then(r => r.json()).then(data => {
-    document.getElementById('s-model').value = data.model || '';
-    document.getElementById('s-base-url').value = data.base_url || '';
-    // API Key 不回显，留空
+    settingsData = data;
+    populateProviderSelect(data);
+    refreshQuickProviderSelect(data);
+    renderProviderFields(data.active_provider || 'openai');
   }).catch(() => {});
 }
 
@@ -609,6 +726,8 @@ async function saveSettings() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        active_provider: document.getElementById('s-provider').value,
+        provider_name: document.getElementById('s-provider-name').value,
         api_key: document.getElementById('s-api-key').value,
         model: document.getElementById('s-model').value,
         base_url: document.getElementById('s-base-url').value,
@@ -621,7 +740,12 @@ async function saveSettings() {
       // 清空密码框
       document.getElementById('s-api-key').value = '';
       // 刷新状态
-      setTimeout(() => { closeSettings(); checkHealth(); }, 1000);
+      setTimeout(async () => {
+        closeSettings();
+        await loadSettingsForSwitcher();
+        checkHealth();
+        refreshStats();
+      }, 1000);
     } else {
       feedback.textContent = '⚠️ ' + (data.message || '保存失败');
       feedback.className = 'save-feedback err';
@@ -631,6 +755,38 @@ async function saveSettings() {
     feedback.textContent = '❌ 网络错误，无法连接服务器';
     feedback.className = 'save-feedback err';
     btn.disabled = false;
+  }
+}
+
+async function quickSwitchProvider() {
+  const providerId = quickProviderSelect.value;
+  if (!providerId || !settingsData || !settingsData.providers) return;
+  const provider = settingsData.providers[providerId];
+  if (!provider) return;
+  
+  quickProviderSelect.disabled = true;
+  try {
+    const res = await fetch('/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        active_provider: providerId,
+        provider_name: provider.name || providerId,
+        api_key: '',
+        model: provider.model || '',
+        base_url: provider.base_url || '',
+      }),
+    });
+    const data = await res.json();
+    if (data.status !== 'ok') {
+      addMessage('⚠️ ' + (data.message || '切换模型失败'), 'system');
+    }
+    await loadSettingsForSwitcher();
+    await checkHealth();
+  } catch {
+    addMessage('⚠️ 切换模型失败，无法连接服务器', 'system');
+  } finally {
+    quickProviderSelect.disabled = false;
   }
 }
 
@@ -657,15 +813,16 @@ async function checkHealth() {
     if (res.ok) {
       const data = await res.json();
       const modelName = data.model || '未配置';
+      const providerName = data.provider_name || data.provider || '模型';
       if (data.status === 'ok') {
         setStatus('ok');
-        statusText.textContent = `已连接 · ${modelName}`;
+        statusText.textContent = `已连接 · ${providerName} · ${modelName}`;
       } else if (data.error && data.error.includes('credentials')) {
         setStatus('ok');
-        statusText.textContent = `⚠️ 需要设置 API Key（当前: ${modelName}）`;
+        statusText.textContent = `⚠️ 需要设置 API Key（当前: ${providerName} · ${modelName}）`;
       } else {
         setStatus('ok');
-        statusText.textContent = `已连接 · ${modelName}`;
+        statusText.textContent = `已连接 · ${providerName} · ${modelName}`;
       }
       return true;
     }
@@ -717,6 +874,7 @@ setInterval(loadSessions, 10000);
 
 (async () => {
   const ok = await checkHealth();
+  await loadSettingsForSwitcher();
   if (ok) {
     // 加载会话列表
     await loadSessions();

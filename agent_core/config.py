@@ -1,12 +1,48 @@
 """配置管理"""
 import json
 import os
-from dataclasses import dataclass, field, asdict
+from copy import deepcopy
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Any
 
 
 CONFIG_FILE = Path.home() / ".desktop_agent" / "config.json"
+
+DEFAULT_PROVIDERS: dict[str, dict[str, Any]] = {
+    "openai": {
+        "name": "OpenAI",
+        "is_custom": False,
+        "api_key": "",
+        "model": "gpt-4o",
+        "base_url": "",
+        "models": ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini"],
+    },
+    "deepseek": {
+        "name": "DeepSeek",
+        "is_custom": False,
+        "api_key": "",
+        "model": "deepseek-chat",
+        "base_url": "https://api.deepseek.com",
+        "models": ["deepseek-chat", "deepseek-reasoner"],
+    },
+    "qwen": {
+        "name": "通义千问",
+        "is_custom": False,
+        "api_key": "",
+        "model": "qwen-plus",
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "models": ["qwen-plus", "qwen-max", "qwen-turbo", "qwen-long"],
+    },
+    "custom": {
+        "name": "自定义",
+        "is_custom": True,
+        "api_key": "",
+        "model": "",
+        "base_url": "",
+        "models": [],
+    },
+}
 
 
 @dataclass
@@ -17,6 +53,8 @@ class AgentConfig:
     model: str = "gpt-4o"
     api_key: str = ""
     base_url: str = ""
+    active_provider: str = "openai"
+    providers: dict[str, dict[str, Any]] = field(default_factory=lambda: deepcopy(DEFAULT_PROVIDERS))
     
     # 工作区
     workspace: str = str(Path.home() / "agent_workspace")
@@ -53,12 +91,13 @@ class AgentConfig:
     def load(cls) -> "AgentConfig":
         """从文件 + 环境变量加载配置（环境变量优先级更高）"""
         config = cls()
+        file_data: dict[str, Any] = {}
         
         # 1. 从文件加载
         if CONFIG_FILE.exists():
             try:
-                data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
-                for key, value in data.items():
+                file_data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+                for key, value in file_data.items():
                     if hasattr(config, key) and value is not None:
                         setattr(config, key, value)
             except (json.JSONDecodeError, OSError):
@@ -71,19 +110,26 @@ class AgentConfig:
             "OPENAI_API_KEY": ("api_key", str),  # 兼容
             "LLM_BASE_URL": ("base_url", str),
             "OPENAI_BASE_URL": ("base_url", str),  # 兼容
+            "LLM_PROVIDER": ("active_provider", str),
             "AGENT_WORKSPACE": ("workspace", str),
             "AGENT_SKILLS_DIR": ("skills_dir", str),
             "AGENT_HOST": ("host", str),
             "AGENT_PORT": ("port", int),
             "MAX_COST_PER_DAY": ("max_cost_per_day", float),
         }
+        env_overrides = set()
         for env_key, (attr_name, cast_fn) in env_map.items():
             val = os.getenv(env_key)
             if val is not None:
                 try:
                     setattr(config, attr_name, cast_fn(val))
+                    env_overrides.add(attr_name)
                 except (ValueError, TypeError):
                     pass
+
+        legacy_keys = {"api_key", "model", "base_url"}
+        apply_legacy = bool(legacy_keys.intersection(file_data) or legacy_keys.intersection(env_overrides))
+        config._normalize_providers(apply_legacy=apply_legacy)
         
         # 3. 填充默认值
         if not config.skills_dir:
@@ -94,11 +140,89 @@ class AgentConfig:
         Path(config.skills_dir).mkdir(parents=True, exist_ok=True)
         
         return config
+
+    def _normalize_providers(self, apply_legacy: bool = False):
+        providers = deepcopy(DEFAULT_PROVIDERS)
+        if isinstance(self.providers, dict):
+            for provider_id, values in self.providers.items():
+                if not isinstance(values, dict):
+                    continue
+                current = providers.setdefault(provider_id, {
+                    "name": provider_id,
+                    "api_key": "",
+                    "model": "",
+                    "base_url": "",
+                    "models": [],
+                    "is_custom": True,
+                })
+                current.update({k: v for k, v in values.items() if v is not None})
+                current.setdefault("models", [])
+                current.setdefault("name", provider_id)
+                current.setdefault("api_key", "")
+                current.setdefault("model", "")
+                current.setdefault("base_url", "")
+                current.setdefault("is_custom", provider_id not in DEFAULT_PROVIDERS or provider_id == "custom")
+        self.providers = providers
+
+        if self.active_provider not in self.providers:
+            self.active_provider = "openai"
+
+        # 兼容旧配置和环境变量：只有显式提供顶层字段时，才写入当前厂商。
+        if apply_legacy:
+            active = self.providers[self.active_provider]
+            if self.api_key:
+                active["api_key"] = self.api_key
+            if self.model:
+                active["model"] = self.model
+            if self.base_url:
+                active["base_url"] = self.base_url
+
+        self._sync_effective_model()
+
+    def _sync_effective_model(self):
+        active = self.providers.get(self.active_provider, {})
+        self.api_key = str(active.get("api_key", "") or "")
+        self.model = str(active.get("model", "") or DEFAULT_PROVIDERS["openai"]["model"])
+        self.base_url = str(active.get("base_url", "") or "")
+
+    def update_provider(
+        self,
+        provider_id: str,
+        api_key: str = "",
+        model: str = "",
+        base_url: str = "",
+        provider_name: str = "",
+    ):
+        self._normalize_providers()
+        if provider_id not in self.providers:
+            self.providers[provider_id] = {
+                "name": provider_name or provider_id,
+                "is_custom": True,
+                "api_key": "",
+                "model": "",
+                "base_url": "",
+                "models": [],
+            }
+        self.active_provider = provider_id
+        provider = self.providers[provider_id]
+        if provider.get("is_custom") and provider_name:
+            provider["name"] = provider_name
+        if api_key:
+            provider["api_key"] = api_key
+        if model:
+            provider["model"] = model
+            models = provider.setdefault("models", [])
+            if provider.get("is_custom") and model not in models:
+                models.append(model)
+        provider["base_url"] = base_url
+        self._sync_effective_model()
     
     def save(self):
         """保存配置到文件"""
         CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
         data = {
+            "active_provider": self.active_provider,
+            "providers": self.providers,
             "api_key": self.api_key,
             "model": self.model,
             "base_url": self.base_url,
@@ -112,7 +236,23 @@ class AgentConfig:
     
     def to_api_dict(self) -> dict:
         """返回给前端展示的配置（脱敏 API Key）"""
+        self._normalize_providers()
+        providers = {}
+        for provider_id, provider in self.providers.items():
+            api_key = str(provider.get("api_key", "") or "")
+            providers[provider_id] = {
+                "name": provider.get("name", provider_id),
+                "is_custom": bool(provider.get("is_custom", False)),
+                "model": provider.get("model", ""),
+                "base_url": provider.get("base_url", ""),
+                "models": provider.get("models", []),
+                "api_key_configured": bool(api_key),
+                "api_key_preview": api_key[:8] + "..." if len(api_key) > 8 else ("已设置" if api_key else "未设置"),
+            }
         return {
+            "active_provider": self.active_provider,
+            "provider_name": self.providers[self.active_provider].get("name", self.active_provider),
+            "providers": providers,
             "model": self.model,
             "api_key_configured": bool(self.api_key),
             "api_key_preview": self.api_key[:8] + "..." if len(self.api_key) > 8 else ("已设置" if self.api_key else "未设置"),

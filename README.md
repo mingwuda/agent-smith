@@ -51,13 +51,16 @@ python main.py
 
 ### 4. 配置 API Key
 
-打开页面后，点击右上角 **⚙️ 设置**，填写：
+打开页面后，点击右上角 **⚙️ 设置**，选择模型厂商并填写对应配置：
 
 | 字段 | 说明 | 示例 |
 |------|------|------|
+| 模型厂商 | 当前使用的模型服务商 | `OpenAI` / `DeepSeek` / `通义千问` / `自定义` |
 | API Key | 你的 LLM API 密钥 | `sk-xxx...` |
 | 模型名称 | 使用的模型 | `gpt-4o` / `deepseek-chat` / `qwen-plus` |
-| API 地址 | 兼容 API 地址（可选） | `https://api.deepseek.com` / 留空用 OpenAI |
+| API 地址 | OpenAI 兼容 API 地址（可选） | `https://api.deepseek.com` / 留空用 OpenAI |
+
+内置支持 OpenAI、DeepSeek、通义千问；也可以新增多个自定义厂商，为每个厂商分别保存名称、API Key、模型和 API 地址。配置完成后，可以在顶部状态区的厂商/模型下拉框中快速切换。
 
 保存后自动生效，无需重启。
 
@@ -173,6 +176,7 @@ file_write
 
 | 环境变量 | 对应配置 | 默认值 |
 |---------|---------|--------|
+| `LLM_PROVIDER` | 当前模型厂商 | `openai` |
 | `LLM_API_KEY` / `OPENAI_API_KEY` | API Key | - |
 | `LLM_MODEL` | 模型名称 | `gpt-4o` |
 | `LLM_BASE_URL` / `OPENAI_BASE_URL` | API 地址 | - |
