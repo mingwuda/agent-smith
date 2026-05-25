@@ -49,14 +49,18 @@ set "WHEEL_DIR=%ROOT%\dep\windows\%WHEEL_TAG%"
 if exist "%WHEEL_DIR%" (
   echo Installing dependencies from local wheelhouse:
   echo   %WHEEL_DIR%
-  "%PYTHON%" -m pip --isolated install --no-index --find-links "%WHEEL_DIR%" -r "%ROOT%\requirements.txt" -r "%ROOT%\requirements-build.txt"
+  "%PYTHON%" -m pip --isolated install --upgrade --force-reinstall --no-index --find-links "%WHEEL_DIR%" -r "%ROOT%\requirements.txt" -r "%ROOT%\requirements-build.txt"
 ) else (
   echo Local wheelhouse not found, installing dependencies from package index.
   echo Expected local wheelhouse:
   echo   %WHEEL_DIR%
-  "%PYTHON%" -m pip --isolated install -r "%ROOT%\requirements.txt" -r "%ROOT%\requirements-build.txt"
+  "%PYTHON%" -m pip --isolated install --upgrade --force-reinstall -r "%ROOT%\requirements.txt" -r "%ROOT%\requirements-build.txt"
 )
 if errorlevel 1 exit /b 1
+
+echo Installed packages:
+"%PYTHON%" -m pip --isolated list
+echo.
 
 "%PYTHON%" -c "import altgraph; import packaging; import pefile; import PyInstaller; import win32ctypes.pywin32" >nul 2>nul
 if errorlevel 1 (
