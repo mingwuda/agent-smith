@@ -2,6 +2,7 @@
 import re
 import socket
 import urllib.parse
+import requests
 import urllib3.util.connection
 
 from langchain_core.tools import tool
@@ -38,7 +39,6 @@ if _BING_IPS:
 
 def _search_bing(query: str, max_results: int) -> list[dict]:
     """通过 Bing 搜索，简单的 HTML 提取"""
-    import requests
     from bs4 import BeautifulSoup
 
     encoded = urllib.parse.quote(query)
@@ -78,7 +78,6 @@ def web_search(query: str, max_results: int = 5) -> str:
     max_results = max(1, min(max_results, 10))
 
     try:
-        import requests
         results = _search_bing(query, max_results)
 
         if not results:
@@ -108,7 +107,7 @@ def web_search(query: str, max_results: int = 5) -> str:
 
 def _fetch_text(url: str, max_chars: int) -> str:
     """获取网页纯文本"""
-    import requests
+    from bs4 import BeautifulSoup
     from bs4 import BeautifulSoup
 
     if not url.startswith(("http://", "https://")):
