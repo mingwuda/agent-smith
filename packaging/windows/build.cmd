@@ -54,12 +54,16 @@ if exist "%WHEEL_DIR%" (
 )
 if errorlevel 1 exit /b 1
 
-"%PYTHON%" -c "import pefile; import win32ctypes.pywin32" >nul 2>nul
+"%PYTHON%" -c "import altgraph; import packaging; import pefile; import PyInstaller; import win32ctypes.pywin32" >nul 2>nul
 if errorlevel 1 (
   echo Error: PyInstaller Windows helper dependencies are missing.
   echo.
   echo If you are building offline, make sure these wheels exist:
+  echo   %WHEEL_DIR%\altgraph-*.whl
+  echo   %WHEEL_DIR%\packaging-*.whl
   echo   %WHEEL_DIR%\pefile-*.whl
+  echo   %WHEEL_DIR%\pyinstaller-*.whl
+  echo   %WHEEL_DIR%\pyinstaller_hooks_contrib-*.whl
   echo   %WHEEL_DIR%\pywin32_ctypes-*.whl
   echo.
   echo Recreate the macOS wheelhouse after updating requirements-build.txt:
