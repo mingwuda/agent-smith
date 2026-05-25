@@ -36,8 +36,12 @@ echo Python:
 "%PYTHON%" --version
 
 echo.
+echo Pip configuration:
+"%PYTHON%" -m pip config list
+
+echo.
 echo Upgrading pip tooling...
-"%PYTHON%" -m pip install --upgrade pip setuptools wheel
+"%PYTHON%" -m pip install --upgrade pip setuptools
 if errorlevel 1 exit /b 1
 
 echo.
