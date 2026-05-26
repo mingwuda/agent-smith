@@ -34,5 +34,29 @@ echo "   Python: $("$PYTHON" --version)"
 echo "   Path: $PYTHON"
 echo ""
 
+AGENT_PORT="${AGENT_PORT:-8899}"
+
+# 检查端口是否已被占用，是则杀死旧进程
+if lsof -ti ":$AGENT_PORT" >/dev/null 2>&1; then
+  OLD_PIDS=$(lsof -ti ":$AGENT_PORT" 2>/dev/null | tr '\n' ' ')
+  echo "⚠️  端口 $AGENT_PORT 已被占用 (PID: $OLD_PIDS)，正在关闭旧进程..."
+  kill -9 $OLD_PIDS 2>/dev/null
+  sleep 1
+  # 等待端口释放
+  for i in $(seq 1 5); do
+    if ! lsof -ti ":$AGENT_PORT" >/dev/null 2>&1; then
+      break
+    fi
+    sleep 1
+  done
+  if lsof -ti ":$AGENT_PORT" >/dev/null 2>&1; then
+    echo "❌ 无法关闭旧进程 (PID: $(lsof -ti :$AGENT_PORT))，请手动处理"
+    exit 1
+  fi
+  echo "✅ 旧进程已关闭"
+  echo ""
+fi
+
 cd "$SCRIPT_DIR/agent_core"
+echo "🚀 Agent 启动中... http://127.0.0.1:$AGENT_PORT"
 exec "$PYTHON" main.py
