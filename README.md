@@ -1,6 +1,6 @@
 # Desktop Agent 桌面 AI 智能体
 
-> 一个 LangGraph + FastAPI 驱动的桌面 AI 智能体，支持文件操作、代码执行、Skills 插件扩展、会话持久化。
+> 一个 LangGraph + FastAPI 驱动的桌面 AI 智能体，支持文件操作、代码执行、网页搜索与抓取、Skills 插件扩展、会话持久化。
 
 ---
 
@@ -11,6 +11,7 @@
 | 🤖 **AI Agent 核心** | LangGraph ReAct Agent，自主规划 + 执行任务 |
 | 📁 **文件操作** | 读写文件、管理目录、搜索文件、工作区隔离 |
 | 🐍 **代码执行** | 沙箱执行 Python 代码，适合数据分析与脚本测试 |
+| 🌐 **网页搜索** | 使用 `web_search` 搜索网页，使用 `web_fetch` 抓取网页正文 |
 | 💻 **系统信息** | 获取 OS、Python 版本、磁盘空间等信息 |
 | 🧩 **Skills 插件** | 基于 `SKILL.md` 的热加载技能系统，支持触发词匹配 |
 | 📊 **用量追踪** | Token 消耗、费用估算，按会话/日/历史统计 |
@@ -101,6 +102,10 @@ packaging\windows\verify-venv.cmd run
 >
 > 「告诉我系统信息」
 >
+> 「搜索一下今天的 AI 新闻」
+>
+> 「打开这个链接并总结正文：https://example.com/article」
+>
 > 「帮我写一份日报」
 
 ---
@@ -147,7 +152,8 @@ desktop-agent/
 │   ├── tools/
 │   │   ├── file_tools.py          # 文件操作（读写/列目录/搜索/删除）
 │   │   ├── code_tools.py          # Python 代码执行
-│   │   └── system_tools.py        # 系统信息获取
+│   │   ├── system_tools.py        # 系统信息获取
+│   │   └── web_tools.py           # 网页搜索与正文抓取
 │   ├── skills/
 │   │   ├── loader.py              # SKILL.md 解析器
 │   │   └── registry.py            # 技能注册表（热加载/触发词匹配）
