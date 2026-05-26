@@ -1,6 +1,9 @@
 """桌面 AI 智能体 —— FastAPI 服务器入口"""
+import hashlib
+import hmac
 import json
 import os
+import secrets
 import sys
 import threading
 import time
@@ -8,7 +11,7 @@ import webbrowser
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
@@ -29,6 +32,92 @@ from tools import file_tools, code_tools, system_tools, web_tools
 from monitoring.usage_tracker import get_tracker
 from skills.registry import get_registry
 import session_store
+
+# ---------- 认证 ----------
+
+AUTH_COOKIE_NAME = "desktop_agent_session"
+AUTH_SESSION_SECONDS = 60 * 60 * 24 * 7
+AUTH_FILE = Path.home() / ".desktop_agent" / "auth.json"
+
+
+def _load_auth_config() -> dict[str, str]:
+    username = os.getenv("DESKTOP_AGENT_AUTH_USER") or "admin"
+    password = os.getenv("DESKTOP_AGENT_AUTH_PASSWORD") or ""
+    secret = os.getenv("DESKTOP_AGENT_AUTH_SECRET") or ""
+
+    file_data: dict[str, str] = {}
+    if AUTH_FILE.exists():
+        try:
+            file_data = json.loads(AUTH_FILE.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            file_data = {}
+
+    username = username or file_data.get("username") or "admin"
+    password = password or file_data.get("password") or ""
+    secret = secret or file_data.get("secret") or ""
+
+    if not password or not secret:
+        AUTH_FILE.parent.mkdir(parents=True, exist_ok=True)
+        password = password or secrets.token_urlsafe(18)
+        secret = secret or secrets.token_urlsafe(32)
+        AUTH_FILE.write_text(
+            json.dumps(
+                {"username": username, "password": password, "secret": secret},
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        try:
+            AUTH_FILE.chmod(0o600)
+        except OSError:
+            pass
+
+    return {"username": username, "password": password, "secret": secret}
+
+
+def _auth_config() -> dict[str, str]:
+    if not hasattr(_auth_config, "_cache"):
+        setattr(_auth_config, "_cache", _load_auth_config())
+    return getattr(_auth_config, "_cache")
+
+
+def _sign_session(username: str, expires_at: int) -> str:
+    secret = _auth_config()["secret"].encode("utf-8")
+    payload = f"{username}:{expires_at}"
+    signature = hmac.new(secret, payload.encode("utf-8"), hashlib.sha256).hexdigest()
+    return f"{payload}:{signature}"
+
+
+def _verify_session(token: str) -> bool:
+    if not token:
+        return False
+    parts = token.split(":")
+    if len(parts) != 3:
+        return False
+    username, expires_at_raw, signature = parts
+    try:
+        expires_at = int(expires_at_raw)
+    except ValueError:
+        return False
+    if expires_at < int(time.time()):
+        return False
+    expected = _sign_session(username, expires_at).rsplit(":", 1)[-1]
+    return hmac.compare_digest(signature, expected) and hmac.compare_digest(username, _auth_config()["username"])
+
+
+def _is_authenticated(request: Request) -> bool:
+    return _verify_session(request.cookies.get(AUTH_COOKIE_NAME, ""))
+
+
+def _auth_exempt_path(path: str) -> bool:
+    return path in {"/login", "/auth/login", "/auth/logout", "/health"} or path.startswith("/favicon")
+
+
+def _wants_html(request: Request) -> bool:
+    if request.url.path in {"/", "/docs", "/redoc"}:
+        return True
+    return "text/html" in request.headers.get("accept", "")
 
 # ---------- FastAPI ----------
 from contextlib import asynccontextmanager
@@ -52,6 +141,19 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def require_login(request: Request, call_next):
+    if _auth_exempt_path(request.url.path) or _is_authenticated(request):
+        return await call_next(request)
+    if _wants_html(request):
+        return Response(status_code=302, headers={"Location": "/login"})
+    return Response(
+        json.dumps({"detail": "未登录或登录已过期"}, ensure_ascii=False),
+        status_code=401,
+        media_type="application/json",
+    )
 
 # 挂载桌面 UI 静态文件（先定义 API 路由，再挂载静态文件）
 UI_DIR = _app_base_dir() / "desktop"
@@ -148,9 +250,110 @@ class ReloadResponse(BaseModel):
     count: int
 
 
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
 # ---------- 桌面 UI 路由 ----------
 
 from fastapi.responses import HTMLResponse, StreamingResponse
+
+
+LOGIN_HTML = """<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Desktop Agent 登录</title>
+<style>
+* { box-sizing:border-box; }
+body { margin:0; min-height:100vh; display:grid; place-items:center; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:#f5f5f7; color:#1d1d1f; }
+.login { width:min(380px, calc(100vw - 32px)); background:#fff; border:1px solid #e5e5ea; border-radius:10px; padding:28px; box-shadow:0 18px 50px rgba(0,0,0,.08); }
+h1 { margin:0 0 6px; font-size:24px; }
+p { margin:0 0 22px; color:#6e6e73; font-size:14px; }
+label { display:block; margin:14px 0 6px; font-size:13px; color:#515154; }
+input { width:100%; height:40px; border:1px solid #d2d2d7; border-radius:8px; padding:0 12px; font-size:14px; outline:none; }
+input:focus { border-color:#007aff; box-shadow:0 0 0 3px rgba(0,122,255,.12); }
+button { width:100%; height:42px; margin-top:20px; border:0; border-radius:8px; background:#007aff; color:#fff; font-weight:600; font-size:15px; cursor:pointer; }
+button:disabled { opacity:.65; cursor:not-allowed; }
+.error { min-height:18px; margin-top:12px; color:#d70015; font-size:13px; }
+</style>
+</head>
+<body>
+<form class="login" onsubmit="login(event)">
+  <h1>Desktop Agent</h1>
+  <p>请登录后继续操作</p>
+  <label for="username">用户名</label>
+  <input id="username" autocomplete="username" value="admin" autofocus>
+  <label for="password">密码</label>
+  <input id="password" type="password" autocomplete="current-password">
+  <button id="submit" type="submit">登录</button>
+  <div class="error" id="error"></div>
+</form>
+<script>
+async function login(event) {
+  event.preventDefault();
+  const btn = document.getElementById('submit');
+  const err = document.getElementById('error');
+  btn.disabled = true;
+  err.textContent = '';
+  try {
+    const res = await fetch('/auth/login', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        username: document.getElementById('username').value,
+        password: document.getElementById('password').value,
+      }),
+    });
+    if (res.ok) {
+      location.href = '/';
+    } else {
+      const data = await res.json().catch(() => ({}));
+      err.textContent = data.detail || '用户名或密码错误';
+    }
+  } catch {
+    err.textContent = '网络错误，请稍后重试';
+  } finally {
+    btn.disabled = false;
+  }
+}
+</script>
+</body>
+</html>"""
+
+
+@app.get("/login", response_class=HTMLResponse, include_in_schema=False)
+def login_page():
+    return HTMLResponse(LOGIN_HTML)
+
+
+@app.post("/auth/login")
+def auth_login(req: LoginRequest, response: Response):
+    auth = _auth_config()
+    if not (
+        hmac.compare_digest(req.username, auth["username"])
+        and hmac.compare_digest(req.password, auth["password"])
+    ):
+        raise HTTPException(401, "用户名或密码错误")
+    expires_at = int(time.time()) + AUTH_SESSION_SECONDS
+    response.set_cookie(
+        AUTH_COOKIE_NAME,
+        _sign_session(req.username, expires_at),
+        max_age=AUTH_SESSION_SECONDS,
+        httponly=True,
+        samesite="lax",
+        secure=os.getenv("DESKTOP_AGENT_AUTH_COOKIE_SECURE", "0") == "1",
+    )
+    return {"status": "ok"}
+
+
+@app.post("/auth/logout")
+def auth_logout(response: Response):
+    response.delete_cookie(AUTH_COOKIE_NAME)
+    return {"status": "ok"}
+
 
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
 def serve_ui():
