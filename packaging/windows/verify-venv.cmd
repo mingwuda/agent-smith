@@ -65,7 +65,7 @@ echo This step uses a temporary pip config with no-dependencies=false.
 if errorlevel 1 (
   echo.
   echo Error: dependency installation failed.
-  echo If the internal index does not mirror a required package, use the offline dep wheelhouse instead.
+  echo Check that the configured package index mirrors all required packages.
   pause
   exit /b 1
 )

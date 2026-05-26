@@ -55,7 +55,7 @@ Windows 也可以在项目根目录直接双击或执行：
 start.cmd
 ```
 
-它会自动创建 `.venv`、安装依赖并启动服务。如果项目里带有 `dep\windows\cp版本-win_amd64` 离线依赖目录，会优先离线安装。
+它会自动创建 `.venv`、安装依赖并启动服务。
 
 如果要排查 Windows 依赖安装问题，可以先执行一个全新的在线验证环境：
 
@@ -112,20 +112,6 @@ packaging\windows\verify-venv.cmd run
 ```cmd
 packaging\windows\build.cmd
 ```
-
-如果 Windows 机器不能联网，可以先在 macOS 上下载 Windows wheel 依赖：
-
-```bash
-PY_VERSION=311 PLATFORM=win_amd64 bash packaging/windows/download-deps-macos.sh
-```
-
-然后把整个 `dep/` 目录和项目代码一起拷到 Windows 机器。`build.cmd` 会优先从以下目录离线安装依赖：
-
-```text
-dep\windows\cp311-win_amd64
-```
-
-`PY_VERSION` 必须和 Windows 构建机的 Python 版本一致，例如 Python 3.10 用 `310`，Python 3.11 用 `311`，Python 3.12 用 `312`。
 
 也可以用 PowerShell：
 

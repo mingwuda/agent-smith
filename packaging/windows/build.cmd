@@ -11,7 +11,6 @@ set "BUILD_ROOT=%ROOT%\dist"
 set "PACKAGE_ROOT=%BUILD_ROOT%\windows"
 set "PACKAGE_DIR=%PACKAGE_ROOT%\DesktopAgent-Windows"
 set "ZIP_PATH=%PACKAGE_ROOT%\DesktopAgent-Windows.zip"
-set "WHEEL_TAG_FILE=%ROOT%\.venv-windows-build\wheel-tag.txt"
 set "EMPTY_PIP_CONFIG=%ROOT%\.venv-windows-build\pip-empty.ini"
 
 set "PIP_NO_DEPS="
@@ -46,24 +45,7 @@ if not exist "%PYTHON%" (
 "%PYTHON%" -m pip install --index-url "%DESKTOP_AGENT_PIP_INDEX_URL%" --trusted-host "%DESKTOP_AGENT_PIP_TRUSTED_HOST%" --upgrade pip
 if errorlevel 1 exit /b 1
 
-"%PYTHON%" -c "import platform,sys; arch='win_amd64' if platform.machine().lower() in ('amd64','x86_64') else 'win32'; print(f'cp{sys.version_info[0]}{sys.version_info[1]}-{arch}')" > "%WHEEL_TAG_FILE%"
-set /p WHEEL_TAG=<"%WHEEL_TAG_FILE%"
-if "%WHEEL_TAG%"=="" (
-  echo Error: failed to detect Python wheel tag.
-  exit /b 1
-)
-set "WHEEL_DIR=%ROOT%\dep\windows\%WHEEL_TAG%"
-
-if exist "%WHEEL_DIR%" (
-  echo Installing dependencies from local wheelhouse:
-  echo   %WHEEL_DIR%
-  "%PYTHON%" -m pip install --upgrade --force-reinstall --no-index --find-links "%WHEEL_DIR%" -r "%ROOT%\requirements.txt" -r "%ROOT%\requirements-build.txt"
-) else (
-  echo Local wheelhouse not found, installing dependencies from package index.
-  echo Expected local wheelhouse:
-  echo   %WHEEL_DIR%
-  "%PYTHON%" -m pip install --index-url "%DESKTOP_AGENT_PIP_INDEX_URL%" --trusted-host "%DESKTOP_AGENT_PIP_TRUSTED_HOST%" --upgrade --force-reinstall -r "%ROOT%\requirements.txt" -r "%ROOT%\requirements-build.txt"
-)
+"%PYTHON%" -m pip install --index-url "%DESKTOP_AGENT_PIP_INDEX_URL%" --trusted-host "%DESKTOP_AGENT_PIP_TRUSTED_HOST%" --upgrade --force-reinstall -r "%ROOT%\requirements.txt" -r "%ROOT%\requirements-build.txt"
 if errorlevel 1 exit /b 1
 
 echo Installed packages:
@@ -74,18 +56,7 @@ echo.
 if errorlevel 1 (
   echo Error: PyInstaller Windows helper dependencies are missing.
   echo.
-  echo If you are building offline, make sure these wheels exist:
-  echo   %WHEEL_DIR%\altgraph-*.whl
-  echo   %WHEEL_DIR%\packaging-*.whl
-  echo   %WHEEL_DIR%\pefile-*.whl
-  echo   %WHEEL_DIR%\pyinstaller-*.whl
-  echo   %WHEEL_DIR%\pyinstaller_hooks_contrib-*.whl
-  echo   %WHEEL_DIR%\pywin32_ctypes-*.whl
-  echo.
-  echo Recreate the macOS wheelhouse after updating requirements-build.txt:
-  echo   PY_VERSION=311 PLATFORM=win_amd64 bash packaging/windows/download-deps-macos.sh
-  echo.
-  echo Then delete the old Windows build venv and run again:
+  echo Delete the old Windows build venv and run again:
   echo   rmdir /s /q "%VENV%"
   echo   packaging\windows\build.cmd
   exit /b 1
@@ -104,13 +75,7 @@ if errorlevel 1 (
   echo.
   "%PYTHON%" -m pip list
   echo.
-  echo If you are building offline, recreate the macOS wheelhouse and make sure these wheels exist:
-  echo   %WHEEL_DIR%\fastapi-*.whl
-  echo   %WHEEL_DIR%\starlette-*.whl
-  echo   %WHEEL_DIR%\uvicorn-*.whl
-  echo   %WHEEL_DIR%\pydantic-*.whl
-  echo.
-  echo Then delete the old Windows build venv and run again:
+  echo Delete the old Windows build venv and run again:
   echo   rmdir /s /q "%VENV%"
   echo   packaging\windows\build.cmd
   exit /b 1
