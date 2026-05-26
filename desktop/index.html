@@ -30,8 +30,7 @@
   
   /* 聊天区域 */
   #header { padding:16px 24px; background:#fff; border-bottom:1px solid #ddd; display:flex; align-items:center; justify-content:space-between; }
-  #header .left { display:flex; align-items:center; gap:12px; }
-  #header h1 { font-size:17px; font-weight:600; }
+  #header .left { display:flex; align-items:center; gap:6px; }
   #status-dot { width:8px; height:8px; border-radius:50%; background:#aaa; }
   #status-dot.online { background:#30d158; }
   #status-dot.error { background:#ff453a; }
@@ -172,10 +171,8 @@
     #messages { padding:12px 12px; }
     .msg { max-width:92%; font-size:13px; padding:10px 14px; }
     #header { padding:8px 10px; gap:4px; }
-    #header .left { gap:6px; }
-    #header h1 { font-size:14px; }
+    #header .left { gap:4px; }
     #header .right { gap:4px; }
-    #quick-provider-select { display:none; }
     #status-text { display:none; }
     #sidebar-toggle { font-size:18px; padding:2px; }
     #status-dot { width:6px; height:6px; flex-shrink:0; }
@@ -208,8 +205,12 @@
   </div>
   
   <div style="border-top:1px solid #2c2c2e; padding:12px 16px;">
+    <div class="stat-card" style="border:none;padding:0 0 10px;">
+      <div class="label">🌐 模型服务商</div>
+      <select id="quick-provider-select" title="切换模型厂商" onchange="quickSwitchProvider()" style="width:100%;margin-top:4px;padding:6px 8px;background:#2c2c2e;color:#fff;border:1px solid #3a3a3c;border-radius:6px;font-size:13px;outline:none;"></select>
+    </div>
     <div class="stat-card" style="border:none;padding:0 0 8px;">
-      <div class="label">模型 / 工具</div>
+      <div class="label">工具调用</div>
       <div class="value" id="stat-calls">-</div>
     </div>
     <div class="stat-card" style="border:none;padding:0 0 8px;">
@@ -235,12 +236,10 @@
   <div id="header">
     <div class="left">
       <button id="sidebar-toggle">☰</button>
-      <h1>🤖 桌面智能体</h1>
       <span id="status-dot"></span>
       <span id="status-text">连接中...</span>
     </div>
     <div class="right">
-      <select id="quick-provider-select" title="切换模型厂商" onchange="quickSwitchProvider()"></select>
       <button id="settings-btn">⚙️ 设置</button>
     </div>
   </div>
