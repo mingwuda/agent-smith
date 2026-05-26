@@ -36,6 +36,21 @@ echo ""
 
 AGENT_PORT="${AGENT_PORT:-8899}"
 
+# 是否开放外部访问：PUBLIC=1 或 --public 参数
+if [[ "$*" == *"--public"* ]] || [[ "${PUBLIC:-}" == "1" ]]; then
+  AGENT_HOST="${AGENT_HOST:-0.0.0.0}"
+  echo "🌐 开放模式 — 局域网内其他设备可通过以下地址访问："
+  LOCAL_IP=$(ifconfig 2>/dev/null | grep 'inet ' | grep -v '127.0.0.1' | awk '{print $2}' | head -1)
+  if [[ -n "$LOCAL_IP" ]]; then
+    echo "      http://$LOCAL_IP:$AGENT_PORT"
+  fi
+  echo "      http://<本机局域网IP>:$AGENT_PORT"
+  echo ""
+else
+  AGENT_HOST="${AGENT_HOST:-127.0.0.1}"
+fi
+export AGENT_HOST
+
 # 检查端口是否已被占用，是则杀死旧进程
 if lsof -ti ":$AGENT_PORT" >/dev/null 2>&1; then
   OLD_PIDS=$(lsof -ti ":$AGENT_PORT" 2>/dev/null | tr '\n' ' ')
@@ -58,5 +73,5 @@ if lsof -ti ":$AGENT_PORT" >/dev/null 2>&1; then
 fi
 
 cd "$SCRIPT_DIR/agent_core"
-echo "🚀 Agent 启动中... http://127.0.0.1:$AGENT_PORT"
+echo "🚀 Agent 启动中... http://$AGENT_HOST:$AGENT_PORT"
 exec "$PYTHON" main.py
