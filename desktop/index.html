@@ -155,9 +155,37 @@
   .session-item .s-del { margin-left:auto; background:transparent; border:none; color:#8e8e93; cursor:pointer; font-size:14px; padding:0 2px; visibility:hidden; }
   .session-item:hover .s-del { visibility:visible; }
   .session-item .s-del:hover { color:#ff453a; }
+
+  /* 侧边栏折叠/移动端适配 */
+  #sidebar-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.4); z-index:98; }
+  #sidebar-overlay.show { display:block; }
+  #sidebar-toggle { display:none; background:transparent; border:none; font-size:20px; cursor:pointer; padding:4px; color:#333; line-height:1; }
+  #sidebar-toggle:hover { color:#007aff; }
+
+  @media (max-width: 768px) {
+    #sidebar-toggle { display:block; }
+    #sidebar {
+      position:fixed; left:0; top:0; bottom:0; z-index:99;
+      transform:translateX(-100%); transition:transform .25s ease;
+    }
+    #sidebar.open { transform:translateX(0); }
+    #messages { padding:12px 12px; }
+    .msg { max-width:92%; font-size:13px; padding:10px 14px; }
+    #header { padding:12px 16px; }
+    #header h1 { font-size:15px; }
+    #input-area { padding:10px 12px 16px; }
+    .modal { width:95vw; padding:20px; }
+  }
+  @media (min-width: 769px) {
+    #sidebar.collapsed { width:0; overflow:hidden; border-right:none; padding:0; min-width:0; }
+    #sidebar.collapsed > * { display:none; }
+    #sidebar-toggle { display:block; }
+  }
 </style>
 </head>
 <body>
+
+<div id="sidebar-overlay"></div>
 
 <!-- 侧边栏 -->
 <div id="sidebar">
@@ -196,6 +224,7 @@
 <div id="main">
   <div id="header">
     <div class="left">
+      <button id="sidebar-toggle">☰</button>
       <h1>🤖 桌面智能体</h1>
       <span id="status-dot"></span>
       <span id="status-text">连接中...</span>
@@ -938,6 +967,36 @@ document.getElementById('settings-modal').addEventListener('click', function(e) 
 document.getElementById('settings-btn').onclick = openSettings;
 // 新建会话按钮
 document.getElementById('new-session-btn').onclick = newSession;
+
+// 侧边栏折叠逻辑
+function toggleSidebar() {
+  const sidebar = document.getElementById('sidebar');
+  const overlay = document.getElementById('sidebar-overlay');
+  const isMobile = window.innerWidth <= 768;
+  
+  if (isMobile) {
+    sidebar.classList.toggle('open');
+    overlay.classList.toggle('show');
+  } else {
+    sidebar.classList.toggle('collapsed');
+  }
+}
+
+document.getElementById('sidebar-toggle').onclick = toggleSidebar;
+document.getElementById('sidebar-overlay').onclick = function() {
+  document.getElementById('sidebar').classList.remove('open');
+  this.classList.remove('show');
+};
+
+// 窗口大小变化时自动适配
+window.addEventListener('resize', function() {
+  const sidebar = document.getElementById('sidebar');
+  const overlay = document.getElementById('sidebar-overlay');
+  if (window.innerWidth > 768) {
+    sidebar.classList.remove('open');
+    overlay.classList.remove('show');
+  }
+});
 
 // ---------- 更新状态 ----------
 
