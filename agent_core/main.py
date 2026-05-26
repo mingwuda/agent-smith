@@ -378,19 +378,10 @@ async def run_agent(req: RunRequest):
     # 确保会话存在
     session = session_store.get_session(session_id)
     if session is None:
-        session = session_store.create_session(title=f"会话 {session_id}")
-        # 修正 id 为用户传入的 id
-        import os, json
-        # 直接创建指定 id 的会话
-        meta_path = Path.home() / ".desktop_agent" / "sessions" / f"{session_id}.json"
-        msgs_path = Path.home() / ".desktop_agent" / "sessions" / f"{session_id}_messages.json"
-        if not meta_path.exists():
-            now = __import__('datetime').datetime.now().isoformat()
-            meta = {"id": session_id, "title": f"会话 {session_id[:8]}", "created_at": now, "updated_at": now, "message_count": 0}
-            meta_path.parent.mkdir(parents=True, exist_ok=True)
-            meta_path.write_text(__import__('json').dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
-            msgs_path.write_text("[]", encoding="utf-8")
-        session = session_store.get_session(session_id)
+        session = session_store.create_session(
+            title=f"会话 {session_id[:8]}",
+            session_id=session_id,
+        )
     
     history_messages = (session or {}).get("messages", [])
 
@@ -424,15 +415,10 @@ async def run_agent_stream(req: RunRequest):
     # 确保会话存在
     session = session_store.get_session(session_id)
     if session is None:
-        meta_path = Path.home() / ".desktop_agent" / "sessions" / f"{session_id}.json"
-        msgs_path = Path.home() / ".desktop_agent" / "sessions" / f"{session_id}_messages.json"
-        if not meta_path.exists():
-            now = __import__('datetime').datetime.now().isoformat()
-            meta = {"id": session_id, "title": f"会话 {session_id[:8]}", "created_at": now, "updated_at": now, "message_count": 0}
-            meta_path.parent.mkdir(parents=True, exist_ok=True)
-            meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
-            msgs_path.write_text("[]", encoding="utf-8")
-        session = session_store.get_session(session_id)
+        session = session_store.create_session(
+            title=f"会话 {session_id[:8]}",
+            session_id=session_id,
+        )
     
     history_messages = (session or {}).get("messages", [])
 

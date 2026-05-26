@@ -664,26 +664,20 @@ async function loadSessions() {
     if (!res.ok) return;
     const data = await res.json();
     sessionsCache = data.sessions || [];
-    currentSessionId = data.current_id;
-    // 如果当前会话不在列表中则添加
+    if (!currentSessionId) {
+      currentSessionId = data.current_id || (sessionsCache[0] && sessionsCache[0].id) || null;
+      threadId = currentSessionId || threadId;
+    }
+    // 如果服务端返回的当前会话不在列表中，优先回落到最新会话，避免加载不存在的 default。
     if (currentSessionId && !sessionsCache.find(s => s.id === currentSessionId)) {
-      sessionsCache.unshift({ id: currentSessionId, title: '当前会话', message_count: 0 });
+      currentSessionId = (sessionsCache[0] && sessionsCache[0].id) || null;
+      threadId = currentSessionId || threadId;
     }
     renderSessionList(sessionsCache, currentSessionId);
   } catch {}
 }
 
-async function switchSession(sessionId) {
-  if (sessionId === currentSessionId) return;
-  currentSessionId = sessionId;
-  threadId = sessionId;
-  
-  // 更新激活样式
-  document.querySelectorAll('.session-item').forEach(el => {
-    el.classList.toggle('active', el.dataset.id === sessionId);
-  });
-  
-  // 加载该会话的历史消息
+async function loadSessionMessages(sessionId) {
   try {
     const res = await fetch(`/sessions/${sessionId}`);
     if (res.ok) {
@@ -699,6 +693,21 @@ async function switchSession(sessionId) {
       }
     }
   } catch {}
+}
+
+async function switchSession(sessionId, forceLoad = false) {
+  if (sessionId === currentSessionId && !forceLoad) return;
+  currentSessionId = sessionId;
+  threadId = sessionId;
+  
+  // 更新激活样式
+  document.querySelectorAll('.session-item').forEach(el => {
+    el.classList.toggle('active', el.dataset.id === sessionId);
+  });
+  
+  // 加载该会话的历史消息
+  await loadSessionMessages(sessionId);
+  refreshStats();
 }
 
 async function newSession() {
@@ -1010,9 +1019,12 @@ setInterval(loadSessions, 10000);
   if (ok) {
     // 加载会话列表
     await loadSessions();
-    // 如果有历史会话，切换到最新的
+    // 如果有历史会话，加载当前高亮会话的消息
     if (sessionsCache.length > 0) {
-      await switchSession(sessionsCache[0].id);
+      const initialSessionId = currentSessionId && sessionsCache.find(s => s.id === currentSessionId)
+        ? currentSessionId
+        : sessionsCache[0].id;
+      await switchSession(initialSessionId, true);
     } else {
       addMessage('你好！我是你的桌面智能体。', 'bot');
       addMessage('我可以：\n📁 读写文件、管理目录\n🐍 执行 Python 代码\n💻 获取系统信息\n🧩 按 Skills 插件执行专业任务\n\n试试说「帮我写一份日报」「列出工作区文件」或「告诉我系统信息」', 'bot');
