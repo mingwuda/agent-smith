@@ -75,6 +75,7 @@ class AgentConfig:
     
     # 用量限制
     max_cost_per_day: float = 5.0
+    recursion_limit: int = 60
     
     system_prompt: str = (
         "你是一个桌面 AI 智能体，可以自主完成用户交给你的任务。\n\n"
@@ -123,6 +124,7 @@ class AgentConfig:
             "AGENT_HOST": ("host", str),
             "AGENT_PORT": ("port", int),
             "MAX_COST_PER_DAY": ("max_cost_per_day", float),
+            "AGENT_RECURSION_LIMIT": ("recursion_limit", int),
         }
         env_overrides = set()
         for env_key, (attr_name, cast_fn) in env_map.items():
@@ -137,6 +139,7 @@ class AgentConfig:
         legacy_keys = {"api_key", "model", "base_url"}
         apply_legacy = bool(legacy_keys.intersection(file_data) or legacy_keys.intersection(env_overrides))
         config._normalize_providers(apply_legacy=apply_legacy)
+        config.recursion_limit = max(1, int(config.recursion_limit or 60))
         
         # 3. 填充默认值
         if not config.skills_dir:
@@ -238,6 +241,7 @@ class AgentConfig:
             "host": self.host,
             "port": self.port,
             "max_cost_per_day": self.max_cost_per_day,
+            "recursion_limit": self.recursion_limit,
         }
         CONFIG_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     
@@ -269,4 +273,5 @@ class AgentConfig:
             "host": self.host,
             "port": self.port,
             "max_cost_per_day": self.max_cost_per_day,
+            "recursion_limit": self.recursion_limit,
         }

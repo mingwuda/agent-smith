@@ -171,11 +171,11 @@
   
   <div style="border-top:1px solid #2c2c2e; padding:12px 16px;">
     <div class="stat-card" style="border:none;padding:0 0 8px;">
-      <div class="label">会话调用</div>
+      <div class="label">模型 / 工具</div>
       <div class="value" id="stat-calls">-</div>
     </div>
     <div class="stat-card" style="border:none;padding:0 0 8px;">
-      <div class="label">Token 用量</div>
+      <div class="label">模型 Token</div>
       <div class="value" id="stat-total" style="font-size:14px;">-</div>
     </div>
     <div class="stat-card" style="border:none;padding:0;">
@@ -246,6 +246,11 @@
       <label for="s-base-url">API 地址（可选）</label>
       <input id="s-base-url" placeholder="留空用 OpenAI 官方，DeepSeek: https://api.deepseek.com" />
       <div class="hint">自定义 API 地址，如 DeepSeek 填 https://api.deepseek.com</div>
+    </div>
+    <div class="form-group">
+      <label for="s-recursion-limit">最大推理步数</label>
+      <input id="s-recursion-limit" type="number" min="10" max="200" step="1" />
+      <div class="hint">复杂任务或多次工具调用可适当调大；过大时循环任务会运行更久。</div>
     </div>
     <div class="save-feedback" id="save-feedback"></div>
     <div class="modal-actions">
@@ -784,6 +789,7 @@ function renderProviderFields(providerId) {
   
   document.getElementById('s-model').value = provider.model || '';
   document.getElementById('s-base-url').value = provider.base_url || '';
+  document.getElementById('s-recursion-limit').value = settingsData.recursion_limit || 60;
   document.getElementById('s-api-key').value = '';
   document.getElementById('s-provider-name').value = provider.name || '';
   document.getElementById('s-provider-name-group').classList.toggle('hidden', !isCustom);
@@ -853,6 +859,7 @@ async function saveSettings() {
         api_key: document.getElementById('s-api-key').value,
         model: document.getElementById('s-model').value,
         base_url: document.getElementById('s-base-url').value,
+        recursion_limit: Number(document.getElementById('s-recursion-limit').value || 60),
       }),
     });
     const data = await res.json();
@@ -897,6 +904,7 @@ async function quickSwitchProvider() {
         api_key: '',
         model: provider.model || '',
         base_url: provider.base_url || '',
+        recursion_limit: settingsData.recursion_limit || 60,
       }),
     });
     const data = await res.json();
@@ -958,10 +966,12 @@ async function checkHealth() {
 
 async function refreshStats() {
   try {
-    const res = await fetch(`/usage/session`);
+    const res = await fetch(`/usage/session?thread_id=${encodeURIComponent(threadId)}`);
     if (res.ok) {
       const data = await res.json();
-      document.getElementById('stat-calls').textContent = data.calls;
+      const modelCalls = data.model_calls ?? data.calls ?? 0;
+      const toolCalls = data.tool_calls ?? 0;
+      document.getElementById('stat-calls').textContent = `${modelCalls} / ${toolCalls}`;
       document.getElementById('stat-total').textContent = data.total_tokens.toLocaleString() + ' tokens';
       document.getElementById('stat-cost').textContent = `$${data.cost.toFixed(6)}`;
     }

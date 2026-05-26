@@ -3,6 +3,7 @@ import json
 from typing import AsyncGenerator, Optional
 
 from langchain_openai import ChatOpenAI
+from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.prebuilt import create_react_agent
 from langgraph.checkpoint.memory import MemorySaver
 
@@ -36,6 +37,79 @@ def _truncate(text: str, max_len: int = 300) -> str:
 
 def _sse(data: dict) -> str:
     return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def _get_nested(mapping: dict, *keys: str):
+    value = mapping
+    for key in keys:
+        if not isinstance(value, dict):
+            return None
+        value = value.get(key)
+    return value
+
+
+def _extract_usage_tokens(payload) -> tuple[int, int, int]:
+    """从 LangChain/OpenAI 响应对象中提取 input/output/cached token。"""
+    if payload is None:
+        return 0, 0, 0
+
+    usage = getattr(payload, "usage_metadata", None)
+    if not usage:
+        usage = getattr(payload, "response_metadata", None)
+        if isinstance(usage, dict):
+            usage = usage.get("token_usage") or usage.get("usage") or usage
+
+    if isinstance(usage, dict):
+        input_tokens = (
+            usage.get("input_tokens")
+            or usage.get("prompt_tokens")
+            or _get_nested(usage, "token_usage", "prompt_tokens")
+            or 0
+        )
+        output_tokens = (
+            usage.get("output_tokens")
+            or usage.get("completion_tokens")
+            or _get_nested(usage, "token_usage", "completion_tokens")
+            or 0
+        )
+        cached_tokens = (
+            usage.get("cached_input_tokens")
+            or _get_nested(usage, "input_token_details", "cache_read")
+            or _get_nested(usage, "prompt_tokens_details", "cached_tokens")
+            or 0
+        )
+        return int(input_tokens or 0), int(output_tokens or 0), int(cached_tokens or 0)
+
+    input_tokens = getattr(usage, "input_tokens", 0) or getattr(usage, "prompt_tokens", 0) or 0
+    output_tokens = getattr(usage, "output_tokens", 0) or getattr(usage, "completion_tokens", 0) or 0
+    cached_tokens = getattr(usage, "cached_input_tokens", 0) or 0
+    return int(input_tokens or 0), int(output_tokens or 0), int(cached_tokens or 0)
+
+
+def _is_recursion_limit_error(exc: Exception) -> bool:
+    return type(exc).__name__ == "GraphRecursionError"
+
+
+def _recursion_limit_message(limit: int) -> str:
+    return (
+        f"执行步骤达到上限（recursion_limit={limit}），Agent 可能在反复调用工具或没有生成最终回答。"
+        "可以在设置里调大“最大推理步数”，或把任务拆小后重试。"
+    )
+
+
+def session_messages_to_langchain(messages: list[dict]) -> list:
+    """Convert persisted chat messages into LangChain messages."""
+    converted = []
+    for msg in messages:
+        role = msg.get("role")
+        content = msg.get("content") or ""
+        if not content:
+            continue
+        if role == "user":
+            converted.append(HumanMessage(content=content))
+        elif role == "assistant":
+            converted.append(AIMessage(content=content))
+    return converted
 
 
 def _extract_steps_from_messages(messages: list) -> list[dict]:
@@ -87,6 +161,7 @@ class DesktopAgent:
         self.tools: list = []  # 由外部设置
         self._thread_id = "default"
         self._graph = None
+        self._hydrated_threads: set[str] = set()
     
     def set_tools(self, tools: list):
         self.tools = tools
@@ -108,6 +183,33 @@ class DesktopAgent:
         if skill_block:
             prompt += skill_block
         return prompt
+
+    def _record_model_usage(self, input_tokens: int, output_tokens: int, cached_tokens: int = 0, source: str = "llm"):
+        if input_tokens <= 0 and output_tokens <= 0:
+            return
+        self.tracker.record_model_call(
+            provider=self.config.active_provider,
+            model=self.config.model,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cached_input_tokens=cached_tokens,
+            thread_id=self._thread_id,
+            source=source,
+        )
+
+    def _record_tool_call(self, tool_name: str):
+        self.tracker.record_tool_call(
+            tool_name=tool_name,
+            provider=self.config.active_provider,
+            model=self.config.model,
+            thread_id=self._thread_id,
+        )
+
+    def _run_config(self) -> dict:
+        return {
+            "configurable": {"thread_id": self._thread_id},
+            "recursion_limit": max(1, int(self.config.recursion_limit or 60)),
+        }
     
     def _rebuild_graph(self):
         self._graph = create_react_agent(
@@ -117,65 +219,75 @@ class DesktopAgent:
             checkpointer=self.memory,
         )
     
-    async def run(self, message: str) -> tuple[str, list[dict]]:
+    async def run(self, message: str, history: Optional[list[dict]] = None) -> tuple[str, list[dict]]:
         """处理用户消息，返回 (最终回复, 中间步骤列表)"""
-        config = {"configurable": {"thread_id": self._thread_id}}
+        config = self._run_config()
+        input_messages = []
+        if self._thread_id not in self._hydrated_threads:
+            input_messages = session_messages_to_langchain(history or [])
+        input_messages.append(HumanMessage(content=message))
         
         try:
             result = await self._graph.ainvoke(
-                {"messages": [("human", message)]},
+                {"messages": input_messages},
                 config,
             )
             messages = result["messages"]
             
             # 提取中间步骤
-            steps = _extract_steps_from_messages(messages)
+            current_start = 0
+            for idx in range(len(messages) - 1, -1, -1):
+                msg = messages[idx]
+                if getattr(msg, "type", "") == "human" and getattr(msg, "content", "") == message:
+                    current_start = idx + 1
+                    break
+            steps = _extract_steps_from_messages(messages[current_start:])
+            for step in steps:
+                if step.get("type") == "tool_result":
+                    self._record_tool_call(step.get("tool") or "unknown")
             
             # 提取 AI 的最后一条消息作为最终回复
             final_content = "（Agent 未产生输出）"
             for msg in reversed(messages):
                 if hasattr(msg, "content") and msg.type == "ai" and msg.content:
-                    # 记录 token 用量
-                    try:
-                        usage = getattr(msg, "usage_metadata", None) or {}
-                        if hasattr(usage, "input_tokens"):
-                            input_tok = usage.input_tokens
-                            output_tok = usage.output_tokens
-                        else:
-                            input_tok = usage.get("input_tokens", 0) if isinstance(usage, dict) else 0
-                            output_tok = usage.get("output_tokens", 0) if isinstance(usage, dict) else 0
-                    except Exception:
-                        input_tok = 0
-                        output_tok = len(msg.content)
-                    
-                    self.tracker.record(
-                        model=self.config.model,
-                        input_tokens=input_tok or len(message),
-                        output_tokens=output_tok,
-                        tool_name="agent_response",
-                    )
+                    input_tok, output_tok, cached_tok = _extract_usage_tokens(msg)
+                    if input_tok > 0 or output_tok > 0:
+                        self._record_model_usage(input_tok, output_tok, cached_tok, source="agent_response")
+                    else:
+                        self.tracker.record_model_call(
+                            provider=self.config.active_provider,
+                            model=self.config.model,
+                            input_tokens=0,
+                            output_tokens=0,
+                            thread_id=self._thread_id,
+                            source="agent_response",
+                            estimated=True,
+                        )
                     final_content = msg.content
                     break
             
             return final_content, steps
         except Exception as e:
+            if _is_recursion_limit_error(e):
+                return f"❌ {_recursion_limit_message(config['recursion_limit'])}", []
             return f"❌ 执行出错: {type(e).__name__}: {e}", []
+        finally:
+            self._hydrated_threads.add(self._thread_id)
     
-    async def stream_run(self, message: str) -> AsyncGenerator[str, None]:
+    async def stream_run(self, message: str, history: Optional[list[dict]] = None) -> AsyncGenerator[str, None]:
         """流式处理用户消息，yield SSE 格式事件"""
-        run_config = {"configurable": {"thread_id": self._thread_id}}
-        input_data = {"messages": [("human", message)]}
-        
-        # 记录输入 token
-        self.tracker.record(
-            model=self.config.model, input_tokens=len(message),
-            output_tokens=0, tool_name="user_input",
-        )
+        run_config = self._run_config()
+        input_messages = []
+        if self._thread_id not in self._hydrated_threads:
+            input_messages = session_messages_to_langchain(history or [])
+        input_messages.append(HumanMessage(content=message))
+        input_data = {"messages": input_messages}
         
         thinking_buffer = ""        # 累积推理文本（工具调用前的内容）
         final_buffer = ""           # 最终回复缓存
         step_count = 0
         in_tool_call = False        # 当前是否正在产生工具调用
+        usage_recorded = False
         
         try:
             async for event in self._graph.astream_events(
@@ -247,10 +359,7 @@ class DesktopAgent:
                     output_str = str(output)[:500]
                     tool_name = event.get("name", "")
                     
-                    self.tracker.record(
-                        model=self.config.model, input_tokens=0,
-                        output_tokens=len(output_str), tool_name=tool_name,
-                    )
+                    self._record_tool_call(tool_name)
                     
                     yield _sse({
                         "type": "tool_result",
@@ -260,11 +369,34 @@ class DesktopAgent:
                     
                     # 重置状态，准备接收下一轮推理
                     in_tool_call = False
+
+                elif kind == "on_chat_model_end" and node == "agent":
+                    output = event.get("data", {}).get("output")
+                    input_tok, output_tok, cached_tok = _extract_usage_tokens(output)
+                    if input_tok > 0 or output_tok > 0:
+                        self._record_model_usage(input_tok, output_tok, cached_tok, source="chat_model_end")
+                        usage_recorded = True
         
         except Exception as e:
-            yield _sse({"type": "error", "content": f"{type(e).__name__}: {e}"})
+            if _is_recursion_limit_error(e):
+                final_buffer = _recursion_limit_message(run_config["recursion_limit"])
+                yield _sse({"type": "error", "content": final_buffer})
+            else:
+                final_buffer = f"{type(e).__name__}: {e}"
+                yield _sse({"type": "error", "content": final_buffer})
         
         finally:
+            self._hydrated_threads.add(self._thread_id)
+            if not usage_recorded:
+                self.tracker.record_model_call(
+                    provider=self.config.active_provider,
+                    model=self.config.model,
+                    input_tokens=0,
+                    output_tokens=0,
+                    thread_id=self._thread_id,
+                    source="chat_model_end",
+                    estimated=True,
+                )
             # 发送完成事件（thinking_buffer 中剩余的是最终回复）
             remaining = thinking_buffer.strip()
             if remaining:

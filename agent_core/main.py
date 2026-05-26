@@ -117,21 +117,30 @@ class SkillInfo(BaseModel):
 class UsageStats(BaseModel):
     date: str
     total_calls: int
+    model_calls: int = 0
+    tool_calls: int = 0
     total_input_tokens: int
     total_output_tokens: int
+    total_cached_tokens: int = 0
     total_tokens: int
     total_cost: float
+    provider_breakdown: dict[str, Any] = {}
     model_breakdown: dict[str, Any] = {}
+    tool_breakdown: dict[str, Any] = {}
     session_records: int = 0
 
 
 class SessionStats(BaseModel):
     session_id: str
     calls: int
+    model_calls: int = 0
+    tool_calls: int = 0
     input_tokens: int
     output_tokens: int
     total_tokens: int
     cost: float
+    provider_breakdown: dict[str, Any] = {}
+    tool_breakdown: dict[str, Any] = {}
 
 
 class ReloadResponse(BaseModel):
@@ -178,12 +187,15 @@ async def run_agent(req: RunRequest):
             meta_path.parent.mkdir(parents=True, exist_ok=True)
             meta_path.write_text(__import__('json').dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
             msgs_path.write_text("[]", encoding="utf-8")
+        session = session_store.get_session(session_id)
     
+    history_messages = (session or {}).get("messages", [])
+
     # 保存用户消息
     session_store.add_message(session_id, "user", req.message)
     
     agent.switch_thread(session_id)
-    result, steps = await agent.run(req.message)
+    result, steps = await agent.run(req.message, history=history_messages)
     
     # 保存 AI 回复
     session_store.add_message(session_id, "assistant", result)
@@ -217,7 +229,10 @@ async def run_agent_stream(req: RunRequest):
             meta_path.parent.mkdir(parents=True, exist_ok=True)
             meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
             msgs_path.write_text("[]", encoding="utf-8")
+        session = session_store.get_session(session_id)
     
+    history_messages = (session or {}).get("messages", [])
+
     # 保存用户消息
     session_store.add_message(session_id, "user", req.message)
     
@@ -225,7 +240,7 @@ async def run_agent_stream(req: RunRequest):
     
     async def event_stream():
         final_content = ""
-        async for sse_event in agent.stream_run(req.message):
+        async for sse_event in agent.stream_run(req.message, history=history_messages):
             yield sse_event
             # 收集最终内容
             if '"type": "done"' in sse_event:
@@ -380,10 +395,10 @@ def get_usage():
 
 
 @app.get("/usage/session", response_model=SessionStats)
-def get_session_usage():
+def get_session_usage(thread_id: str = ""):
     """获取当前会话的模型使用量"""
     tracker = get_tracker()
-    return SessionStats(**tracker.get_session_stats())
+    return SessionStats(**tracker.get_session_stats(thread_id=thread_id or None))
 
 
 @app.get("/usage/history")
@@ -402,6 +417,7 @@ class SettingsRequest(BaseModel):
     api_key: str = ""
     model: str = ""
     base_url: str = ""
+    recursion_limit: int = 60
 
 
 @app.get("/settings")
@@ -423,6 +439,7 @@ def save_settings(req: SettingsRequest):
         model=req.model,
         base_url=req.base_url,
     )
+    cfg.recursion_limit = max(1, int(req.recursion_limit or 60))
     
     # 持久化到文件（现在包含 API Key）
     cfg.save()
@@ -432,6 +449,7 @@ def save_settings(req: SettingsRequest):
     os.environ["OPENAI_API_KEY"] = cfg.api_key
     os.environ["LLM_MODEL"] = cfg.model
     os.environ["LLM_PROVIDER"] = cfg.active_provider
+    os.environ["AGENT_RECURSION_LIMIT"] = str(cfg.recursion_limit)
     if cfg.base_url:
         os.environ["LLM_BASE_URL"] = cfg.base_url
     else:
