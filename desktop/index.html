@@ -40,6 +40,8 @@
   #quick-provider-select:focus { border-color:#007aff; }
   #settings-btn { padding:6px 12px; background:#f0f0f0; border:1px solid #ddd; border-radius:8px; font-size:13px; cursor:pointer; transition:all .2s; }
   #settings-btn:hover { background:#e0e0e0; }
+  #logout-btn { padding:6px 12px; background:transparent; border:1px solid #ddd; border-radius:8px; font-size:13px; cursor:pointer; transition:all .2s; color:#8e8e93; }
+  #logout-btn:hover { background:#fbe9e7; border-color:#ff453a; color:#ff453a; }
   
   #messages { flex:1; overflow-y:auto; padding:20px 24px; }
   .msg { margin-bottom:16px; max-width:85%; padding:12px 18px; border-radius:14px; font-size:14px; line-height:1.6; word-break:break-word; }
@@ -182,6 +184,8 @@
     #header .left { gap:4px; }
     #header .right { gap:4px; }
     #status-text { display:none; }
+    #logout-btn { font-size:0; padding:6px 8px; }
+    #logout-btn::after { content:"🚪"; font-size:16px; }
     #sidebar-toggle { font-size:18px; padding:2px; }
     #status-dot { width:6px; height:6px; flex-shrink:0; }
     #input-area { padding:8px 10px 14px; }
@@ -249,6 +253,7 @@
     </div>
     <div class="right">
       <button id="settings-btn">⚙️ 设置</button>
+      <button id="logout-btn" onclick="logout()">🚪 登出</button>
     </div>
   </div>
   
@@ -990,6 +995,13 @@ document.getElementById('settings-modal').addEventListener('click', function(e) 
 document.getElementById('settings-btn').onclick = openSettings;
 // 新建会话按钮
 document.getElementById('new-session-btn').onclick = newSession;
+
+// 登出
+function logout() {
+  fetch('/auth/logout', { method: 'POST' }).then(() => {
+    window.location.href = '/login';
+  });
+}
 
 // 侧边栏折叠逻辑
 function toggleSidebar() {
