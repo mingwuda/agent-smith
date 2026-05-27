@@ -18,6 +18,10 @@ Thumbs.db
 # 会话数据
 .desktop_agent/
 
+# 运行时
+agent.log
+.agent.pid
+
 # 桌面壳
 desktop/node_modules/
 desktop/package-lock.json
