@@ -204,7 +204,6 @@ def init_agent():
 class RunRequest(BaseModel):
     message: str
     thread_id: str = "default"
-    user_id: str = "default"
 
 
 class RunResponse(BaseModel):
@@ -368,6 +367,14 @@ def serve_ui():
 
 # ---------- API 路由 ----------
 
+def _get_current_user(request: Request) -> str:
+    """从认证 cookie 中提取用户名作为 user_id"""
+    token = request.cookies.get(AUTH_COOKIE_NAME, "")
+    parts = token.split(":")
+    uid = parts[0] if parts and parts[0] else ""
+    return uid or "default"
+
+
 async def _ensure_session(uid: str, session_id: str) -> dict:
     session = session_store.get_session(uid, session_id)
     if session is None:
@@ -378,21 +385,23 @@ async def _ensure_session(uid: str, session_id: str) -> dict:
     return session or {}
 
 
-def _set_user_context(req: RunRequest) -> str:
-    uid = req.user_id or "default"
+def _resolve_user(request: Request) -> str:
+    """从请求获取当前用户并设置到 agent"""
+    uid = _get_current_user(request)
     if agent:
         agent.set_user(uid)
     return uid
 
+
 @app.post("/run", response_model=RunResponse)
-async def run_agent(req: RunRequest):
+async def run_agent(req: RunRequest, request: Request):
     """发送消息给 Agent 并获取回复"""
     if not agent:
         init_agent()
     if not agent:
         raise HTTPException(503, "Agent 初始化失败，请检查 API Key 设置")
     
-    uid = _set_user_context(req)
+    uid = _resolve_user(request)
     session_id = req.thread_id
     session = await _ensure_session(uid, session_id)
     history_messages = session.get("messages", [])
@@ -409,14 +418,14 @@ async def run_agent(req: RunRequest):
 
 
 @app.post("/run/stream")
-async def run_agent_stream(req: RunRequest):
+async def run_agent_stream(req: RunRequest, request: Request):
     """流式处理消息（SSE）"""
     if not agent:
         init_agent()
     if not agent:
         raise HTTPException(503, "Agent 初始化失败")
     
-    uid = _set_user_context(req)
+    uid = _resolve_user(request)
     session_id = req.thread_id
     session = await _ensure_session(uid, session_id)
     history_messages = session.get("messages", [])
@@ -505,9 +514,10 @@ class CreateSessionResponse(BaseModel):
 
 
 @app.get("/sessions", response_model=SessionListResponse)
-def list_sessions(user_id: str = Query("default", description="用户 ID")):
-    """列出指定用户的会话"""
-    raw = session_store.list_sessions(user_id)
+def list_sessions(request: Request):
+    """列出当前用户的会话"""
+    uid = _get_current_user(request)
+    raw = session_store.list_sessions(uid)
     sessions = [
         SessionInfo(
             id=s["id"],
@@ -523,9 +533,10 @@ def list_sessions(user_id: str = Query("default", description="用户 ID")):
 
 
 @app.get("/sessions/{session_id}", response_model=SessionMessagesResponse)
-def get_session(session_id: str, user_id: str = Query("default", description="用户 ID")):
-    """获取指定用户的会话消息"""
-    session = session_store.get_session(user_id, session_id)
+def get_session(session_id: str, request: Request):
+    """获取当前用户的会话消息"""
+    uid = _get_current_user(request)
+    session = session_store.get_session(uid, session_id)
     if not session:
         raise HTTPException(404, "会话不存在")
     return SessionMessagesResponse(
@@ -536,48 +547,51 @@ def get_session(session_id: str, user_id: str = Query("default", description="�
 
 
 @app.post("/sessions", response_model=CreateSessionResponse)
-def create_session(user_id: str = Query("default", description="用户 ID")):
+def create_session(request: Request):
     """创建新会话"""
-    session = session_store.create_session(user_id)
+    uid = _get_current_user(request)
+    session = session_store.create_session(uid)
     return CreateSessionResponse(id=session["id"], title=session["title"])
 
 
 @app.delete("/sessions/{session_id}")
-def delete_session(session_id: str, user_id: str = Query("default", description="用户 ID")):
+def delete_session(session_id: str, request: Request):
     """删除会话"""
-    ok = session_store.delete_session(user_id, session_id)
+    uid = _get_current_user(request)
+    ok = session_store.delete_session(uid, session_id)
     if not ok:
         raise HTTPException(404, "会话不存在")
     return {"status": "ok", "message": f"已删除会话 {session_id}"}
 
 
 @app.put("/sessions/{session_id}/rename")
-def rename_session(session_id: str, req: RenameRequest, user_id: str = Query("default", description="用户 ID")):
+def rename_session(session_id: str, req: RenameRequest, request: Request):
     """重命名会话"""
-    ok = session_store.rename_session(user_id, session_id, req.title)
+    uid = _get_current_user(request)
+    ok = session_store.rename_session(uid, session_id, req.title)
     if not ok:
         raise HTTPException(404, "会话不存在")
     return {"status": "ok", "message": f"已重命名为 {req.title}"}
 
 
 @app.get("/usage", response_model=UsageStats)
-def get_usage(user_id: str = Query("default", description="用户 ID")):
+def get_usage(request: Request):
     """获取今日模型使用量统计"""
-    tracker = get_tracker(user_id)
+    tracker = get_tracker(_get_current_user(request))
     return UsageStats(**tracker.get_today_stats())
 
 
 @app.get("/usage/session", response_model=SessionStats)
-def get_session_usage(thread_id: str = "", user_id: str = Query("default", description="用户 ID")):
+def get_session_usage(thread_id: str = "", request: Request = None):
     """获取当前会话的模型使用量"""
-    tracker = get_tracker(user_id)
+    tracker = get_tracker(_get_current_user(request) if request else "default")
     return SessionStats(**tracker.get_session_stats(thread_id=thread_id or None))
 
 
 @app.get("/usage/history")
-def get_usage_history(days: int = 7, user_id: str = Query("default", description="用户 ID")):
+def get_usage_history(days: int = 7, request: Request = None):
     """获取最近 N 天的使用历史"""
-    tracker = get_tracker(user_id)
+    tracker = get_tracker(_get_current_user(request) if request else "default")
     return tracker.get_history(days=days)
 
 
@@ -676,25 +690,21 @@ def delete_user(user_id: str):
     return {"status": "ok", "message": f"已删除用户 {user_id}"}
 
 
-@app.get("/users/current")
-def get_current_user():
-    """获取当前用户"""
-    uid = agent._user_id if agent else "default"
+@app.get("/users/me")
+def get_my_user(request: Request):
+    """获取当前登录用户的信息"""
+    uid = _get_current_user(request)
+    if agent:
+        agent.set_user(uid)
     user = user_manager.get_user(uid)
     if not user:
-        user = {"id": uid, "name": uid, "created_at": ""}
+        # 首次登录时自动创建用户
+        user = user_manager.create_user(uid, uid)
     return user
 
 
-@app.post("/users/switch")
-def switch_user(user_id: str = Query(..., description="要切换到的用户 ID")):
-    """切换当前用户"""
-    user = user_manager.get_user(user_id)
-    if not user:
-        raise HTTPException(404, "用户不存在")
-    if agent:
-        agent.set_user(user_id)
-    return {"status": "ok", "user_id": user_id}
+
+
 
 
 def _init_default_users():

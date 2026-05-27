@@ -3,29 +3,46 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# 优先使用项目虚拟环境
-if [[ -x "$SCRIPT_DIR/.venv/bin/python" ]]; then
-  PYTHON="$SCRIPT_DIR/.venv/bin/python"
-  USING_VENV=1
-elif command -v python3 >/dev/null 2>&1; then
-  PYTHON="$(command -v python3)"
-  USING_VENV=0
-else
-  echo "Error: Python 3 was not found."
-  exit 1
+# 探测可用的 Python
+PYTHON=""
+for candidate in "$SCRIPT_DIR/.venv/bin/python" \
+                 "/Users/mingo/.workbuddy/binaries/python/versions/3.13.12/bin/python3" \
+                 "/usr/bin/python3" \
+                 "python3"; do
+  if command -v "$candidate" >/dev/null 2>&1; then
+    if "$candidate" -c 'import fastapi, uvicorn' >/dev/null 2>&1; then
+      PYTHON="$candidate"
+      break
+    fi
+  fi
+done
+
+if [[ -z "$PYTHON" ]]; then
+  # 尝试用系统 Python 创建虚拟环境
+  SYS_PY=$(command -v python3 2>/dev/null || echo "/usr/bin/python3")
+  if [[ -x "$SYS_PY" ]]; then
+    echo "📦 正在创建 Python 虚拟环境..."
+    "$SYS_PY" -m venv "$SCRIPT_DIR/.venv" 2>/dev/null
+    if [[ -x "$SCRIPT_DIR/.venv/bin/pip" ]]; then
+      echo "   安装依赖..."
+      "$SCRIPT_DIR/.venv/bin/pip" install -q --timeout 120 \
+        -i https://pypi.tuna.tsinghua.edu.cn/simple \
+        -r "$SCRIPT_DIR/requirements.txt" 2>/dev/null
+      if "$SCRIPT_DIR/.venv/bin/python" -c 'import fastapi, uvicorn' >/dev/null 2>&1; then
+        PYTHON="$SCRIPT_DIR/.venv/bin/python"
+      fi
+    fi
+  fi
 fi
 
-if ! "$PYTHON" -c 'import fastapi, uvicorn, langchain_openai, langgraph' >/dev/null 2>&1; then
-  echo "Error: required Python packages are missing."
-  if [[ "$USING_VENV" -eq 1 ]]; then
-    echo "Run: \"$PYTHON\" -m pip install -r \"$SCRIPT_DIR/requirements.txt\""
-  else
-    echo "Create a project virtual environment, then install dependencies:"
-    echo "  cd \"$SCRIPT_DIR\""
-    echo "  \"$PYTHON\" -m venv .venv"
-    echo "  .venv/bin/python -m pip install -r requirements.txt"
-    echo "  ./start.sh"
-  fi
+if [[ -z "$PYTHON" ]]; then
+  echo "Error: Python 3 with required packages was not found."
+  echo ""
+  echo "Try:"
+  echo "  cd \"$SCRIPT_DIR\""
+  echo "  python3 -m venv .venv"
+  echo "  .venv/bin/python -m pip install -r requirements.txt"
+  echo "  ./start.sh"
   exit 1
 fi
 
