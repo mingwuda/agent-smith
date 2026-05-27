@@ -111,6 +111,14 @@
   .generating-badge { display:inline-flex; align-items:center; gap:6px; padding:5px 12px; background:#e8f0fe; border-radius:12px; font-size:11px; color:#555; margin:4px 0 0 20px; }
   .generating-badge .spin { width:10px; height:10px; border:2px solid #007aff; border-top-color:transparent; border-radius:50%; animation:spin .6s linear infinite; }
   @keyframes spin { to { transform:rotate(360deg); } }
+
+  /* 输出区底部 loading 条 */
+  #loading-bar { display:none; align-items:center; gap:8px; padding:10px 12px; margin:8px 24px 0; background:#f0f5ff; border:1px solid #d0e0ff; border-radius:10px; font-size:13px; color:#555; }
+  #loading-bar.show { display:flex; }
+  #loading-bar .bar-track { flex:1; height:4px; background:#d0e0ff; border-radius:2px; overflow:hidden; }
+  #loading-bar .bar-track .bar-fill { height:100%; width:0; background:linear-gradient(90deg,#007aff,#30d158); border-radius:2px; animation:loadingSweep 1.5s ease infinite; }
+  @keyframes loadingSweep { 0% { width:0; margin-left:0; } 50% { width:60%; margin-left:20%; } 100% { width:0; margin-left:100%; } }
+  #loading-bar .label { white-space:nowrap; font-size:12px; color:#007aff; font-weight:500; }
   
   /* 设置弹窗 */
   .modal-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.4); z-index:100; align-items:center; justify-content:center; }
@@ -246,6 +254,7 @@
   
   <div id="messages"></div>
   
+  <div id="loading-bar"><div class="bar-track"><div class="bar-fill"></div></div><span class="label">AI 思考中...</span></div>
   <div id="input-area">
     <input id="input" placeholder="说点什么..." autocomplete="off" />
     <button id="send">发送</button>
@@ -346,17 +355,13 @@ function addMessage(text, role) {
 }
 
 function showTyping() {
-  const div = document.createElement('div');
-  div.className = 'msg bot';
-  div.id = 'typing-msg';
-  div.innerHTML = '<div class="typing-indicator"><span></span><span></span><span></span></div>';
-  messages.appendChild(div);
-  messages.scrollTop = messages.scrollHeight;
+  const bar = document.getElementById('loading-bar');
+  bar.classList.add('show');
 }
 
 function hideTyping() {
-  const el = document.getElementById('typing-msg');
-  if (el) el.remove();
+  const bar = document.getElementById('loading-bar');
+  bar.classList.remove('show');
 }
 
 // ---------- API 调用（流式） ----------
@@ -536,6 +541,15 @@ function handleStreamEvent(data) {
         container.appendChild(currentStepsEl);
       }
       updateProgress();
+      
+      // 折叠之前所有步骤卡片，只展开当前新卡片
+      if (currentStepsEl) {
+        currentStepsEl.querySelectorAll('.step-toggle.open').forEach(el => {
+          el.classList.remove('open');
+          const d = el.nextElementSibling;
+          if (d) d.classList.remove('open');
+        });
+      }
       
       const toolIcon = getToolIcon(data.tool);
       const argsHtml = data.args ? `<div class="args">${escapeHtml(JSON.stringify(data.args, null, 2))}</div>` : '';
