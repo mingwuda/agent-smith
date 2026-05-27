@@ -11,7 +11,7 @@ import webbrowser
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import FastAPI, HTTPException, Request, Response, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
@@ -32,6 +32,7 @@ from tools import file_tools, code_tools, system_tools, web_tools
 from monitoring.usage_tracker import get_tracker
 from skills.registry import get_registry
 import session_store
+import user_manager
 
 # ---------- 认证 ----------
 
@@ -125,6 +126,7 @@ from contextlib import asynccontextmanager
 @asynccontextmanager
 async def lifespan(app):
     print("🔄 服务启动中...（Agent 将在首次请求时初始化）")
+    _init_default_users()
     yield
 
 app = FastAPI(
@@ -202,6 +204,7 @@ def init_agent():
 class RunRequest(BaseModel):
     message: str
     thread_id: str = "default"
+    user_id: str = "default"
 
 
 class RunResponse(BaseModel):
@@ -365,6 +368,22 @@ def serve_ui():
 
 # ---------- API 路由 ----------
 
+async def _ensure_session(uid: str, session_id: str) -> dict:
+    session = session_store.get_session(uid, session_id)
+    if session is None:
+        session = session_store.create_session(
+            uid, title=f"会话 {session_id[:8]}",
+            session_id=session_id,
+        )
+    return session or {}
+
+
+def _set_user_context(req: RunRequest) -> str:
+    uid = req.user_id or "default"
+    if agent:
+        agent.set_user(uid)
+    return uid
+
 @app.post("/run", response_model=RunResponse)
 async def run_agent(req: RunRequest):
     """发送消息给 Agent 并获取回复"""
@@ -373,32 +392,18 @@ async def run_agent(req: RunRequest):
     if not agent:
         raise HTTPException(503, "Agent 初始化失败，请检查 API Key 设置")
     
+    uid = _set_user_context(req)
     session_id = req.thread_id
-    
-    # 确保会话存在
-    session = session_store.get_session(session_id)
-    if session is None:
-        session = session_store.create_session(
-            title=f"会话 {session_id[:8]}",
-            session_id=session_id,
-        )
-    
-    history_messages = (session or {}).get("messages", [])
+    session = await _ensure_session(uid, session_id)
+    history_messages = session.get("messages", [])
 
-    # 保存用户消息
-    session_store.add_message(session_id, "user", req.message)
-    
+    session_store.add_message(uid, session_id, "user", req.message)
     agent.switch_thread(session_id)
     result, steps = await agent.run(req.message, history=history_messages)
+    session_store.add_message(uid, session_id, "assistant", result)
     
-    # 保存 AI 回复
-    session_store.add_message(session_id, "assistant", result)
-    
-    # 更新会话标题（取第一条用户消息的前30字）
-    session = session_store.get_session(session_id)
-    if session and session.get("message_count", 0) <= 2:
-        title = req.message[:30] + ("..." if len(req.message) > 30 else "")
-        session_store.rename_session(session_id, title)
+    title = req.message[:30] + ("..." if len(req.message) > 30 else "")
+    session_store.rename_session(uid, session_id, title or f"会话 {session_id[:8]}")
     
     return RunResponse(result=result, steps=steps)
 
@@ -411,54 +416,32 @@ async def run_agent_stream(req: RunRequest):
     if not agent:
         raise HTTPException(503, "Agent 初始化失败")
     
+    uid = _set_user_context(req)
     session_id = req.thread_id
-    # 确保会话存在
-    session = session_store.get_session(session_id)
-    if session is None:
-        session = session_store.create_session(
-            title=f"会话 {session_id[:8]}",
-            session_id=session_id,
-        )
-    
-    history_messages = (session or {}).get("messages", [])
+    session = await _ensure_session(uid, session_id)
+    history_messages = session.get("messages", [])
 
-    # 保存用户消息
-    session_store.add_message(session_id, "user", req.message)
-    
+    session_store.add_message(uid, session_id, "user", req.message)
     agent.switch_thread(session_id)
     
     async def event_stream():
         final_content = ""
         async for sse_event in agent.stream_run(req.message, history=history_messages):
             yield sse_event
-            # 收集最终内容
             if '"type": "done"' in sse_event:
-                try:
-                    import re
-                    m = re.search(r'data: ({.*})', sse_event)
-                    if m:
-                        data = json.loads(m.group(1))
-                        final_content = data.get("content", "")
-                except Exception:
-                    pass
+                import re
+                m = re.search(r'data: ({.*})', sse_event)
+                if m:
+                    final_content = json.loads(m.group(1)).get("content", "")
         
-        # 保存 AI 回复
         if final_content:
-            session_store.add_message(session_id, "assistant", final_content)
-            # 更新会话标题
-            session = session_store.get_session(session_id)
-            if session and session.get("message_count", 0) <= 2:
-                title = req.message[:30] + ("..." if len(req.message) > 30 else "")
-                session_store.rename_session(session_id, title)
+            session_store.add_message(uid, session_id, "assistant", final_content)
+            title = req.message[:30] + ("..." if len(req.message) > 30 else "")
+            session_store.rename_session(uid, session_id, title or f"会话 {session_id[:8]}")
     
     return StreamingResponse(
-        event_stream(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
+        event_stream(), media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
     )
 
 
@@ -522,9 +505,9 @@ class CreateSessionResponse(BaseModel):
 
 
 @app.get("/sessions", response_model=SessionListResponse)
-def list_sessions():
-    """列出所有会话"""
-    raw = session_store.list_sessions()
+def list_sessions(user_id: str = Query("default", description="用户 ID")):
+    """列出指定用户的会话"""
+    raw = session_store.list_sessions(user_id)
     sessions = [
         SessionInfo(
             id=s["id"],
@@ -535,13 +518,14 @@ def list_sessions():
         )
         for s in raw
     ]
-    return SessionListResponse(sessions=sessions, current_id=agent._thread_id if agent else "default")
+    current_uid = agent._user_id if agent else "default"
+    return SessionListResponse(sessions=sessions, current_id=current_uid)
 
 
 @app.get("/sessions/{session_id}", response_model=SessionMessagesResponse)
-def get_session(session_id: str):
-    """获取单个会话的消息列表"""
-    session = session_store.get_session(session_id)
+def get_session(session_id: str, user_id: str = Query("default", description="用户 ID")):
+    """获取指定用户的会话消息"""
+    session = session_store.get_session(user_id, session_id)
     if not session:
         raise HTTPException(404, "会话不存在")
     return SessionMessagesResponse(
@@ -552,48 +536,48 @@ def get_session(session_id: str):
 
 
 @app.post("/sessions", response_model=CreateSessionResponse)
-def create_session():
+def create_session(user_id: str = Query("default", description="用户 ID")):
     """创建新会话"""
-    session = session_store.create_session()
+    session = session_store.create_session(user_id)
     return CreateSessionResponse(id=session["id"], title=session["title"])
 
 
 @app.delete("/sessions/{session_id}")
-def delete_session(session_id: str):
+def delete_session(session_id: str, user_id: str = Query("default", description="用户 ID")):
     """删除会话"""
-    ok = session_store.delete_session(session_id)
+    ok = session_store.delete_session(user_id, session_id)
     if not ok:
         raise HTTPException(404, "会话不存在")
     return {"status": "ok", "message": f"已删除会话 {session_id}"}
 
 
 @app.put("/sessions/{session_id}/rename")
-def rename_session(session_id: str, req: RenameRequest):
+def rename_session(session_id: str, req: RenameRequest, user_id: str = Query("default", description="用户 ID")):
     """重命名会话"""
-    ok = session_store.rename_session(session_id, req.title)
+    ok = session_store.rename_session(user_id, session_id, req.title)
     if not ok:
         raise HTTPException(404, "会话不存在")
     return {"status": "ok", "message": f"已重命名为 {req.title}"}
 
 
 @app.get("/usage", response_model=UsageStats)
-def get_usage():
+def get_usage(user_id: str = Query("default", description="用户 ID")):
     """获取今日模型使用量统计"""
-    tracker = get_tracker()
+    tracker = get_tracker(user_id)
     return UsageStats(**tracker.get_today_stats())
 
 
 @app.get("/usage/session", response_model=SessionStats)
-def get_session_usage(thread_id: str = ""):
+def get_session_usage(thread_id: str = "", user_id: str = Query("default", description="用户 ID")):
     """获取当前会话的模型使用量"""
-    tracker = get_tracker()
+    tracker = get_tracker(user_id)
     return SessionStats(**tracker.get_session_stats(thread_id=thread_id or None))
 
 
 @app.get("/usage/history")
-def get_usage_history(days: int = 7):
+def get_usage_history(days: int = 7, user_id: str = Query("default", description="用户 ID")):
     """获取最近 N 天的使用历史"""
-    tracker = get_tracker()
+    tracker = get_tracker(user_id)
     return tracker.get_history(days=days)
 
 
@@ -652,6 +636,76 @@ def save_settings(req: SettingsRequest):
         return {"status": "ok", "message": "设置已保存，Agent 已重新初始化"}
     except Exception as e:
         return {"status": "error", "message": f"设置已保存，但 Agent 初始化失败: {str(e)}"}
+
+
+# ── 用户管理路由 ──
+
+class UserInfo(BaseModel):
+    id: str
+    name: str
+    created_at: str
+
+
+class CreateUserRequest(BaseModel):
+    user_id: str
+    name: str = ""
+
+
+@app.get("/users", response_model=list[UserInfo])
+def list_users():
+    """列出所有用户"""
+    return [UserInfo(**u) for u in user_manager.list_users()]
+
+
+@app.post("/users", response_model=UserInfo)
+def create_user(req: CreateUserRequest):
+    """创建新用户"""
+    try:
+        user = user_manager.create_user(req.user_id, req.name)
+        return UserInfo(**user)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.delete("/users/{user_id}")
+def delete_user(user_id: str):
+    """删除用户"""
+    ok = user_manager.delete_user(user_id)
+    if not ok:
+        raise HTTPException(404, "用户不存在")
+    return {"status": "ok", "message": f"已删除用户 {user_id}"}
+
+
+@app.get("/users/current")
+def get_current_user():
+    """获取当前用户"""
+    uid = agent._user_id if agent else "default"
+    user = user_manager.get_user(uid)
+    if not user:
+        user = {"id": uid, "name": uid, "created_at": ""}
+    return user
+
+
+@app.post("/users/switch")
+def switch_user(user_id: str = Query(..., description="要切换到的用户 ID")):
+    """切换当前用户"""
+    user = user_manager.get_user(user_id)
+    if not user:
+        raise HTTPException(404, "用户不存在")
+    if agent:
+        agent.set_user(user_id)
+    return {"status": "ok", "user_id": user_id}
+
+
+def _init_default_users():
+    """初始化默认用户（首次启动时创建 2 个测试用户）"""
+    existing = user_manager.list_users()
+    if len(existing) >= 2:
+        return
+    for uid, name in [("alice", "Alice"), ("bob", "Bob")]:
+        if not user_manager.get_user(uid):
+            user = user_manager.create_user(uid, name)
+            print(f"  👤 创建用户: {user['name']} (ID: {uid})")
 
 
 @app.get("/health")

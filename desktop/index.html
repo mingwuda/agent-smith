@@ -204,6 +204,11 @@
 
 <!-- 侧边栏 -->
 <div id="sidebar">
+  <!-- 用户切换 -->
+  <div style="padding:12px 16px;border-bottom:1px solid #2c2c2e;">
+    <div class="label" style="font-size:11px;color:#8e8e93;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;">👤 当前用户</div>
+    <select id="user-select" onchange="switchUser(this.value)" style="width:100%;padding:6px 8px;background:#2c2c2e;color:#fff;border:1px solid #3a3a3c;border-radius:6px;font-size:13px;outline:none;"></select>
+  </div>
   <div id="session-header">
     <h2>💬 会话</h2>
     <button id="new-session-btn">＋ 新建</button>
@@ -316,6 +321,7 @@ const statusText = document.getElementById('status-text');
 const quickProviderSelect = document.getElementById('quick-provider-select');
 
 let threadId = 'default';
+let currentUserId = 'default';
 let isLoading = false;
 let sessionsCache = [];
 let currentSessionId = null;
@@ -396,7 +402,7 @@ async function send() {
     const res = await fetch(`/run/stream`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: text, thread_id: threadId }),
+      body: JSON.stringify({ message: text, thread_id: threadId, user_id: currentUserId }),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     
@@ -682,6 +688,32 @@ function toggleStep(el) {
   if (details) details.classList.toggle('open');
 }
 
+// ---------- 用户管理 ----------
+
+async function loadUsers() {
+  try {
+    const res = await fetch('/users');
+    if (!res.ok) return;
+    const users = await res.json();
+    const sel = document.getElementById('user-select');
+    sel.innerHTML = users.map(u =>
+      `<option value="${u.id}" ${u.id === currentUserId ? 'selected' : ''}>👤 ${u.name} (${u.id})</option>`
+    ).join('');
+  } catch {}
+}
+
+async function switchUser(userId) {
+  if (userId === currentUserId) return;
+  // 切换用户
+  const res = await fetch(`/users/switch?user_id=${encodeURIComponent(userId)}`, { method: 'POST' });
+  if (!res.ok) return;
+  currentUserId = userId;
+  // 清空消息区域
+  document.getElementById('messages').innerHTML = '';
+  // 刷新会话列表
+  await loadSessions();
+}
+
 // ---------- 会话管理 ----------
 
 function renderSessionList(sessions, currentId) {
@@ -712,7 +744,7 @@ function escapeHtml(text) {
 
 async function loadSessions() {
   try {
-    const res = await fetch('/sessions');
+    const res = await fetch(`/sessions?user_id=${encodeURIComponent(currentUserId)}`);
     if (!res.ok) return;
     const data = await res.json();
     sessionsCache = data.sessions || [];
@@ -731,7 +763,7 @@ async function loadSessions() {
 
 async function loadSessionMessages(sessionId) {
   try {
-    const res = await fetch(`/sessions/${sessionId}`);
+    const res = await fetch(`/sessions/${sessionId}?user_id=${encodeURIComponent(currentUserId)}`);
     if (res.ok) {
       const data = await res.json();
       const container = document.getElementById('messages');
@@ -764,7 +796,7 @@ async function switchSession(sessionId, forceLoad = false) {
 
 async function newSession() {
   try {
-    const res = await fetch('/sessions', { method: 'POST' });
+    const res = await fetch(`/sessions?user_id=${encodeURIComponent(currentUserId)}`, { method: 'POST' });
     if (!res.ok) return;
     const data = await res.json();
     currentSessionId = data.id;
@@ -779,7 +811,7 @@ async function newSession() {
 async function deleteSession(sessionId) {
   if (!confirm('确定删除此会话？')) return;
   try {
-    await fetch(`/sessions/${sessionId}`, { method: 'DELETE' });
+    await fetch(`/sessions/${sessionId}?user_id=${encodeURIComponent(currentUserId)}`, { method: 'DELETE' });
     if (sessionId === currentSessionId) {
       // 当前会话被删除，切到第一个或新建
       const remaining = sessionsCache.filter(s => s.id !== sessionId);
@@ -1057,7 +1089,7 @@ async function checkHealth() {
 
 async function refreshStats() {
   try {
-    const res = await fetch(`/usage/session?thread_id=${encodeURIComponent(threadId)}`);
+    const res = await fetch(`/usage/session?thread_id=${encodeURIComponent(threadId)}&user_id=${encodeURIComponent(currentUserId)}`);
     if (res.ok) {
       const data = await res.json();
       const modelCalls = data.model_calls ?? data.calls ?? 0;
@@ -1098,6 +1130,7 @@ setInterval(loadSessions, 10000);
 (async () => {
   const ok = await checkHealth();
   await loadSettingsForSwitcher();
+  await loadUsers();
   if (ok) {
     // 加载会话列表
     await loadSessions();

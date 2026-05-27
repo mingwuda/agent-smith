@@ -156,12 +156,26 @@ class DesktopAgent:
         self.config = config
         self.llm = self._build_llm()
         self.memory = MemorySaver()
-        self.tracker: UsageTracker = get_tracker()
+        self._user_id = "default"
+        self._tracker: UsageTracker = get_tracker(self._user_id)
         self.registry: SkillRegistry = get_registry()
         self.tools: list = []  # 由外部设置
         self._thread_id = "default"
         self._graph = None
         self._hydrated_threads: set[str] = set()
+
+    def set_user(self, user_id: str):
+        """切换当前用户"""
+        self._user_id = user_id
+        self._tracker = get_tracker(user_id)
+
+    @property
+    def user_id(self) -> str:
+        return self._user_id
+
+    @property
+    def tracker(self) -> UsageTracker:
+        return self._tracker
     
     def set_tools(self, tools: list):
         self.tools = tools

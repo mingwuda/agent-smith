@@ -1,4 +1,4 @@
-"""用量追踪器 —— 使用 SQLite 持久化模型 Token 与工具调用统计"""
+"""用量追踪器 —— 按用户隔离的 SQLite 持久化"""
 import json
 import sqlite3
 from contextlib import contextmanager
@@ -6,19 +6,21 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
+import user_manager
 
 DATA_DIR = Path.home() / ".desktop_agent"
 LEGACY_USAGE_DIR = DATA_DIR / "usage"
-DB_PATH = DATA_DIR / "sessions.sqlite3"
+LEGACY_DB = DATA_DIR / "sessions.sqlite3"
 MIGRATION_KEY = "usage_jsonl_migrated"
 
 
 class UsageTracker:
-    """追踪 LLM token 消耗、费用和工具调用次数。"""
+    """追踪 LLM token 消耗、费用和工具调用次数。每个用户独立数据库。"""
 
-    def __init__(self, db_path: Optional[Path] = None, legacy_dir: Optional[Path] = None):
-        self.db_path = db_path or DB_PATH
-        self.legacy_dir = legacy_dir or LEGACY_USAGE_DIR
+    def __init__(self, user_id: str = "default"):
+        udir = user_manager.usage_dir(user_id)
+        self.db_path = udir / "usage.sqlite3"
+        self.legacy_dir = LEGACY_USAGE_DIR
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
         self._init_db()
@@ -447,11 +449,11 @@ class UsageTracker:
         }
 
 
-_tracker: Optional[UsageTracker] = None
+_trackers: dict[str, UsageTracker] = {}
 
 
-def get_tracker() -> UsageTracker:
-    global _tracker
-    if _tracker is None:
-        _tracker = UsageTracker()
-    return _tracker
+def get_tracker(user_id: str = "default") -> UsageTracker:
+    """获取指定用户的用量追踪器（每个用户独立）"""
+    if user_id not in _trackers:
+        _trackers[user_id] = UsageTracker(user_id)
+    return _trackers[user_id]
