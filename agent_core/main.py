@@ -41,32 +41,41 @@ AUTH_SESSION_SECONDS = 60 * 60 * 24 * 7
 AUTH_FILE = Path.home() / ".desktop_agent" / "auth.json"
 
 
-def _load_auth_config() -> dict[str, str]:
-    username = os.getenv("DESKTOP_AGENT_AUTH_USER") or "admin"
-    password = os.getenv("DESKTOP_AGENT_AUTH_PASSWORD") or ""
+def _load_auth_config() -> dict:
+    """加载认证配置，支持多用户。返回格式:
+    {"secret": "...", "users": {"admin": "pwd1", "test": "pwd2"}}
+    """
     secret = os.getenv("DESKTOP_AGENT_AUTH_SECRET") or ""
+    users: dict[str, str] = {}
 
-    file_data: dict[str, str] = {}
+    file_data: dict = {}
     if AUTH_FILE.exists():
         try:
             file_data = json.loads(AUTH_FILE.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             file_data = {}
 
-    username = username or file_data.get("username") or "admin"
-    password = password or file_data.get("password") or ""
+    # 兼容旧的单用户格式
+    old_username = file_data.get("username") or os.getenv("DESKTOP_AGENT_AUTH_USER") or ""
+    old_password = file_data.get("password") or os.getenv("DESKTOP_AGENT_AUTH_PASSWORD") or ""
+    if old_username and old_password:
+        users[old_username] = old_password
+
+    # 新的多用户格式
+    file_users = file_data.get("users", {})
+    if isinstance(file_users, dict):
+        users.update(file_users)
+
     secret = secret or file_data.get("secret") or ""
 
-    if not password or not secret:
+    if not users or not secret:
         AUTH_FILE.parent.mkdir(parents=True, exist_ok=True)
-        password = password or secrets.token_urlsafe(18)
-        secret = secret or secrets.token_urlsafe(32)
+        if not secret:
+            secret = secrets.token_urlsafe(32)
+        if not users:
+            users["admin"] = "admin123"
         AUTH_FILE.write_text(
-            json.dumps(
-                {"username": username, "password": password, "secret": secret},
-                ensure_ascii=False,
-                indent=2,
-            ),
+            json.dumps({"users": users, "secret": secret}, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
         try:
@@ -74,10 +83,10 @@ def _load_auth_config() -> dict[str, str]:
         except OSError:
             pass
 
-    return {"username": username, "password": password, "secret": secret}
+    return {"users": users, "secret": secret}
 
 
-def _auth_config() -> dict[str, str]:
+def _auth_config() -> dict:
     if not hasattr(_auth_config, "_cache"):
         setattr(_auth_config, "_cache", _load_auth_config())
     return getattr(_auth_config, "_cache")
@@ -104,7 +113,8 @@ def _verify_session(token: str) -> bool:
     if expires_at < int(time.time()):
         return False
     expected = _sign_session(username, expires_at).rsplit(":", 1)[-1]
-    return hmac.compare_digest(signature, expected) and hmac.compare_digest(username, _auth_config()["username"])
+    users = _auth_config().get("users", {})
+    return hmac.compare_digest(signature, expected) and username in users
 
 
 def _is_authenticated(request: Request) -> bool:
@@ -334,10 +344,9 @@ def login_page():
 @app.post("/auth/login")
 def auth_login(req: LoginRequest, response: Response):
     auth = _auth_config()
-    if not (
-        hmac.compare_digest(req.username, auth["username"])
-        and hmac.compare_digest(req.password, auth["password"])
-    ):
+    users = auth.get("users", {})
+    expected_pwd = users.get(req.username)
+    if not expected_pwd or not hmac.compare_digest(req.password, expected_pwd):
         raise HTTPException(401, "用户名或密码错误")
     expires_at = int(time.time()) + AUTH_SESSION_SECONDS
     response.set_cookie(
@@ -708,14 +717,13 @@ def get_my_user(request: Request):
 
 
 def _init_default_users():
-    """初始化默认用户（首次启动时创建 2 个测试用户）"""
-    existing = user_manager.list_users()
-    if len(existing) >= 2:
-        return
-    for uid, name in [("alice", "Alice"), ("bob", "Bob")]:
+    """初始化默认用户（从 auth 配置同步）"""
+    auth = _auth_config()
+    users = auth.get("users", {})
+    for uid in users:
         if not user_manager.get_user(uid):
-            user = user_manager.create_user(uid, name)
-            print(f"  👤 创建用户: {user['name']} (ID: {uid})")
+            user_manager.create_user(uid, uid)
+            print(f"  👤 创建用户: {uid}")
 
 
 @app.get("/health")
