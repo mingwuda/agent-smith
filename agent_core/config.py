@@ -16,6 +16,10 @@ def _bundled_samples_dir() -> Path:
         return Path(sys._MEIPASS) / "agent_core" / "samples"
     return Path(__file__).parent / "samples"
 
+
+def _split_path_list(raw: str) -> list[Path]:
+    return [Path(p).expanduser() for p in raw.split(os.pathsep) if p.strip()]
+
 DEFAULT_PROVIDERS: dict[str, dict[str, Any]] = {
     "openai": {
         "name": "OpenAI",
@@ -147,7 +151,8 @@ class AgentConfig:
         
         # 4. 初始化目录
         Path(config.workspace).mkdir(parents=True, exist_ok=True)
-        Path(config.skills_dir).mkdir(parents=True, exist_ok=True)
+        for skills_dir in _split_path_list(config.skills_dir):
+            skills_dir.mkdir(parents=True, exist_ok=True)
         
         return config
 

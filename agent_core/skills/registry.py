@@ -10,23 +10,22 @@ class SkillRegistry:
     
     def __init__(self):
         self._skills: dict[str, SkillDefinition] = {}
-        self._base_dir: Optional[Path] = None
+        self._base_dirs: Optional[list[Path]] = None
     
-    def load_from(self, base_dir: Path) -> int:
-        """从目录加载所有技能，返回加载数量"""
-        self._base_dir = base_dir
-        skills = SkillLoader.load_all(base_dir)
-        count = 0
+    def load_from(self, base_dir: Path | list[Path]) -> int:
+        """从目录加载所有技能，返回加载数量。兼容 oh-my-openagent 常见技能目录。"""
+        base_dirs = base_dir if isinstance(base_dir, list) else [base_dir]
+        self._base_dirs = base_dirs
+        skills = SkillLoader.load_from_dirs(base_dirs)
+        self._skills.clear()
         for skill in skills:
             self._skills[skill.name] = skill
-            count += 1
-        return count
+        return len(skills)
     
     def reload(self) -> int:
         """重新加载所有技能（热加载）"""
-        if self._base_dir:
-            self._skills.clear()
-            return self.load_from(self._base_dir)
+        if self._base_dirs:
+            return self.load_from(self._base_dirs)
         return 0
     
     def register(self, skill: SkillDefinition) -> str:
@@ -66,7 +65,8 @@ class SkillRegistry:
         blocks = [
             "",
             "## 已加载的技能",
-            "以下技能你可以根据用户需求调用。当用户提到触发词时，优先使用对应技能。",
+            "以下是当前已经加载到系统中的 Skills。用户询问“有哪些技能”“已加载哪些 Skills”“你会哪些技能”时，必须优先列出这些 Skills，而不是只列底层工具。",
+            "当用户提到触发词时，优先使用对应技能；如果技能要求的专属工具不可用，需要明确说明限制。",
             "",
         ]
         for skill in self._skills.values():

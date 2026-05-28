@@ -336,6 +336,52 @@ file_write
 
 将 Skill 目录放到 `agent_core/samples/` 下，然后调用 `/skills/reload` 即可热加载。
 
+### oh-my-openagent Skill 兼容
+
+当前已支持第一阶段兼容：可以直接加载带 YAML frontmatter 的 `SKILL.md`，并自动扫描 oh-my-openagent 常见目录：
+
+- `agent_core/samples/`
+- `~/.config/opencode/skills/`
+- 当前项目下的 `.opencode/skills/`
+- 当前项目下的 `.claude/skills/`
+- 当前项目下的 `.agents/skills/`
+
+也可以通过 `AGENT_SKILLS_DIR` 指定额外目录；多个目录用系统路径分隔符连接（macOS/Linux 为 `:`，Windows 为 `;`）。
+
+```markdown
+---
+name: router-project-helper
+description: 智能路由项目脚手架助手
+triggers: [智能路由, 路由项目, 脚手架]
+mcp:
+  servers:
+    example: {}
+---
+
+当用户需要创建智能路由项目时：
+1. 先确认目标平台和路由协议
+2. 生成项目目录结构
+3. 输出 README 和启动脚本
+```
+
+说明：
+- `name`、`description`、`trigger` / `triggers` 会被解析为技能元数据。
+- 如果没有 `## Instructions`，frontmatter 后的正文会作为技能说明注入系统提示词。
+- `mcp` 字段当前只会被识别并在 `/skills` 中标记，暂不启动或执行 MCP Server。
+
+### 当前随项目导入的 Skills
+
+项目内 `.opencode/skills/` 目前保留少量适配当前系统的纯提示词型技能：
+
+- `frontend-ui-ux`：界面与交互体验设计
+- `brainstorming`：需求澄清和方案推敲
+- `writing-plans`：实现计划拆解
+- `executing-plans`：按计划执行
+- `test-driven-development`：TDD 红绿重构流程
+- `systematic-debugging`：系统化定位根因
+- `verification-before-completion`：完成前验证
+- `receiving-code-review`：处理代码评审反馈
+
 ---
 
 ## 配置说明

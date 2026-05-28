@@ -4,6 +4,8 @@ import shutil
 from pathlib import Path
 from langchain_core.tools import tool
 
+from skills.registry import get_registry
+
 
 @tool
 def get_system_info() -> str:
@@ -26,4 +28,21 @@ def get_system_info() -> str:
     return "\n".join(info)
 
 
-TOOLS = [get_system_info]
+@tool
+def list_loaded_skills() -> str:
+    """列出当前已加载的 Skills，包括名称、描述、触发词、来源和是否声明 MCP。用户询问有哪些技能时优先使用。"""
+    skills = sorted(get_registry().list_all(), key=lambda item: item.name)
+    if not skills:
+        return "当前没有加载任何 Skills。"
+    lines = [f"当前已加载 {len(skills)} 个 Skills："]
+    for skill in skills:
+        triggers = "、".join(skill.triggers[:8]) if skill.triggers else "未声明"
+        mcp_note = "，声明了 MCP（当前仅识别不执行）" if "mcp" in skill.metadata else ""
+        lines.append(
+            f"- {skill.name}: {skill.description or '无描述'}"
+            f"；触发词：{triggers}；来源：{skill.root}{mcp_note}"
+        )
+    return "\n".join(lines)
+
+
+TOOLS = [get_system_info, list_loaded_skills]

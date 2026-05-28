@@ -203,17 +203,24 @@ def init_agent():
     all_tools.extend(web_tools.TOOLS)
     all_tools.extend(memory_tools.TOOLS)
     
+    # 先加载 Skills，再构建 Agent graph；set_tools 会把技能块注入 system prompt。
+    app_base = _app_base_dir()
+    skills_dirs = [
+        Path(config.skills_dir),
+        app_base / ".opencode" / "skills",
+        app_base / ".claude" / "skills",
+        app_base / ".agents" / "skills",
+    ]
+    skills_count = get_registry().load_from(skills_dirs)
+
     # 初始化 Agent
     agent = DesktopAgent(config)
     agent.set_tools(all_tools)
     
-    # 加载 Skills
-    skills_count = get_registry().load_from(Path(config.skills_dir))
-    
     print(f"✅ Agent 初始化完成")
     print(f"  模型: {config.model}")
     print(f"  工作区: {config.workspace}")
-    print(f"  Skills 目录: {config.skills_dir}")
+    print(f"  Skills 目录: {', '.join(str(p) for p in skills_dirs)}")
     print(f"  已加载技能: {skills_count} 个")
 
 # ---------- API 模型 ----------
@@ -233,6 +240,9 @@ class SkillInfo(BaseModel):
     description: str
     triggers: list[str] = []
     has_instructions: bool = False
+    format: str = "desktop-agent"
+    source: str = ""
+    mcp_declared: bool = False
 
 
 class UsageStats(BaseModel):
@@ -579,6 +589,42 @@ async def _ensure_session(uid: str, session_id: str) -> dict:
     return session or {}
 
 
+def _is_skill_inventory_query(message: str) -> bool:
+    text = (message or "").strip().lower()
+    if not text:
+        return False
+    skill_terms = ("技能", "skills", "skill", "插件", "能力")
+    inventory_terms = ("哪些", "有什么", "有哪些", "列表", "已加载", "加载了", "会什么", "能做什么")
+    return any(term in text for term in skill_terms) and any(term in text for term in inventory_terms)
+
+
+def _format_loaded_skills() -> str:
+    skills = sorted(get_registry().list_all(), key=lambda item: item.name)
+    if not skills:
+        return "当前没有加载任何 Skills。"
+
+    lines = [
+        f"当前已加载 {len(skills)} 个 Skills：",
+        "",
+    ]
+    for skill in skills:
+        triggers = "、".join(skill.triggers[:8]) if skill.triggers else "未声明"
+        mcp_note = "；声明 MCP（当前仅识别，不执行）" if "mcp" in skill.metadata else ""
+        lines.append(f"- **{skill.name}**：{skill.description or '无描述'}")
+        lines.append(f"  触发词：{triggers}；来源：`{skill.root}`{mcp_note}")
+    lines.extend([
+        "",
+        "另外，我也有文件读写、Python 执行、网页搜索/抓取、系统信息、长期记忆等底层工具能力。",
+    ])
+    return "\n".join(lines)
+
+
+def _save_assistant_result(uid: str, session_id: str, user_message: str, result: str):
+    session_store.add_message(uid, session_id, "assistant", result)
+    title = user_message[:30] + ("..." if len(user_message) > 30 else "")
+    session_store.rename_session(uid, session_id, title or f"会话 {session_id[:8]}")
+
+
 def _resolve_user(request: Request) -> str:
     """从请求获取当前用户并设置到 agent"""
     uid = _get_current_user(request)
@@ -602,6 +648,11 @@ async def run_agent(req: RunRequest, request: Request):
     history_messages = session.get("messages", [])
 
     session_store.add_message(uid, session_id, "user", req.message)
+    if _is_skill_inventory_query(req.message):
+        result = _format_loaded_skills()
+        _save_assistant_result(uid, session_id, req.message, result)
+        return RunResponse(result=result, steps=[])
+
     agent.switch_thread(session_id)
     result, steps = await agent.run(req.message, history=history_messages)
     artifact_paths = [
@@ -613,10 +664,7 @@ async def run_agent(req: RunRequest, request: Request):
         and step.get("args", {}).get("path")
     ]
     result = _append_artifact_links(result, uid, artifact_paths)
-    session_store.add_message(uid, session_id, "assistant", result)
-    
-    title = req.message[:30] + ("..." if len(req.message) > 30 else "")
-    session_store.rename_session(uid, session_id, title or f"会话 {session_id[:8]}")
+    _save_assistant_result(uid, session_id, req.message, result)
     
     return RunResponse(result=result, steps=steps)
 
@@ -635,6 +683,20 @@ async def run_agent_stream(req: RunRequest, request: Request):
     history_messages = session.get("messages", [])
 
     session_store.add_message(uid, session_id, "user", req.message)
+    if _is_skill_inventory_query(req.message):
+        result = _format_loaded_skills()
+        _save_assistant_result(uid, session_id, req.message, result)
+
+        async def skill_inventory_stream():
+            yield f"data: {json.dumps({'type': 'done', 'content': result}, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+
+        return StreamingResponse(
+            skill_inventory_stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+        )
+
     agent.switch_thread(session_id)
     artifact_paths: list[str] = []
     
@@ -663,9 +725,7 @@ async def run_agent_stream(req: RunRequest, request: Request):
         if final_content:
             final_content = _append_artifact_links(final_content, uid, artifact_paths)
             yield f"data: {json.dumps({'type': 'done', 'content': final_content}, ensure_ascii=False)}\n\n"
-            session_store.add_message(uid, session_id, "assistant", final_content)
-            title = req.message[:30] + ("..." if len(req.message) > 30 else "")
-            session_store.rename_session(uid, session_id, title or f"会话 {session_id[:8]}")
+            _save_assistant_result(uid, session_id, req.message, final_content)
         yield "data: [DONE]\n\n"
     
     return StreamingResponse(
@@ -680,15 +740,22 @@ def list_skills():
     registry = get_registry()
     # 如果尚未加载技能，尝试加载
     if not registry.list_all():
-        skills_dir = Path(__file__).parent / "samples"
-        if skills_dir.exists():
-            registry.load_from(skills_dir)
+        app_base = _app_base_dir()
+        registry.load_from([
+            Path(AgentConfig.load().skills_dir),
+            app_base / ".opencode" / "skills",
+            app_base / ".claude" / "skills",
+            app_base / ".agents" / "skills",
+        ])
     return [
         SkillInfo(
             name=s.name,
             description=s.description,
             triggers=s.triggers,
             has_instructions=bool(s.instructions),
+            format=s.format,
+            source=str(s.root),
+            mcp_declared="mcp" in s.metadata,
         )
         for s in registry.list_all()
     ]

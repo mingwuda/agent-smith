@@ -25,8 +25,17 @@
   
   #sidebar .section { flex:1; overflow-y:auto; }
   #sidebar .section h3 { font-size:12px; padding:12px 16px 6px; color:#8e8e93; }
-  .skill-item { padding:8px 16px; font-size:13px; cursor:pointer; border-left:3px solid transparent; }
+  .skills-panel { border-top:1px solid #2c2c2e; flex:0 0 auto; max-height:220px; display:flex; flex-direction:column; min-height:0; }
+  .skills-panel h3 { flex:0 0 auto; font-size:12px; padding:10px 16px 6px; color:#8e8e93; }
+  #skills-list { overflow-y:auto; padding-bottom:8px; scrollbar-width:thin; scrollbar-color:#4a4a4d transparent; }
+  #skills-list::-webkit-scrollbar { width:6px; }
+  #skills-list::-webkit-scrollbar-thumb { background:#4a4a4d; border-radius:999px; }
+  #skills-list::-webkit-scrollbar-track { background:transparent; }
+  .skill-item { padding:6px 16px; font-size:12px; line-height:1.25; cursor:pointer; border-left:3px solid transparent; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .skill-item:hover { background:#2c2c2e; border-left-color:#007aff; }
+  #skill-tooltip { display:none; position:fixed; z-index:300; max-width:360px; padding:8px 10px; background:#2c2c2e; color:#f5f5f7; border:1px solid #4a4a4d; border-radius:8px; box-shadow:0 8px 24px rgba(0,0,0,.28); font-size:12px; line-height:1.45; pointer-events:none; }
+  #skill-tooltip .tooltip-title { font-weight:600; margin-bottom:4px; color:#fff; }
+  #skill-tooltip .tooltip-muted { margin-top:4px; color:#b8b8bd; }
   
   /* 聊天区域 */
   #header { padding:16px 24px; background:#fff; border-bottom:1px solid #ddd; display:flex; align-items:center; justify-content:space-between; }
@@ -270,13 +279,14 @@
     </div>
   </div>
 
-  <div style="border-top:1px solid #2c2c2e;">
-    <h3 style="font-size:12px;padding:12px 16px 6px;color:#8e8e93;">🧩 技能</h3>
+  <div class="skills-panel">
+    <h3>🧩 技能</h3>
     <div id="skills-list">
-      <div style="padding:8px 16px;font-size:13px;color:#8e8e93;font-style:italic;">加载中...</div>
+      <div class="skill-item" style="color:#8e8e93;font-style:italic;">加载中...</div>
     </div>
   </div>
 </div>
+<div id="skill-tooltip"></div>
 
 <!-- 主区域 -->
 <div id="main">
@@ -817,9 +827,20 @@ function handleStreamEvent(data) {
           if (text) text.textContent = `完成 ✓`;
         }
       }
+      if (data.content && !currentBotMsgEl) {
+        currentBotMsgEl = document.createElement('div');
+        currentBotMsgEl.className = 'msg bot';
+        if (currentStepsEl) {
+          currentStepsEl.after(currentBotMsgEl);
+        } else {
+          container.appendChild(currentBotMsgEl);
+        }
+      }
       if (currentBotMsgEl && data.content) {
         currentBotMsgEl.innerHTML = renderMarkdown(data.content);
+        currentFinalContent = data.content;
       }
+      container.scrollTop = container.scrollHeight;
       break;
   }
 }
@@ -1401,12 +1422,33 @@ async function refreshSkills() {
         container.innerHTML = '<div class="skill-item" style="color:#8e8e93;">暂无技能</div>';
       } else {
         container.innerHTML = data.map(s => 
-          `<div class="skill-item" title="${s.description || '无描述'}">📌 ${s.name}</div>`
+          `<div class="skill-item" title="${escapeHtml(s.description || '无描述')}" data-name="${escapeHtml(s.name)}" data-description="${escapeHtml(s.description || '无描述')}" data-triggers="${escapeHtml((s.triggers || []).join('、') || '未声明')}">📌 ${escapeHtml(s.name)}</div>`
         ).join('');
       }
     }
   } catch {}
 }
+
+document.addEventListener('mousemove', (event) => {
+  const item = event.target.closest('.skill-item[data-name]');
+  const tooltip = document.getElementById('skill-tooltip');
+  if (!tooltip) return;
+  if (!item) {
+    tooltip.style.display = 'none';
+    return;
+  }
+  tooltip.innerHTML = `
+    <div class="tooltip-title">${item.dataset.name}</div>
+    <div>${item.dataset.description || '无描述'}</div>
+    <div class="tooltip-muted">触发词：${item.dataset.triggers || '未声明'}</div>
+  `;
+  tooltip.style.display = 'block';
+  const margin = 12;
+  const maxX = window.innerWidth - tooltip.offsetWidth - margin;
+  const maxY = window.innerHeight - tooltip.offsetHeight - margin;
+  tooltip.style.left = `${Math.max(margin, Math.min(event.clientX + margin, maxX))}px`;
+  tooltip.style.top = `${Math.max(margin, Math.min(event.clientY + margin, maxY))}px`;
+});
 
 // ---------- 初始化 ----------
 
