@@ -414,7 +414,10 @@ function addMessage(text, role) {
 
 function showTyping() {
   const bar = document.getElementById('loading-bar');
+  const label = bar.querySelector('.label');
+  if (label) label.textContent = 'AI 正在思考...';
   bar.classList.add('show');
+  messages.scrollTop = messages.scrollHeight;
 }
 
 function hideTyping() {
@@ -447,6 +450,7 @@ async function send() {
   isLoading = true;
   sendBtn.disabled = true;
   streamingActive = true;
+  showTyping();
   
   // 初始化步骤容器和 bot 消息
   currentStepsEl = null;
@@ -507,6 +511,18 @@ async function send() {
 
 function handleStreamEvent(data) {
   const container = document.getElementById('messages');
+
+  function ensureStepsContainer() {
+    if (currentStepsEl) return currentStepsEl;
+    currentStepsEl = document.createElement('div');
+    currentStepsEl.className = 'steps-container';
+    if (currentBotMsgEl) {
+      container.insertBefore(currentStepsEl, currentBotMsgEl);
+    } else {
+      container.appendChild(currentStepsEl);
+    }
+    return currentStepsEl;
+  }
   
   // 工具函数：创建进度条（如果有步骤容器且有步骤数）
   function updateProgress() {
@@ -538,11 +554,7 @@ function handleStreamEvent(data) {
   // 工具函数：添加分析中提示
   function showThinkingHint(text) {
     removeThinkingHint();
-    if (!currentStepsEl) {
-      currentStepsEl = document.createElement('div');
-      currentStepsEl.className = 'steps-container';
-      container.appendChild(currentStepsEl);
-    }
+    ensureStepsContainer();
     const hint = document.createElement('div');
     hint.className = 'thinking-step';
     hint.innerHTML = `<span>${text}</span><span class="dots"><span></span><span></span><span></span></span>`;
@@ -569,11 +581,7 @@ function handleStreamEvent(data) {
       hideTyping();
       removeThinkingHint();
       hasToolCalls = true;
-      if (!currentStepsEl) {
-        currentStepsEl = document.createElement('div');
-        currentStepsEl.className = 'steps-container';
-        container.appendChild(currentStepsEl);
-      }
+      ensureStepsContainer();
       updateProgress();
       const thoughtText = data.thought || '';
       const thoughtDiv = document.createElement('div');
@@ -599,11 +607,7 @@ function handleStreamEvent(data) {
       removeGeneratingBadge();
       hasToolCalls = true;
       totalSteps = data.step || totalSteps + 1;
-      if (!currentStepsEl) {
-        currentStepsEl = document.createElement('div');
-        currentStepsEl.className = 'steps-container';
-        container.appendChild(currentStepsEl);
-      }
+      ensureStepsContainer();
       updateProgress();
       
       // 折叠之前所有步骤卡片，只展开当前新卡片
