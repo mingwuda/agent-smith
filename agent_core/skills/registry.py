@@ -1,4 +1,5 @@
 """技能注册表 —— 管理所有已加载的技能"""
+from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
