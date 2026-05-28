@@ -446,6 +446,11 @@ def _get_current_user(request: Request) -> str:
     return uid or "default"
 
 
+def _require_admin(request: Request):
+    if _get_current_user(request) != "admin":
+        raise HTTPException(403, "只有 admin 用户可以访问设置")
+
+
 async def _ensure_session(uid: str, session_id: str) -> dict:
     session = session_store.get_session(uid, session_id)
     if session is None:
@@ -711,15 +716,17 @@ class SettingsRequest(BaseModel):
 
 
 @app.get("/settings")
-def get_settings():
+def get_settings(request: Request):
     """获取当前设置"""
+    _require_admin(request)
     cfg = AgentConfig.load()
     return cfg.to_api_dict()
 
 
 @app.post("/settings")
-def save_settings(req: SettingsRequest):
+def save_settings(req: SettingsRequest, request: Request):
     """保存设置并重启 Agent"""
+    _require_admin(request)
     cfg = AgentConfig.load()
     
     cfg.update_provider(

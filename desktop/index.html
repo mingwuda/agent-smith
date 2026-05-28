@@ -235,7 +235,7 @@
   </div>
   
   <div style="border-top:1px solid #2c2c2e; padding:12px 16px;">
-    <div class="stat-card" style="border:none;padding:0 0 10px;">
+    <div class="stat-card" id="provider-card" style="border:none;padding:0 0 10px;display:none;">
       <div class="label">🌐 模型服务商</div>
       <select id="quick-provider-select" title="切换模型厂商" onchange="quickSwitchProvider()" style="width:100%;margin-top:4px;padding:6px 8px;background:#2c2c2e;color:#fff;border:1px solid #3a3a3c;border-radius:6px;font-size:13px;outline:none;"></select>
     </div>
@@ -270,8 +270,8 @@
       <span id="status-text">连接中...</span>
     </div>
     <div class="right">
-      <button class="header-btn" id="memory-btn">记忆</button>
-      <button class="header-btn" id="settings-btn">⚙️ 设置</button>
+      <button class="header-btn" id="memory-btn">🧠 记忆</button>
+      <button class="header-btn" id="settings-btn" style="display:none;">⚙️ 设置</button>
       <button id="logout-btn" onclick="logout()">🚪 登出</button>
     </div>
   </div>
@@ -366,12 +366,16 @@ const sendBtn = document.getElementById('send');
 const statusDot = document.getElementById('status-dot');
 const statusText = document.getElementById('status-text');
 const quickProviderSelect = document.getElementById('quick-provider-select');
+const settingsBtn = document.getElementById('settings-btn');
+const providerCard = document.getElementById('provider-card');
 
 let threadId = 'default';
 let isLoading = false;
 let sessionsCache = [];
 let currentSessionId = null;
 let settingsData = null;
+let currentUser = null;
+let isAdmin = false;
 
 // 配置 Markdown 渲染（开启 XSS 过滤）
 marked.setOptions({
@@ -853,6 +857,20 @@ function providerLabel(provider, id) {
   return `${name} · ${model}`;
 }
 
+async function loadCurrentUser() {
+  try {
+    const res = await fetch('/users/me');
+    if (!res.ok) return null;
+    currentUser = await res.json();
+  } catch {
+    currentUser = null;
+  }
+  isAdmin = currentUser && currentUser.id === 'admin';
+  settingsBtn.style.display = isAdmin ? '' : 'none';
+  providerCard.style.display = isAdmin ? '' : 'none';
+  return currentUser;
+}
+
 function populateProviderOptions(select, data, includeMissing = false) {
   select.innerHTML = '';
   Object.entries(data.providers || {}).forEach(([id, provider]) => {
@@ -877,6 +895,7 @@ function refreshQuickProviderSelect(data) {
 }
 
 async function loadSettingsForSwitcher() {
+  if (!isAdmin) return null;
   try {
     const res = await fetch('/settings');
     if (!res.ok) return null;
@@ -936,6 +955,7 @@ function addCustomProvider() {
 }
 
 function openSettings() {
+  if (!isAdmin) return;
   const modal = document.getElementById('settings-modal');
   modal.classList.add('active');
   document.getElementById('save-feedback').textContent = '';
@@ -956,6 +976,7 @@ function closeSettings() {
 }
 
 async function saveSettings() {
+  if (!isAdmin) return;
   const btn = document.getElementById('save-settings-btn');
   const feedback = document.getElementById('save-feedback');
   btn.disabled = true;
@@ -1001,6 +1022,7 @@ async function saveSettings() {
 }
 
 async function quickSwitchProvider() {
+  if (!isAdmin) return;
   const providerId = quickProviderSelect.value;
   if (!providerId || !settingsData || !settingsData.providers) return;
   const provider = settingsData.providers[providerId];
@@ -1253,6 +1275,7 @@ setInterval(loadSessions, 10000);
 
 (async () => {
   const ok = await checkHealth();
+  await loadCurrentUser();
   await loadSettingsForSwitcher();
   if (ok) {
     // 加载会话列表
