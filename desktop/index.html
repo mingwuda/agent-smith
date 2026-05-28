@@ -38,8 +38,8 @@
   #header .right { display:flex; align-items:center; gap:8px; }
   #quick-provider-select { min-width:220px; max-width:320px; padding:6px 10px; background:#fff; border:1px solid #ddd; border-radius:8px; font-size:13px; outline:none; }
   #quick-provider-select:focus { border-color:#007aff; }
-  #settings-btn { padding:6px 12px; background:#f0f0f0; border:1px solid #ddd; border-radius:8px; font-size:13px; cursor:pointer; transition:all .2s; }
-  #settings-btn:hover { background:#e0e0e0; }
+  .header-btn { padding:6px 12px; background:#f0f0f0; border:1px solid #ddd; border-radius:8px; font-size:13px; cursor:pointer; transition:all .2s; }
+  .header-btn:hover { background:#e0e0e0; }
   #logout-btn { padding:6px 12px; background:transparent; border:1px solid #ddd; border-radius:8px; font-size:13px; cursor:pointer; transition:all .2s; color:#8e8e93; }
   #logout-btn:hover { background:#fbe9e7; border-color:#ff453a; color:#ff453a; }
   
@@ -139,16 +139,34 @@
   .provider-row button { padding:0 12px; border:1px solid #ddd; border-radius:8px; background:#f0f0f0; cursor:pointer; white-space:nowrap; }
   .provider-row button:hover { background:#e0e0e0; }
   .hidden { display:none; }
+  .modal .btn-primary,
+  .modal .btn-secondary {
+    border:none;
+    border-radius:8px;
+    cursor:pointer;
+    font-size:14px;
+    padding:8px 16px;
+    white-space:nowrap;
+    transition:background .15s, color .15s;
+  }
+  .modal .btn-primary { background:#007aff; color:#fff; }
+  .modal .btn-primary:hover { background:#0056cc; }
+  .modal .btn-primary:disabled { background:#999; cursor:not-allowed; }
+  .modal .btn-secondary { background:#f0f0f0; color:#333; }
+  .modal .btn-secondary:hover { background:#ddd; }
   .modal-actions { display:flex; gap:8px; justify-content:flex-end; margin-top:20px; }
-  .modal-actions button { padding:8px 20px; border-radius:8px; font-size:14px; border:none; cursor:pointer; }
-  .modal-actions .btn-primary { background:#007aff; color:#fff; }
-  .modal-actions .btn-primary:hover { background:#0056cc; }
-  .modal-actions .btn-secondary { background:#f0f0f0; color:#333; }
-  .modal-actions .btn-secondary:hover { background:#ddd; }
-  .modal-actions .btn-primary:disabled { background:#999; cursor:not-allowed; }
   .save-feedback { font-size:13px; margin-top:8px; padding:8px; border-radius:6px; text-align:center; }
   .save-feedback.ok { background:#e8f5e9; color:#2e7d32; }
   .save-feedback.err { background:#fbe9e7; color:#c62828; }
+  .memory-toolbar { display:flex; gap:8px; margin-bottom:12px; }
+  .memory-toolbar input { flex:1; padding:8px 10px; border:1px solid #ddd; border-radius:8px; font-size:13px; }
+  .memory-toolbar button { min-width:64px; }
+  .memory-list { max-height:320px; overflow-y:auto; border:1px solid #eee; border-radius:8px; }
+  .memory-item { padding:10px 12px; border-bottom:1px solid #eee; }
+  .memory-item:last-child { border-bottom:none; }
+  .memory-key { display:flex; align-items:center; justify-content:space-between; gap:8px; font-size:13px; font-weight:600; color:#1d1d1f; }
+  .memory-value { margin-top:6px; font-size:12px; color:#555; white-space:pre-wrap; word-break:break-word; }
+  .memory-delete { background:transparent; border:none; color:#ff453a; cursor:pointer; font-size:12px; }
 
   /* 会话列表 */
   #session-header { display:flex; align-items:center; justify-content:space-between; padding:12px 16px 4px; }
@@ -252,7 +270,8 @@
       <span id="status-text">连接中...</span>
     </div>
     <div class="right">
-      <button id="settings-btn">⚙️ 设置</button>
+      <button class="header-btn" id="memory-btn">记忆</button>
+      <button class="header-btn" id="settings-btn">⚙️ 设置</button>
       <button id="logout-btn" onclick="logout()">🚪 登出</button>
     </div>
   </div>
@@ -263,6 +282,34 @@
   <div id="input-area">
     <input id="input" placeholder="说点什么..." autocomplete="off" />
     <button id="send">发送</button>
+  </div>
+</div>
+
+<!-- 记忆管理弹窗 -->
+<div class="modal-overlay" id="memory-modal">
+  <div class="modal">
+    <h2>长期记忆</h2>
+    <div class="form-group">
+      <label for="m-key">记忆 Key</label>
+      <input id="m-key" placeholder="例如 remote.deploy.host" />
+    </div>
+    <div class="form-group">
+      <label for="m-value">记忆内容</label>
+      <input id="m-value" placeholder="只保存长期有用、非敏感的信息" />
+      <div class="hint">不要保存 API Key、密码、Cookie、Token 等敏感信息。</div>
+    </div>
+    <div class="memory-toolbar">
+      <input id="m-search" placeholder="搜索记忆" />
+      <button class="btn-secondary" type="button" onclick="loadMemories()">搜索</button>
+      <button class="btn-primary" type="button" onclick="saveMemory()">保存</button>
+    </div>
+    <div class="memory-list" id="memory-list">
+      <div style="padding:12px;color:#8e8e93;font-size:13px;">加载中...</div>
+    </div>
+    <div class="save-feedback" id="memory-feedback"></div>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="closeMemory()">关闭</button>
+    </div>
   </div>
 </div>
 
@@ -986,13 +1033,110 @@ async function quickSwitchProvider() {
   }
 }
 
+// ---------- 记忆管理 ----------
+
+function openMemory() {
+  document.getElementById('memory-modal').classList.add('active');
+  document.getElementById('memory-feedback').textContent = '';
+  document.getElementById('memory-feedback').className = 'save-feedback';
+  loadMemories();
+}
+
+function closeMemory() {
+  document.getElementById('memory-modal').classList.remove('active');
+}
+
+function renderMemories(items) {
+  const list = document.getElementById('memory-list');
+  if (!items || items.length === 0) {
+    list.innerHTML = '<div style="padding:12px;color:#8e8e93;font-size:13px;">暂无长期记忆</div>';
+    return;
+  }
+  list.innerHTML = items.map(item => {
+    const key = escapeHtml(item.key || '');
+    const encodedKey = encodeURIComponent(item.key || '');
+    const value = escapeHtml(typeof item.value === 'string' ? item.value : JSON.stringify(item.value, null, 2));
+    return `<div class="memory-item">
+      <div class="memory-key">
+        <span>${key}</span>
+        <button class="memory-delete" onclick="deleteMemory(decodeURIComponent('${encodedKey}'))">删除</button>
+      </div>
+      <div class="memory-value">${value}</div>
+    </div>`;
+  }).join('');
+}
+
+async function loadMemories() {
+  const q = document.getElementById('m-search').value.trim();
+  try {
+    const res = await fetch(`/memories${q ? '?q=' + encodeURIComponent(q) : ''}`);
+    if (!res.ok) return;
+    const data = await res.json();
+    let items = data.items || [];
+    if (q) {
+      const lower = q.toLowerCase();
+      items = items.filter(item => {
+        const value = typeof item.value === 'string' ? item.value : JSON.stringify(item.value);
+        return (item.key || '').toLowerCase().includes(lower) || value.toLowerCase().includes(lower);
+      });
+    }
+    renderMemories(items);
+  } catch {}
+}
+
+async function saveMemory() {
+  const keyEl = document.getElementById('m-key');
+  const valueEl = document.getElementById('m-value');
+  const feedback = document.getElementById('memory-feedback');
+  const key = keyEl.value.trim();
+  const value = valueEl.value.trim();
+  if (!key || !value) {
+    feedback.textContent = '请填写 key 和内容';
+    feedback.className = 'save-feedback err';
+    return;
+  }
+  try {
+    const res = await fetch('/memories', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key, value }),
+    });
+    const data = await res.json();
+    if (res.ok) {
+      feedback.textContent = data.message || '已保存';
+      feedback.className = 'save-feedback ok';
+      keyEl.value = '';
+      valueEl.value = '';
+      await loadMemories();
+    } else {
+      feedback.textContent = data.detail || '保存失败';
+      feedback.className = 'save-feedback err';
+    }
+  } catch {
+    feedback.textContent = '网络错误，保存失败';
+    feedback.className = 'save-feedback err';
+  }
+}
+
+async function deleteMemory(key) {
+  if (!confirm(`确定删除记忆 ${key}？`)) return;
+  try {
+    await fetch(`/memories/${encodeURIComponent(key)}`, { method: 'DELETE' });
+    await loadMemories();
+  } catch {}
+}
+
 // 点击遮罩关闭
 document.getElementById('settings-modal').addEventListener('click', function(e) {
   if (e.target === this) closeSettings();
 });
+document.getElementById('memory-modal').addEventListener('click', function(e) {
+  if (e.target === this) closeMemory();
+});
 
 // 设置按钮
 document.getElementById('settings-btn').onclick = openSettings;
+document.getElementById('memory-btn').onclick = openMemory;
 // 新建会话按钮
 document.getElementById('new-session-btn').onclick = newSession;
 

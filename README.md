@@ -15,10 +15,11 @@
 | 💻 **系统信息** | 获取 OS、Python 版本、磁盘空间等信息 |
 | 🧩 **Skills 插件** | 基于 `SKILL.md` 的热加载技能系统，支持触发词匹配 |
 | 📊 **用量追踪** | 区分模型 Token 与工具调用次数，按会话/日/Provider/模型统计 |
-| 💬 **会话管理** | 多会话持久化到 SQLite，切换/删除/自动命名，兼容旧 JSON 会话迁移 |
+| 💬 **会话管理** | 多会话按用户持久化到 SQLite，切换/删除/自动命名 |
 | ⚙️ **设置持久化** | API Key、模型、地址保存在配置文件，重启不丢失 |
-| 🔐 **登录保护** | 内置登录页，未登录无法访问操作页面和 API |
-| 🖥 **桌面 UI** | Markdown 渲染聊天界面，暗色侧边栏，实时状态面板 |
+| 🔐 **登录保护** | 内置多用户登录页，未登录无法访问操作页面和 API，支持短期 URL Token 免密登录 |
+| 🧠 **长期记忆** | 按用户隔离保存长期偏好、项目事实和常用环境信息，可在页面中管理 |
+| 🖥 **桌面 UI** | Markdown 渲染聊天界面，暗色侧边栏，实时状态面板，支持流式回复与工具步骤展示 |
 
 ---
 
@@ -45,11 +46,17 @@ pip install -r requirements.txt
 ### 3. 启动
 
 ```bash
-cd agent_core
-python main.py
+./start.sh
 ```
 
 浏览器打开 **http://127.0.0.1:8899/** 即可使用。
+
+也可以手动从后端入口启动：
+
+```bash
+cd agent_core
+python main.py
+```
 
 Windows 也可以在项目根目录直接双击或执行：
 
@@ -88,6 +95,17 @@ export DESKTOP_AGENT_AUTH_SECRET='replace-with-a-random-secret'
 
 如果未显式设置密码，服务会在 `~/.desktop_agent/auth.json` 中自动生成一组本机登录凭据。
 
+启动过一次服务后，可以生成短期免密登录链接，适合本机或可信内网临时访问：
+
+```bash
+python generate_login_url.py --host 127.0.0.1 --port 8899 --expires 300 --user admin
+```
+
+可选参数：
+
+- `--qr`：在终端输出二维码（需要安装 `qrcode`）
+- `--copy`：复制链接到剪贴板（需要安装 `pyperclip`）
+
 ### 4. 配置 API Key
 
 打开页面后，点击右上角 **⚙️ 设置**，选择模型厂商并填写对应配置：
@@ -120,6 +138,8 @@ export DESKTOP_AGENT_AUTH_SECRET='replace-with-a-random-secret'
 > 「打开这个链接并总结正文：https://example.com/article」
 >
 > 「帮我写一份日报」
+>
+> 「记住：我希望回复默认使用中文」
 
 ---
 
@@ -221,24 +241,27 @@ desktop-agent/
 │   ├── agent.py                   # DesktopAgent 核心（LangGraph）
 │   ├── config.py                  # 配置管理（文件 + 环境变量）
 │   ├── session_store.py           # 会话 SQLite 存储 + 旧 JSON 自动迁移
+│   ├── memory/
+│   │   └── local_memory.py        # 本地长期记忆存储
 │   ├── tools/
 │   │   ├── file_tools.py          # 文件操作（读写/列目录/搜索/删除）
 │   │   ├── code_tools.py          # Python 代码执行
 │   │   ├── system_tools.py        # 系统信息获取
+│   │   ├── memory_tools.py        # 长期记忆工具（显式记忆/查询/删除）
 │   │   └── web_tools.py           # 网页搜索与正文抓取
 │   ├── skills/
 │   │   ├── loader.py              # SKILL.md 解析器
 │   │   └── registry.py            # 技能注册表（热加载/触发词匹配）
 │   ├── monitoring/
 │   │   └── usage_tracker.py       # Token 用量追踪
-│   ├── memory/
-│   │   └── local_memory.py        # 本地记忆存储
 │   └── samples/daily-report/
 │       └── SKILL.md               # 示例技能：日报生成
 ├── desktop/                       # 前端 UI
 │   ├── index.html                 # 单页聊天应用
 │   └── package.json
 ├── start.sh                       # 启动脚本
+├── start.cmd                      # Windows 启动脚本
+├── generate_login_url.py          # 生成短期 URL Token 登录链接
 ├── requirements.txt               # Python 依赖
 └── .gitignore
 ```
@@ -247,7 +270,7 @@ desktop-agent/
 
 ## API 文档
 
-启动后访问 **http://127.0.0.1:8899/docs** 可交互式测试所有接口。启用登录保护后，除 `/login`、`/auth/login`、`/auth/logout`、`/health` 外，其它页面和 API 都需要先登录。
+启动后访问 **http://127.0.0.1:8899/docs** 可交互式测试所有接口。启用登录保护后，除 `/login`、`/auth/login`、`/auth/logout`、`/auth/token-login`、`/health` 外，其它页面和 API 都需要先登录。
 
 | 端点 | 方法 | 说明 |
 |------|------|------|
@@ -255,7 +278,9 @@ desktop-agent/
 | `/login` | GET | 登录页 |
 | `/auth/login` | POST | 登录并写入 HttpOnly Cookie |
 | `/auth/logout` | POST | 退出登录 |
+| `/auth/token-login` | GET | 使用短期 URL Token 登录 |
 | `/run` | POST | 发送消息给 Agent |
+| `/run/stream` | POST | SSE 流式发送消息给 Agent，返回 token、思考、工具调用和完成事件 |
 | `/sessions` | GET | 列出所有会话 |
 | `/sessions` | POST | 创建新会话 |
 | `/sessions/{id}` | GET | 获取会话消息历史 |
@@ -268,6 +293,13 @@ desktop-agent/
 | `/usage` | GET | 今日用量统计 |
 | `/usage/session` | GET | 当前会话用量 |
 | `/usage/history` | GET | 历史用量（支持 `?days=7`） |
+| `/memories` | GET | 列出或搜索长期记忆 |
+| `/memories` | POST | 保存长期记忆 |
+| `/memories/{key}` | DELETE | 删除长期记忆 |
+| `/users` | GET | 列出用户 |
+| `/users` | POST | 创建用户 |
+| `/users/{user_id}` | DELETE | 删除用户及其数据 |
+| `/users/me` | GET | 获取当前登录用户 |
 | `/health` | GET | 健康检查 |
 
 ---
@@ -312,9 +344,13 @@ file_write
 
 登录凭据文件路径：`~/.desktop_agent/auth.json`
 
-会话数据库路径：`~/.desktop_agent/sessions.sqlite3`
+用户数据根目录：`~/.desktop_agent/users/{user_id}/`
 
-旧版本的 `~/.desktop_agent/sessions/*.json` 会在首次访问会话存储时自动迁移到 SQLite，原 JSON 文件会保留作为备份。
+会话数据库路径：`~/.desktop_agent/users/{user_id}/sessions/sessions.sqlite3`
+
+用量数据库路径：`~/.desktop_agent/users/{user_id}/usage/usage.sqlite3`
+
+长期记忆文件路径：`~/.desktop_agent/users/{user_id}/memory/*.json`
 
 支持通过环境变量覆盖：
 
@@ -334,9 +370,19 @@ file_write
 | `DESKTOP_AGENT_AUTH_SECRET` | Cookie 签名密钥 | 自动生成 |
 | `DESKTOP_AGENT_AUTH_COOKIE_SECURE` | Cookie 是否仅 HTTPS 发送 | `0` |
 
+### URL Token 登录
+
+`generate_login_url.py` 会读取 `~/.desktop_agent/auth.json` 中的签名密钥，生成默认 5 分钟有效的登录链接。多用户场景可以用 `--user` 指定用户：
+
+```bash
+python generate_login_url.py --host 192.168.1.100 --port 8899 --expires 300 --user test
+```
+
+服务端验证通过后会写入正常的 7 天会话 Cookie，并跳转到主页。Token 过期或签名无效时会提示重新登录。公网部署时仍建议优先使用固定密码和 HTTPS，URL Token 只用于可信场景下的临时访问。
+
 ### 用量统计说明
 
-用量记录保存在 `~/.desktop_agent/sessions.sqlite3` 的 `usage_records` 表中。旧版本的 `~/.desktop_agent/usage/YYYY-MM-DD.jsonl` 会在首次启动后自动迁移到 SQLite，原文件会保留作为备份。
+用量记录按用户保存在 `~/.desktop_agent/users/{user_id}/usage/usage.sqlite3` 的 `usage_records` 表中。
 
 - `model_calls`：模型调用次数
 - `tool_calls`：工具调用次数
@@ -346,6 +392,18 @@ file_write
 - `tool_breakdown`：按工具名统计调用次数
 
 工具返回内容不会计入模型 Token。
+
+### 长期记忆说明
+
+长期记忆用于保存跨会话、跨重启仍有价值的信息，例如：
+
+- 用户偏好：默认语言、回答风格
+- 项目事实：部署目录、端口、常用服务器
+- 长期约定：公网部署必须开启登录保护
+
+当前采用显式记忆策略：只有用户明确要求“记住/以后记得/保存偏好”时，Agent 才会调用 `remember` 工具写入当前登录用户的长期记忆。不要保存 API Key、密码、Cookie、Token 等敏感信息。
+
+页面顶部 **记忆** 按钮可打开记忆管理面板，支持新增、搜索和删除。
 
 ---
 

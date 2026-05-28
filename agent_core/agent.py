@@ -8,6 +8,7 @@ from langgraph.prebuilt import create_react_agent
 from langgraph.checkpoint.memory import MemorySaver
 
 from config import AgentConfig
+from memory.local_memory import set_current_user
 from monitoring.usage_tracker import get_tracker, UsageTracker
 from skills.registry import get_registry, SkillRegistry
 
@@ -167,6 +168,7 @@ class DesktopAgent:
     def set_user(self, user_id: str):
         """切换当前用户"""
         self._user_id = user_id
+        set_current_user(user_id)
         self._tracker = get_tracker(user_id)
 
     @property
@@ -221,9 +223,12 @@ class DesktopAgent:
 
     def _run_config(self) -> dict:
         return {
-            "configurable": {"thread_id": self._thread_id},
+            "configurable": {"thread_id": self._thread_key()},
             "recursion_limit": max(1, int(self.config.recursion_limit or 60)),
         }
+
+    def _thread_key(self) -> str:
+        return f"{self._user_id}:{self._thread_id}"
     
     def _rebuild_graph(self):
         self._graph = create_react_agent(
@@ -237,7 +242,8 @@ class DesktopAgent:
         """处理用户消息，返回 (最终回复, 中间步骤列表)"""
         config = self._run_config()
         input_messages = []
-        if self._thread_id not in self._hydrated_threads:
+        thread_key = self._thread_key()
+        if thread_key not in self._hydrated_threads:
             input_messages = session_messages_to_langchain(history or [])
         input_messages.append(HumanMessage(content=message))
         
@@ -286,13 +292,14 @@ class DesktopAgent:
                 return f"❌ {_recursion_limit_message(config['recursion_limit'])}", []
             return f"❌ 执行出错: {type(e).__name__}: {e}", []
         finally:
-            self._hydrated_threads.add(self._thread_id)
+            self._hydrated_threads.add(thread_key)
     
     async def stream_run(self, message: str, history: Optional[list[dict]] = None) -> AsyncGenerator[str, None]:
         """流式处理用户消息，yield SSE 格式事件"""
         run_config = self._run_config()
         input_messages = []
-        if self._thread_id not in self._hydrated_threads:
+        thread_key = self._thread_key()
+        if thread_key not in self._hydrated_threads:
             input_messages = session_messages_to_langchain(history or [])
         input_messages.append(HumanMessage(content=message))
         input_data = {"messages": input_messages}
@@ -400,7 +407,7 @@ class DesktopAgent:
                 yield _sse({"type": "error", "content": final_buffer})
         
         finally:
-            self._hydrated_threads.add(self._thread_id)
+            self._hydrated_threads.add(thread_key)
             if not usage_recorded:
                 self.tracker.record_model_call(
                     provider=self.config.active_provider,

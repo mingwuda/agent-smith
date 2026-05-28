@@ -28,9 +28,10 @@ def _app_base_dir() -> Path:
 
 from config import AgentConfig
 from agent import DesktopAgent
-from tools import file_tools, code_tools, system_tools, web_tools
+from tools import file_tools, code_tools, system_tools, web_tools, memory_tools
 from monitoring.usage_tracker import get_tracker
 from skills.registry import get_registry
+from memory.local_memory import get_memory
 import session_store
 import user_manager
 
@@ -39,6 +40,9 @@ import user_manager
 AUTH_COOKIE_NAME = "desktop_agent_session"
 AUTH_SESSION_SECONDS = 60 * 60 * 24 * 7
 AUTH_FILE = Path.home() / ".desktop_agent" / "auth.json"
+
+# URL token 登录：token 有效期（默认 5 分钟）
+LOGIN_TOKEN_EXPIRY_SECONDS = 5 * 60
 
 
 def _load_auth_config() -> dict:
@@ -122,7 +126,7 @@ def _is_authenticated(request: Request) -> bool:
 
 
 def _auth_exempt_path(path: str) -> bool:
-    return path in {"/login", "/auth/login", "/auth/logout", "/health"} or path.startswith("/favicon")
+    return path in {"/login", "/auth/login", "/auth/logout", "/auth/token-login", "/health"} or path.startswith("/favicon")
 
 
 def _wants_html(request: Request) -> bool:
@@ -195,6 +199,7 @@ def init_agent():
     all_tools.extend(code_tools.TOOLS)
     all_tools.extend(system_tools.TOOLS)
     all_tools.extend(web_tools.TOOLS)
+    all_tools.extend(memory_tools.TOOLS)
     
     # 初始化 Agent
     agent = DesktopAgent(config)
@@ -265,6 +270,11 @@ class ReloadResponse(BaseModel):
 class LoginRequest(BaseModel):
     username: str
     password: str
+
+
+class MemoryRequest(BaseModel):
+    key: str
+    value: Any
 
 
 # ---------- 桌面 UI 路由 ----------
@@ -364,6 +374,58 @@ def auth_login(req: LoginRequest, response: Response):
 def auth_logout(response: Response):
     response.delete_cookie(AUTH_COOKIE_NAME)
     return {"status": "ok"}
+
+
+# ---------- URL Token 免密登录 ----------
+
+LOGIN_TOKEN_ERROR_HTML = """<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>登录失败 - Desktop Agent</title>
+<style>
+* { box-sizing:border-box; }
+body { margin:0; min-height:100vh; display:grid; place-items:center; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:#f5f5f7; color:#1d1d1f; }
+.card { width:min(380px, calc(100vw - 32px)); background:#fff; border:1px solid #e5e5ea; border-radius:10px; padding:28px; text-align:center; box-shadow:0 18px 50px rgba(0,0,0,.08); }
+h1 { font-size:22px; margin:0 0 8px; }
+p { color:#6e6e73; font-size:14px; margin:0 0 20px; }
+a { display:inline-block; padding:10px 28px; border-radius:8px; background:#007aff; color:#fff; text-decoration:none; font-size:14px; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>登录链接无效或已过期</h1>
+  <p>请重新获取登录链接，或使用密码登录</p>
+  <a href="/login">前往密码登录</a>
+</div>
+</body>
+</html>"""
+
+
+@app.get("/auth/token-login", include_in_schema=False)
+def auth_token_login(token: str = "", response: Response = None):
+    """URL token 免密登录：验证 token，设置会话 cookie，跳转至主页"""
+    if not token:
+        return HTMLResponse(LOGIN_TOKEN_ERROR_HTML, status_code=400)
+
+    if not _verify_session(token):
+        return HTMLResponse(LOGIN_TOKEN_ERROR_HTML, status_code=401)
+
+    # token 写入的部分就是 username:expires_at:signature，直接从中提取用户名
+    username = token.split(":")[0]
+    expires_at = int(time.time()) + AUTH_SESSION_SECONDS
+    response.set_cookie(
+        AUTH_COOKIE_NAME,
+        _sign_session(username, expires_at),
+        max_age=AUTH_SESSION_SECONDS,
+        httponly=True,
+        samesite="lax",
+        secure=os.getenv("DESKTOP_AGENT_AUTH_COOKIE_SECURE", "0") == "1",
+    )
+    response.status_code = 302
+    response.headers["Location"] = "/"
+    return None
 
 
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
@@ -602,6 +664,38 @@ def get_usage_history(days: int = 7, request: Request = None):
     """获取最近 N 天的使用历史"""
     tracker = get_tracker(_get_current_user(request) if request else "default")
     return tracker.get_history(days=days)
+
+
+# ---------- 长期记忆路由 ----------
+
+@app.get("/memories")
+def list_memories(request: Request, q: str = ""):
+    """列出或搜索当前用户的长期记忆"""
+    uid = _get_current_user(request)
+    memory = get_memory(uid)
+    if q:
+        return {"items": memory.list_items(), "query": q, "result": memory.search(q)}
+    return {"items": memory.list_items()}
+
+
+@app.post("/memories")
+def save_memory(req: MemoryRequest, request: Request):
+    """为当前用户保存一条长期记忆"""
+    if not req.key.strip():
+        raise HTTPException(400, "记忆 key 不能为空")
+    uid = _get_current_user(request)
+    memory = get_memory(uid)
+    memory.set(req.key.strip(), req.value)
+    return {"status": "ok", "message": f"已保存记忆 {req.key.strip()}"}
+
+
+@app.delete("/memories/{key}")
+def delete_memory(key: str, request: Request):
+    """删除当前用户的一条长期记忆"""
+    uid = _get_current_user(request)
+    memory = get_memory(uid)
+    memory.delete(key)
+    return {"status": "ok", "message": f"已删除记忆 {key}"}
 
 
 # ---------- 设置 / 配置路由 ----------

@@ -17,6 +17,7 @@ from contextlib import contextmanager
 DATA_DIR = Path.home() / ".desktop_agent"
 OLD_DB = DATA_DIR / "sessions.sqlite3"
 OLD_USAGE_DIR = DATA_DIR / "usage"
+OLD_MEMORY_DIR = DATA_DIR / "memory"
 
 
 def user_session_db(user_id: str) -> Path:
@@ -25,6 +26,10 @@ def user_session_db(user_id: str) -> Path:
 
 def user_usage_db(user_id: str) -> Path:
     return DATA_DIR / "users" / user_id / "usage" / "usage.sqlite3"
+
+
+def user_memory_dir(user_id: str) -> Path:
+    return DATA_DIR / "users" / user_id / "memory"
 
 
 @contextmanager
@@ -216,6 +221,26 @@ def migrate_usage(user_id: str) -> int:
     return migrated
 
 
+def migrate_memory(user_id: str) -> int:
+    """迁移旧版全局长期记忆文件，返回迁移条数"""
+    if not OLD_MEMORY_DIR.exists():
+        print(f"  ⚠️  未找到旧记忆目录: {OLD_MEMORY_DIR}")
+        return 0
+
+    dest = user_memory_dir(user_id)
+    dest.mkdir(parents=True, exist_ok=True)
+    migrated = 0
+    for src in sorted(OLD_MEMORY_DIR.glob("*.json")):
+        target = dest / src.name
+        if target.exists():
+            print(f"  ⏭️  跳过已存在的记忆: {src.name}")
+            continue
+        target.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+        migrated += 1
+        print(f"  ✅ 迁移记忆: {src.name}")
+    return migrated
+
+
 def main():
     if len(sys.argv) < 2:
         print("用法: python3 migrate_legacy_data.py <user_id>")
@@ -230,6 +255,9 @@ def main():
 
     usage = migrate_usage(user_id)
     print(f"📊 用量迁移完成: {usage} 条记录\n")
+
+    memory = migrate_memory(user_id)
+    print(f"🧠 记忆迁移完成: {memory} 条\n")
 
     print("✅ 迁移完成！重启服务后即可查看历史数据。")
 

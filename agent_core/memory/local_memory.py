@@ -1,15 +1,22 @@
 """本地记忆模块 —— 简单的键值存储"""
+from contextvars import ContextVar
 import json
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
+
+import user_manager
+
+
+LEGACY_MEMORY_DIR = Path.home() / ".desktop_agent" / "memory"
+_current_user: ContextVar[str] = ContextVar("memory_current_user", default="default")
 
 
 class LocalMemory:
     """基于文件的键值记忆存储"""
     
     def __init__(self, data_dir: Optional[Path] = None):
-        self.data_dir = data_dir or Path.home() / ".desktop_agent" / "memory"
+        self.data_dir = data_dir or user_manager.memory_dir("default")
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self._cache: dict[str, Any] = {}
         self._load_all()
@@ -47,6 +54,17 @@ class LocalMemory:
     def list_keys(self) -> list[str]:
         """列出所有记忆键名"""
         return sorted(self._cache.keys())
+
+    def list_items(self) -> list[dict]:
+        """列出所有记忆条目"""
+        return [
+            {
+                "key": key,
+                "value": self._cache[key],
+                "summary": self._summarize(self._cache[key]),
+            }
+            for key in self.list_keys()
+        ]
     
     def search(self, query: str) -> str:
         """按关键字搜索记忆内容"""
@@ -83,11 +101,43 @@ class LocalMemory:
         return s[:max_len] + ("..." if len(s) > max_len else "")
 
 
-# 全局单例
-_memory: Optional[LocalMemory] = None
+def set_current_user(user_id: str):
+    """设置当前上下文中的记忆用户。供 Agent 工具调用时使用。"""
+    _current_user.set(user_id or "default")
 
-def get_memory() -> LocalMemory:
-    global _memory
-    if _memory is None:
-        _memory = LocalMemory()
-    return _memory
+
+def get_current_user() -> str:
+    return _current_user.get() or "default"
+
+
+# 每个用户一个记忆实例，避免跨用户共享缓存。
+_memories: dict[str, LocalMemory] = {}
+
+
+def get_memory(user_id: Optional[str] = None) -> LocalMemory:
+    uid = user_id or get_current_user()
+    if uid not in _memories:
+        data_dir = user_manager.memory_dir(uid)
+        _migrate_legacy_memory(data_dir)
+        _memories[uid] = LocalMemory(data_dir)
+    return _memories[uid]
+
+
+def _migrate_legacy_memory(target_dir: Path):
+    """Copy old single-user memory files into the current user's memory once."""
+    marker = target_dir / ".legacy_migrated"
+    if marker.exists() or not LEGACY_MEMORY_DIR.exists():
+        return
+    target_dir.mkdir(parents=True, exist_ok=True)
+    for legacy_file in LEGACY_MEMORY_DIR.glob("*.json"):
+        target = target_dir / legacy_file.name
+        if target.exists():
+            continue
+        try:
+            target.write_text(legacy_file.read_text(encoding="utf-8"), encoding="utf-8")
+        except OSError:
+            pass
+    try:
+        marker.write_text("ok", encoding="utf-8")
+    except OSError:
+        pass

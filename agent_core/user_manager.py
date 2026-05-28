@@ -99,6 +99,12 @@ def usage_dir(user_id: str) -> Path:
     return path
 
 
+def memory_dir(user_id: str) -> Path:
+    path = USERS_DIR / user_id / "memory"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def user_workspace(user_id: str) -> str:
     ws = WORKSPACE_BASE / user_id
     ws.mkdir(parents=True, exist_ok=True)
