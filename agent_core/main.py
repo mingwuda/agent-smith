@@ -292,7 +292,7 @@ LOGIN_HTML = """<!DOCTYPE html>
 * { box-sizing:border-box; }
 html, body { filter:none !important; opacity:1 !important; }
 body { margin:0; min-height:100vh; display:grid; place-items:center; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:#f5f5f7 !important; color:#1d1d1f; }
-.login { position:relative; z-index:1; width:min(380px, calc(100vw - 32px)); background:#fff; border:1px solid #e5e5ea; border-radius:10px; padding:28px; box-shadow:0 18px 50px rgba(0,0,0,.08); }
+.login { position:relative; z-index:2147483647; width:min(380px, calc(100vw - 32px)); background:#fff; border:1px solid #e5e5ea; border-radius:10px; padding:28px; box-shadow:0 18px 50px rgba(0,0,0,.08); }
 h1 { margin:0 0 6px; font-size:24px; }
 p { margin:0 0 22px; color:#6e6e73; font-size:14px; }
 label { display:block; margin:14px 0 6px; font-size:13px; color:#515154; }
@@ -321,6 +321,14 @@ function clearOverlays() {
   document.body.style.filter = 'none';
   document.body.style.opacity = '1';
   document.querySelectorAll('.modal-overlay, #sidebar-overlay, .overlay, .backdrop').forEach(el => el.remove());
+  Array.from(document.body.children).forEach(el => {
+    if (el.classList.contains('login')) return;
+    const style = window.getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    const coversViewport = rect.width >= window.innerWidth * 0.9 && rect.height >= window.innerHeight * 0.9;
+    const overlaysPage = ['fixed', 'absolute'].includes(style.position) && coversViewport;
+    if (overlaysPage) el.remove();
+  });
 }
 clearOverlays();
 window.addEventListener('pageshow', clearOverlays);
