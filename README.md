@@ -13,13 +13,13 @@
 | 🐍 **代码执行** | 沙箱执行 Python 代码，适合数据分析与脚本测试 |
 | 🌐 **网页搜索** | 使用 `web_search` 搜索网页，使用 `web_fetch` 抓取网页正文 |
 | 💻 **系统信息** | 获取 OS、Python 版本、磁盘空间等信息 |
-| 🧩 **Skills 插件** | 基于 `SKILL.md` 的热加载技能系统，支持触发词匹配 |
+| 🧩 **Skills 插件** | 基于 `SKILL.md` 的热加载技能系统，支持 YAML frontmatter、触发词匹配和项目内 `.opencode/skills` |
 | 📊 **用量追踪** | 区分模型 Token 与工具调用次数，按会话/日/Provider/模型统计 |
 | 💬 **会话管理** | 多会话按用户持久化到 SQLite，切换/删除/自动命名 |
 | ⚙️ **设置持久化** | API Key、模型、地址保存在配置文件，重启不丢失 |
 | 🔐 **登录保护** | 内置多用户登录页，未登录无法访问操作页面和 API，支持短期 URL Token 免密登录 |
 | 🧠 **长期记忆** | 按用户隔离保存长期偏好、项目事实和常用环境信息，可在页面中管理 |
-| 🖥 **桌面 UI** | Markdown 渲染聊天界面，暗色侧边栏，实时状态面板，支持流式回复与工具步骤展示 |
+| 🖥 **桌面 UI** | Markdown 渲染聊天界面，暗色侧边栏，实时状态面板，支持流式回复、工具步骤展示、技能列表滚动和悬浮描述 |
 
 ---
 
@@ -256,6 +256,15 @@ desktop-agent/
 │   │   └── usage_tracker.py       # Token 用量追踪
 │   └── samples/daily-report/
 │       └── SKILL.md               # 示例技能：日报生成
+├── .opencode/skills/              # 项目内 Skills（兼容 oh-my-openagent / Superpowers 风格）
+│   ├── frontend-ui-ux/
+│   ├── test-driven-development/
+│   ├── systematic-debugging/
+│   ├── verification-before-completion/
+│   ├── brainstorming/
+│   ├── writing-plans/
+│   ├── executing-plans/
+│   └── receiving-code-review/
 ├── desktop/                       # 前端 UI
 │   ├── index.html                 # 单页聊天应用
 │   └── package.json
@@ -286,7 +295,7 @@ desktop-agent/
 | `/sessions/{id}` | GET | 获取会话消息历史 |
 | `/sessions/{id}` | DELETE | 删除会话 |
 | `/sessions/{id}/rename` | PUT | 重命名会话 |
-| `/skills` | GET | 列出已加载技能 |
+| `/skills` | GET | 列出已加载技能（含格式、来源、触发词、是否声明 MCP） |
 | `/skills/reload` | POST | 热加载所有技能 |
 | `/settings` | GET | 获取当前配置 |
 | `/settings` | POST | 保存配置并重启 Agent |
@@ -334,7 +343,7 @@ my-skill/
 file_write
 ```
 
-将 Skill 目录放到 `agent_core/samples/` 下，然后调用 `/skills/reload` 即可热加载。
+将 Skill 目录放到 `agent_core/samples/`、项目内 `.opencode/skills/`、`.claude/skills/`、`.agents/skills/`，或通过 `AGENT_SKILLS_DIR` 指定目录，然后调用 `/skills/reload` 即可热加载。
 
 ### oh-my-openagent Skill 兼容
 
@@ -381,6 +390,10 @@ mcp:
 - `systematic-debugging`：系统化定位根因
 - `verification-before-completion`：完成前验证
 - `receiving-code-review`：处理代码评审反馈
+
+加上内置示例 `agent_core/samples/daily-report`，默认会加载 9 个 Skills。侧边栏会展示已加载技能，列表区域固定高度并支持滚动；鼠标悬停在技能名称上会显示描述和触发词。
+
+用户询问“你有哪些技能”“已加载哪些 Skills”等问题时，后端会直接从 `SkillRegistry` 返回真实技能清单，避免模型把底层工具能力误报为 Skills。
 
 ---
 
