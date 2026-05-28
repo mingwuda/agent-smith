@@ -3,6 +3,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import secrets
 import sys
 import threading
@@ -10,6 +11,7 @@ import time
 import webbrowser
 from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException, Request, Response, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -279,7 +281,7 @@ class MemoryRequest(BaseModel):
 
 # ---------- 桌面 UI 路由 ----------
 
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 
 
 LOGIN_HTML = """<!DOCTYPE html>
@@ -470,6 +472,103 @@ def _require_admin(request: Request):
         raise HTTPException(403, "只有 admin 用户可以访问设置")
 
 
+def _workspace_for_user(uid: str) -> Path:
+    return Path(user_manager.user_workspace(uid)).expanduser().resolve()
+
+
+def _resolve_artifact_path(uid: str, path: str) -> Path:
+    workspace = _workspace_for_user(uid)
+    raw = Path(path or "").expanduser()
+    target = raw if raw.is_absolute() else workspace / raw
+    target = target.resolve(strict=False)
+    try:
+        target.relative_to(workspace)
+    except ValueError as exc:
+        raise HTTPException(403, "只能下载当前用户工作区内的文件") from exc
+    if not target.exists() or not target.is_file():
+        raise HTTPException(404, "文件不存在")
+    return target
+
+
+def _relative_artifact_path(uid: str, path: str) -> str:
+    target = _resolve_artifact_path(uid, path)
+    return target.relative_to(_workspace_for_user(uid)).as_posix()
+
+
+def _artifact_link(path: str) -> str:
+    name = Path(path).name or path
+    encoded = quote(path)
+    download = f"[下载](/artifacts/download?path={encoded})"
+    if Path(path).suffix.lower() in {".md", ".markdown"}:
+        preview = f"[预览](#artifact-preview:{encoded})"
+        return f"- {name}: {preview} / {download} (`{path}`)"
+    return f"- {name}: {download} (`{path}`)"
+
+
+def _artifact_candidates(text: str) -> list[str]:
+    candidates: list[str] = []
+    for match in re.finditer(r"`([^`\n]+?\.[A-Za-z0-9]{1,8})`", text or ""):
+        candidates.append(match.group(1).strip())
+    for token in re.split(r"[\s\n\r\t，。；;：:、（）()\[\]{}<>]+", text or ""):
+        token = token.strip("`'\"")
+        if re.search(r"\.[A-Za-z0-9]{1,8}$", token):
+            candidates.append(token)
+    return candidates
+
+
+def _append_artifact_links(content: str, uid: str, paths: Optional[list[str]] = None) -> str:
+    cleaned_content = _strip_existing_artifact_section(content)
+    found: list[str] = []
+    seen: set[str] = set()
+    for candidate in (paths or []) + _artifact_candidates(cleaned_content):
+        try:
+            rel = _relative_artifact_path(uid, candidate)
+        except HTTPException:
+            continue
+        if rel not in seen:
+            seen.add(rel)
+            found.append(rel)
+    if not found:
+        return content
+    links = "\n".join(_artifact_link(path) for path in found)
+    return f"{cleaned_content.rstrip()}\n\n---\n\n可下载文件：\n{links}"
+
+
+def _strip_existing_artifact_section(content: str) -> str:
+    """Remove model-generated download sections so the normalized one appears once."""
+    lines = (content or "").splitlines()
+    result: list[str] = []
+    idx = 0
+    while idx < len(lines):
+        line = lines[idx].strip()
+        if re.fullmatch(r"-{3,}", line):
+            next_idx = idx + 1
+            while next_idx < len(lines) and not lines[next_idx].strip():
+                next_idx += 1
+            next_line = lines[next_idx].strip() if next_idx < len(lines) else ""
+            if re.match(r"^可下载文件[:：]?$", next_line):
+                idx = next_idx + 1
+                while idx < len(lines):
+                    current = lines[idx].strip()
+                    if re.fullmatch(r"-{3,}", current):
+                        break
+                    if current and not current.startswith(("-", "*")) and not re.match(r"^可下载文件[:：]?$", current):
+                        break
+                    idx += 1
+                continue
+        if re.match(r"^可下载文件[:：]?$", line):
+            idx += 1
+            while idx < len(lines):
+                current = lines[idx].strip()
+                if current and not current.startswith(("-", "*")):
+                    break
+                idx += 1
+            continue
+        result.append(lines[idx])
+        idx += 1
+    return "\n".join(result).rstrip()
+
+
 async def _ensure_session(uid: str, session_id: str) -> dict:
     session = session_store.get_session(uid, session_id)
     if session is None:
@@ -483,6 +582,7 @@ async def _ensure_session(uid: str, session_id: str) -> dict:
 def _resolve_user(request: Request) -> str:
     """从请求获取当前用户并设置到 agent"""
     uid = _get_current_user(request)
+    file_tools.set_workspace(_workspace_for_user(uid))
     if agent:
         agent.set_user(uid)
     return uid
@@ -504,6 +604,15 @@ async def run_agent(req: RunRequest, request: Request):
     session_store.add_message(uid, session_id, "user", req.message)
     agent.switch_thread(session_id)
     result, steps = await agent.run(req.message, history=history_messages)
+    artifact_paths = [
+        str(step.get("args", {}).get("path", ""))
+        for step in steps
+        if step.get("type") == "tool_call"
+        and step.get("tool") in {"write_file", "append_to_file"}
+        and isinstance(step.get("args"), dict)
+        and step.get("args", {}).get("path")
+    ]
+    result = _append_artifact_links(result, uid, artifact_paths)
     session_store.add_message(uid, session_id, "assistant", result)
     
     title = req.message[:30] + ("..." if len(req.message) > 30 else "")
@@ -527,21 +636,37 @@ async def run_agent_stream(req: RunRequest, request: Request):
 
     session_store.add_message(uid, session_id, "user", req.message)
     agent.switch_thread(session_id)
+    artifact_paths: list[str] = []
     
     async def event_stream():
         final_content = ""
         async for sse_event in agent.stream_run(req.message, history=history_messages):
-            yield sse_event
+            if sse_event.strip() == "data: [DONE]":
+                continue
+            if '"type": "tool_start"' in sse_event:
+                try:
+                    m = re.search(r'data: ({.*})', sse_event)
+                    if m:
+                        data = json.loads(m.group(1))
+                        args = data.get("args") or {}
+                        if data.get("tool") in {"write_file", "append_to_file"} and args.get("path"):
+                            artifact_paths.append(str(args["path"]))
+                except Exception:
+                    pass
             if '"type": "done"' in sse_event:
-                import re
                 m = re.search(r'data: ({.*})', sse_event)
                 if m:
                     final_content = json.loads(m.group(1)).get("content", "")
+                continue
+            yield sse_event
         
         if final_content:
+            final_content = _append_artifact_links(final_content, uid, artifact_paths)
+            yield f"data: {json.dumps({'type': 'done', 'content': final_content}, ensure_ascii=False)}\n\n"
             session_store.add_message(uid, session_id, "assistant", final_content)
             title = req.message[:30] + ("..." if len(req.message) > 30 else "")
             session_store.rename_session(uid, session_id, title or f"会话 {session_id[:8]}")
+        yield "data: [DONE]\n\n"
     
     return StreamingResponse(
         event_stream(), media_type="text/event-stream",
@@ -720,6 +845,34 @@ def delete_memory(key: str, request: Request):
     memory = get_memory(uid)
     memory.delete(key)
     return {"status": "ok", "message": f"已删除记忆 {key}"}
+
+
+# ---------- 工作区文件制品 ----------
+
+@app.get("/artifacts/download")
+def download_artifact(path: str, request: Request):
+    """下载当前用户工作区内的文件制品。"""
+    uid = _get_current_user(request)
+    target = _resolve_artifact_path(uid, path)
+    return FileResponse(target, filename=target.name)
+
+
+@app.get("/artifacts/preview")
+def preview_artifact(path: str, request: Request):
+    """预览当前用户工作区内的 Markdown 文件制品。"""
+    uid = _get_current_user(request)
+    target = _resolve_artifact_path(uid, path)
+    if target.suffix.lower() not in {".md", ".markdown"}:
+        raise HTTPException(400, "仅支持预览 Markdown 文件")
+    try:
+        content = target.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        raise HTTPException(400, "文件不是 UTF-8 文本，无法预览") from exc
+    return {
+        "name": target.name,
+        "path": target.relative_to(_workspace_for_user(uid)).as_posix(),
+        "content": content,
+    }
 
 
 # ---------- 设置 / 配置路由 ----------

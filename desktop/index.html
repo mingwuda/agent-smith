@@ -169,6 +169,17 @@
   .memory-key { display:flex; align-items:center; justify-content:space-between; gap:8px; font-size:13px; font-weight:600; color:#1d1d1f; }
   .memory-value { margin-top:6px; font-size:12px; color:#555; white-space:pre-wrap; word-break:break-word; }
   .memory-delete { background:transparent; border:none; color:#ff453a; cursor:pointer; font-size:12px; }
+  .artifact-preview-modal { width:min(940px, calc(100vw - 32px)); max-height:86vh; display:flex; flex-direction:column; }
+  .artifact-preview-path { color:#8e8e93; font-size:12px; margin:-12px 0 14px; word-break:break-all; }
+  .artifact-preview-body { flex:1; overflow:auto; border:1px solid #e5e5ea; border-radius:8px; padding:18px 22px; background:#fff; color:#1d1d1f; font-size:14px; line-height:1.7; }
+  .artifact-preview-body h1,.artifact-preview-body h2,.artifact-preview-body h3 { margin:14px 0 8px; line-height:1.3; }
+  .artifact-preview-body p,.artifact-preview-body ul,.artifact-preview-body ol,.artifact-preview-body table { margin:10px 0; }
+  .artifact-preview-body ul,.artifact-preview-body ol { padding-left:22px; }
+  .artifact-preview-body table { width:100%; border-collapse:collapse; }
+  .artifact-preview-body th,.artifact-preview-body td { border:1px solid #ddd; padding:6px 8px; text-align:left; }
+  .artifact-preview-body code { background:#ececec; padding:2px 5px; border-radius:4px; }
+  .artifact-preview-body pre { background:#1c1c1e; color:#f5f5f7; padding:14px 16px; border-radius:8px; overflow:auto; margin:12px 0; }
+  .artifact-preview-body pre code { background:transparent; color:inherit; padding:0; border-radius:0; font-size:13px; line-height:1.6; }
 
   /* 会话列表 */
   #session-header { display:flex; align-items:center; justify-content:space-between; padding:12px 16px 4px; }
@@ -361,6 +372,19 @@
   </div>
 </div>
 
+<!-- Markdown 制品预览弹窗 -->
+<div class="modal-overlay" id="artifact-preview-modal">
+  <div class="modal artifact-preview-modal">
+    <h2 id="artifact-preview-title">文件预览</h2>
+    <div class="artifact-preview-path" id="artifact-preview-path"></div>
+    <div class="artifact-preview-body" id="artifact-preview-body"></div>
+    <div class="modal-actions">
+      <a class="btn-secondary" id="artifact-preview-download" href="#" download>下载</a>
+      <button class="btn-secondary" onclick="closeArtifactPreview()">关闭</button>
+    </div>
+  </div>
+</div>
+
 <script>
 const messages = document.getElementById('messages');
 const input = document.getElementById('input');
@@ -395,6 +419,16 @@ function renderMarkdown(text) {
     .replace(/javascript:/gi, '');
   return safe;
 }
+
+messages.addEventListener('click', (event) => {
+  const link = event.target.closest('a');
+  if (!link) return;
+  const href = link.getAttribute('href') || '';
+  if (!href.startsWith('#artifact-preview:')) return;
+  event.preventDefault();
+  const path = decodeURIComponent(href.slice('#artifact-preview:'.length));
+  openArtifactPreview(path);
+});
 
 // ---------- 工具函数 ----------
 
@@ -471,6 +505,7 @@ async function send() {
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
+    let streamDone = false;
     
     while (true) {
       const { done, value } = await reader.read();
@@ -481,32 +516,40 @@ async function send() {
       buffer = lines.pop() || '';
       
       for (const line of lines) {
-        if (line.startsWith('data: ') && line !== 'data: [DONE]') {
+        if (line === 'data: [DONE]') {
+          streamDone = true;
+          await reader.cancel().catch(() => {});
+          break;
+        }
+        if (line.startsWith('data: ')) {
           const data = JSON.parse(line.slice(6));
           handleStreamEvent(data);
         }
       }
+      if (streamDone) break;
     }
     
     // 处理 buffer 中剩余内容
-    if (buffer.startsWith('data: ') && buffer !== 'data: [DONE]') {
+    if (buffer.trim() === 'data: [DONE]') {
+      streamDone = true;
+    } else if (buffer.startsWith('data: ')) {
       const data = JSON.parse(buffer.slice(6));
       handleStreamEvent(data);
     }
     
   } catch (e) {
     if (streamingActive) {
-      hideTyping();
       addMessage('⚠️ 连接中断', 'system');
     }
+  } finally {
+    hideTyping();
+    streamingActive = false;
+    isLoading = false;
+    sendBtn.disabled = false;
+    input.focus();
+    refreshStats();
+    loadSessions();
   }
-  
-  streamingActive = false;
-  isLoading = false;
-  sendBtn.disabled = false;
-  input.focus();
-  refreshStats();
-  loadSessions();
 }
 
 function handleStreamEvent(data) {
@@ -1167,12 +1210,44 @@ async function deleteMemory(key) {
   } catch {}
 }
 
+// ---------- Markdown 制品预览 ----------
+
+async function openArtifactPreview(path) {
+  const modal = document.getElementById('artifact-preview-modal');
+  const title = document.getElementById('artifact-preview-title');
+  const pathEl = document.getElementById('artifact-preview-path');
+  const body = document.getElementById('artifact-preview-body');
+  const download = document.getElementById('artifact-preview-download');
+  title.textContent = '文件预览';
+  pathEl.textContent = path;
+  body.textContent = '加载中...';
+  download.href = `/artifacts/download?path=${encodeURIComponent(path)}`;
+  modal.classList.add('active');
+  try {
+    const res = await fetch(`/artifacts/preview?path=${encodeURIComponent(path)}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || '预览失败');
+    title.textContent = data.name || '文件预览';
+    pathEl.textContent = data.path || path;
+    body.innerHTML = renderMarkdown(data.content || '');
+  } catch (error) {
+    body.textContent = error.message || '预览失败';
+  }
+}
+
+function closeArtifactPreview() {
+  document.getElementById('artifact-preview-modal').classList.remove('active');
+}
+
 // 点击遮罩关闭
 document.getElementById('settings-modal').addEventListener('click', function(e) {
   if (e.target === this) closeSettings();
 });
 document.getElementById('memory-modal').addEventListener('click', function(e) {
   if (e.target === this) closeMemory();
+});
+document.getElementById('artifact-preview-modal').addEventListener('click', function(e) {
+  if (e.target === this) closeArtifactPreview();
 });
 
 // 设置按钮
