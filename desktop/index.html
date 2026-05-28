@@ -89,6 +89,10 @@
   .step-toggle.open .arrow { transform:rotate(90deg); }
   .step-toggle .tool-icon { font-size:14px; }
   .step-toggle .tool-name { font-weight:500; color:#333; }
+  .step-status { display:inline-flex; align-items:center; gap:5px; color:#999; font-size:11px; margin-left:auto; white-space:nowrap; }
+  .step-status.running { color:#007aff; }
+  .step-status.done { color:#2e7d32; }
+  .mini-spin { width:10px; height:10px; border:2px solid currentColor; border-top-color:transparent; border-radius:50%; animation:spin .7s linear infinite; }
   .step-details { display:none; padding:8px 12px; background:#f8f8fa; border:1px solid #e0e0e3; border-top:none; border-radius:0 0 8px 8px; font-size:13px; }
   .step-details.open { display:block; }
   .step-details .thought { color:#666; font-style:italic; margin-bottom:6px; white-space:pre-wrap; word-break:break-word; }
@@ -468,6 +472,58 @@ let streamingActive = false;
 let totalSteps = 0;               // 已完成的步骤数
 let hasToolCalls = false;         // 本轮是否有工具调用
 let generatingBadgeEl = null;     // 生成中徽章 DOM
+let streamIdleTimer = null;        // 流式响应空闲提示定时器
+let lastStreamEventAt = 0;         // 最近一次收到后端事件的时间
+
+function showGeneratingBadge(text = '正在生成回复...') {
+  if (!generatingBadgeEl) {
+    generatingBadgeEl = document.createElement('div');
+    generatingBadgeEl.className = 'generating-badge';
+  }
+  generatingBadgeEl.innerHTML = `<span class="spin"></span> ${text}`;
+  if (currentBotMsgEl) {
+    currentBotMsgEl.after(generatingBadgeEl);
+  } else if (currentStepsEl) {
+    currentStepsEl.after(generatingBadgeEl);
+  } else {
+    messages.appendChild(generatingBadgeEl);
+  }
+  messages.scrollTop = messages.scrollHeight;
+}
+
+function removeGeneratingBadge() {
+  if (generatingBadgeEl) {
+    generatingBadgeEl.remove();
+    generatingBadgeEl = null;
+  }
+}
+
+function markStreamActivity() {
+  lastStreamEventAt = Date.now();
+}
+
+function startStreamIdleWatch() {
+  stopStreamIdleWatch();
+  markStreamActivity();
+  streamIdleTimer = setInterval(() => {
+    if (!streamingActive) return;
+    const idleMs = Date.now() - lastStreamEventAt;
+    if (idleMs > 1800) {
+      if (currentBotMsgEl || currentStepsEl) {
+        showGeneratingBadge('后端仍在处理...');
+      } else {
+        showTyping();
+      }
+    }
+  }, 800);
+}
+
+function stopStreamIdleWatch() {
+  if (streamIdleTimer) {
+    clearInterval(streamIdleTimer);
+    streamIdleTimer = null;
+  }
+}
 
 function resetBlockingOverlays() {
   document.querySelectorAll('.modal-overlay.active').forEach(el => el.classList.remove('active'));
@@ -493,6 +549,7 @@ async function send() {
   totalSteps = 0;
   hasToolCalls = false;
   generatingBadgeEl = null;
+  startStreamIdleWatch();
   
   try {
     const res = await fetch(`/run/stream`, {
@@ -523,6 +580,7 @@ async function send() {
         }
         if (line.startsWith('data: ')) {
           const data = JSON.parse(line.slice(6));
+          markStreamActivity();
           handleStreamEvent(data);
         }
       }
@@ -534,6 +592,7 @@ async function send() {
       streamDone = true;
     } else if (buffer.startsWith('data: ')) {
       const data = JSON.parse(buffer.slice(6));
+      markStreamActivity();
       handleStreamEvent(data);
     }
     
@@ -542,7 +601,9 @@ async function send() {
       addMessage('⚠️ 连接中断', 'system');
     }
   } finally {
+    stopStreamIdleWatch();
     hideTyping();
+    removeGeneratingBadge();
     streamingActive = false;
     isLoading = false;
     sendBtn.disabled = false;
@@ -601,22 +662,18 @@ function handleStreamEvent(data) {
     const hint = document.createElement('div');
     hint.className = 'thinking-step';
     hint.innerHTML = `<span>${text}</span><span class="dots"><span></span><span></span><span></span></span>`;
-    // 放在进度条之后，但其他卡片之前
-    const prog = currentStepsEl.querySelector('.step-progress');
-    if (prog) {
-      prog.after(hint);
-    } else {
-      currentStepsEl.prepend(hint);
-    }
+    currentStepsEl.appendChild(hint);
     container.scrollTop = container.scrollHeight;
   }
 
-  // 工具函数：移除生成中徽章
-  function removeGeneratingBadge() {
-    if (generatingBadgeEl) {
-      generatingBadgeEl.remove();
-      generatingBadgeEl = null;
+  function findStepToggle(step) {
+    if (!currentStepsEl) return null;
+    if (step !== undefined && step !== null) {
+      const stepCard = Array.from(currentStepsEl.children).find(el => el.dataset && el.dataset.step === String(step));
+      if (stepCard) return stepCard.querySelector('.step-toggle');
     }
+    const toggles = currentStepsEl.querySelectorAll('.step-toggle');
+    return toggles[toggles.length - 1] || null;
   }
 
   switch (data.type) {
@@ -635,12 +692,13 @@ function handleStreamEvent(data) {
           <span class="arrow">▶</span>
           <span class="tool-icon">🤔</span>
           <span class="tool-name">思考</span>
-          <span style="color:#999;font-size:11px;margin-left:auto;">第 ${data.step || '?'} 步</span>
+          <span class="step-status">第 ${data.step || '?'} 步</span>
         </div>
         <div class="step-details open">
           <div class="thought">${renderMarkdown(thoughtText)}</div>
         </div>`;
       currentStepsEl.appendChild(thoughtDiv);
+      showThinkingHint('🤔 继续分析');
       container.scrollTop = container.scrollHeight;
       break;
     
@@ -673,7 +731,7 @@ function handleStreamEvent(data) {
           <span class="arrow">▶</span>
           <span class="tool-icon">${toolIcon}</span>
           <span class="tool-name">${escapeHtml(data.tool)}</span>
-          <span style="color:#999;font-size:11px;margin-left:auto;">⏳ 执行中...</span>
+          <span class="step-status running"><span class="mini-spin"></span>执行中...</span>
         </div>
         <div class="step-details open">
           ${argsHtml}
@@ -685,11 +743,13 @@ function handleStreamEvent(data) {
     case 'tool_result':
       // 更新工具状态为完成
       if (currentStepsEl) {
-        const toggles = currentStepsEl.querySelectorAll('.step-toggle');
-        const lastToggle = toggles[toggles.length - 1];
+        const lastToggle = findStepToggle(data.step);
         if (lastToggle) {
-          const statusSpan = lastToggle.querySelector('span:last-child');
-          if (statusSpan) statusSpan.textContent = '✅ 完成';
+          const statusSpan = lastToggle.querySelector('.step-status');
+          if (statusSpan) {
+            statusSpan.className = 'step-status done';
+            statusSpan.textContent = '✅ 完成';
+          }
           
           const details = lastToggle.nextElementSibling;
           if (details && data.result) {
@@ -708,23 +768,7 @@ function handleStreamEvent(data) {
     case 'token':
       hideTyping();
       removeThinkingHint();
-      // 如果之前有工具调用，显示"正在生成回复"徽章
-      if (hasToolCalls && !generatingBadgeEl && !currentBotMsgEl) {
-        generatingBadgeEl = document.createElement('div');
-        generatingBadgeEl.className = 'generating-badge';
-        generatingBadgeEl.innerHTML = '<span class="spin"></span> 正在生成回复...';
-        if (currentStepsEl) {
-          currentStepsEl.after(generatingBadgeEl);
-        } else {
-          container.appendChild(generatingBadgeEl);
-        }
-        container.scrollTop = container.scrollHeight;
-      }
-      // 开始输出 token（此时移除徽章）
-      if (generatingBadgeEl && currentFinalContent === '') {
-        generatingBadgeEl.remove();
-        generatingBadgeEl = null;
-      }
+      if (!hasToolCalls) removeGeneratingBadge();
       if (!currentBotMsgEl) {
         currentBotMsgEl = document.createElement('div');
         currentBotMsgEl.className = 'msg bot streaming-final';
@@ -736,6 +780,7 @@ function handleStreamEvent(data) {
       }
       currentFinalContent += data.content;
       currentBotMsgEl.innerHTML = renderMarkdown(currentFinalContent);
+      if (hasToolCalls) showGeneratingBadge('继续处理...');
       container.scrollTop = container.scrollHeight;
       break;
     
@@ -754,6 +799,11 @@ function handleStreamEvent(data) {
       if (currentStepsEl) {
         const toggles = currentStepsEl.querySelectorAll('.step-toggle');
         toggles.forEach(t => {
+          const statusSpan = t.querySelector('.step-status.running');
+          if (statusSpan) {
+            statusSpan.className = 'step-status done';
+            statusSpan.textContent = '✅ 完成';
+          }
           t.classList.remove('open');
           const details = t.nextElementSibling;
           if (details) details.classList.remove('open');
