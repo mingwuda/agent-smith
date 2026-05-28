@@ -47,6 +47,7 @@
   .msg { margin-bottom:16px; max-width:85%; padding:12px 18px; border-radius:14px; font-size:14px; line-height:1.6; word-break:break-word; }
   .msg.user { background:#007aff; color:#fff; margin-left:auto; border-bottom-right-radius:4px; white-space:pre-wrap; }
   .msg.bot { background:#e8e8ed; color:#1d1d1f; border-bottom-left-radius:4px; }
+  .msg.bot.streaming-final { display:block; margin-left:0; clear:both; }
   .msg.bot h1, .msg.bot h2, .msg.bot h3 { margin:8px 0 4px; font-size:inherit; font-weight:600; }
   .msg.bot h1 { font-size:18px; }
   .msg.bot h2 { font-size:16px; }
@@ -80,7 +81,8 @@
   @keyframes bounce { 0%,80%,100% { transform:translateY(0); } 40% { transform:translateY(-6px); } }
 
   /* 工具调用/思考步骤 */
-  .steps-container { margin:8px 0; max-width:85%; }
+  .steps-container { clear:both; margin:8px 0; max-width:85%; }
+  .steps-container + .msg.bot { margin-top:12px; }
   .step-toggle { display:flex; align-items:center; gap:6px; width:100%; padding:6px 12px; background:#f0f0f2; border:1px solid #e0e0e3; border-radius:8px; font-size:12px; cursor:pointer; color:#555; transition:background .15s; }
   .step-toggle:hover { background:#e5e5ea; }
   .step-toggle .arrow { transition:transform .2s; font-size:10px; }
@@ -430,6 +432,12 @@ let totalSteps = 0;               // 已完成的步骤数
 let hasToolCalls = false;         // 本轮是否有工具调用
 let generatingBadgeEl = null;     // 生成中徽章 DOM
 
+function resetBlockingOverlays() {
+  document.querySelectorAll('.modal-overlay.active').forEach(el => el.classList.remove('active'));
+  document.getElementById('sidebar-overlay').classList.remove('show');
+  document.getElementById('sidebar').classList.remove('open');
+}
+
 async function send() {
   const text = input.value.trim();
   if (!text || isLoading) return;
@@ -672,8 +680,12 @@ function handleStreamEvent(data) {
       }
       if (!currentBotMsgEl) {
         currentBotMsgEl = document.createElement('div');
-        currentBotMsgEl.className = 'msg bot';
-        container.appendChild(currentBotMsgEl);
+        currentBotMsgEl.className = 'msg bot streaming-final';
+        if (currentStepsEl) {
+          currentStepsEl.after(currentBotMsgEl);
+        } else {
+          container.appendChild(currentBotMsgEl);
+        }
       }
       currentFinalContent += data.content;
       currentBotMsgEl.innerHTML = renderMarkdown(currentFinalContent);
@@ -868,6 +880,9 @@ async function loadCurrentUser() {
   isAdmin = currentUser && currentUser.id === 'admin';
   settingsBtn.style.display = isAdmin ? '' : 'none';
   providerCard.style.display = isAdmin ? '' : 'none';
+  if (!isAdmin) {
+    document.getElementById('settings-modal').classList.remove('active');
+  }
   return currentUser;
 }
 
@@ -1274,6 +1289,7 @@ setInterval(() => { checkHealth(); refreshStats(); }, 5000);
 setInterval(loadSessions, 10000);
 
 (async () => {
+  resetBlockingOverlays();
   const ok = await checkHealth();
   await loadCurrentUser();
   await loadSettingsForSwitcher();
