@@ -290,8 +290,9 @@ LOGIN_HTML = """<!DOCTYPE html>
 <title>Desktop Agent 登录</title>
 <style>
 * { box-sizing:border-box; }
-body { margin:0; min-height:100vh; display:grid; place-items:center; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:#f5f5f7; color:#1d1d1f; }
-.login { width:min(380px, calc(100vw - 32px)); background:#fff; border:1px solid #e5e5ea; border-radius:10px; padding:28px; box-shadow:0 18px 50px rgba(0,0,0,.08); }
+html, body { filter:none !important; opacity:1 !important; }
+body { margin:0; min-height:100vh; display:grid; place-items:center; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:#f5f5f7 !important; color:#1d1d1f; }
+.login { position:relative; z-index:1; width:min(380px, calc(100vw - 32px)); background:#fff; border:1px solid #e5e5ea; border-radius:10px; padding:28px; box-shadow:0 18px 50px rgba(0,0,0,.08); }
 h1 { margin:0 0 6px; font-size:24px; }
 p { margin:0 0 22px; color:#6e6e73; font-size:14px; }
 label { display:block; margin:14px 0 6px; font-size:13px; color:#515154; }
@@ -314,6 +315,16 @@ button:disabled { opacity:.65; cursor:not-allowed; }
   <div class="error" id="error"></div>
 </form>
 <script>
+function clearOverlays() {
+  document.documentElement.style.filter = 'none';
+  document.documentElement.style.opacity = '1';
+  document.body.style.filter = 'none';
+  document.body.style.opacity = '1';
+  document.querySelectorAll('.modal-overlay, #sidebar-overlay, .overlay, .backdrop').forEach(el => el.remove());
+}
+clearOverlays();
+window.addEventListener('pageshow', clearOverlays);
+
 async function login(event) {
   event.preventDefault();
   const btn = document.getElementById('submit');
