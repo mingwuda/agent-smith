@@ -1,6 +1,8 @@
 """桌面 AI 智能体核心"""
 import json
+import socket
 from typing import AsyncGenerator, Optional
+from urllib.parse import urlparse
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import AIMessage, HumanMessage
@@ -96,6 +98,29 @@ def _recursion_limit_message(limit: int) -> str:
         f"执行步骤达到上限（recursion_limit={limit}），Agent 可能在反复调用工具或没有生成最终回答。"
         "可以在设置里调大“最大推理步数”，或把任务拆小后重试。"
     )
+
+
+def _connection_diagnostic(exc: Exception, config: AgentConfig) -> str:
+    message = f"{type(exc).__name__}: {exc}"
+    if type(exc).__name__ != "APIConnectionError" and "Connection error" not in str(exc):
+        return message
+
+    details = [
+        message,
+        f"模型连接失败。当前 provider={config.active_provider}，model={config.model}，base_url={config.base_url or '默认 OpenAI'}。",
+    ]
+    if config.base_url:
+        host = urlparse(config.base_url).hostname
+        if host:
+            try:
+                ip = socket.gethostbyname(host)
+                details.append(f"Python DNS 检查：{host} -> {ip}。请检查模型服务是否可访问、API Key 是否有效，或稍后重试。")
+            except OSError as dns_exc:
+                details.append(
+                    f"Python DNS 检查失败：无法解析 {host}（{dns_exc}）。"
+                    "这通常是运行服务的 Python 进程 DNS/网络环境问题，不是任务工具执行失败。"
+                )
+    return "\n".join(details)
 
 
 def session_messages_to_langchain(messages: list[dict]) -> list:
@@ -290,7 +315,7 @@ class DesktopAgent:
         except Exception as e:
             if _is_recursion_limit_error(e):
                 return f"❌ {_recursion_limit_message(config['recursion_limit'])}", []
-            return f"❌ 执行出错: {type(e).__name__}: {e}", []
+            return f"❌ 执行出错: {_connection_diagnostic(e, self.config)}", []
         finally:
             self._hydrated_threads.add(thread_key)
     
@@ -403,7 +428,7 @@ class DesktopAgent:
                 final_buffer = _recursion_limit_message(run_config["recursion_limit"])
                 yield _sse({"type": "error", "content": final_buffer})
             else:
-                final_buffer = f"{type(e).__name__}: {e}"
+                final_buffer = _connection_diagnostic(e, self.config)
                 yield _sse({"type": "error", "content": final_buffer})
         
         finally:
