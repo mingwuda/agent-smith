@@ -80,6 +80,9 @@ class AgentConfig:
     # 用量限制
     max_cost_per_day: float = 5.0
     recursion_limit: int = 60
+    api_max_retries: int = 3
+    api_timeout_seconds: float = 30.0
+    api_host_ips: str = ""
     
     system_prompt: str = (
         "你是一个桌面 AI 智能体，可以自主完成用户交给你的任务。\n\n"
@@ -134,6 +137,9 @@ class AgentConfig:
             "AGENT_PORT": ("port", int),
             "MAX_COST_PER_DAY": ("max_cost_per_day", float),
             "AGENT_RECURSION_LIMIT": ("recursion_limit", int),
+            "AGENT_API_MAX_RETRIES": ("api_max_retries", int),
+            "AGENT_API_TIMEOUT_SECONDS": ("api_timeout_seconds", float),
+            "AGENT_API_HOST_IPS": ("api_host_ips", str),
         }
         env_overrides = set()
         for env_key, (attr_name, cast_fn) in env_map.items():
@@ -149,6 +155,8 @@ class AgentConfig:
         apply_legacy = bool(legacy_keys.intersection(file_data) or legacy_keys.intersection(env_overrides))
         config._normalize_providers(apply_legacy=apply_legacy)
         config.recursion_limit = max(1, int(config.recursion_limit or 60))
+        config.api_max_retries = max(0, int(config.api_max_retries or 0))
+        config.api_timeout_seconds = max(1.0, float(config.api_timeout_seconds or 30.0))
         
         # 3. 填充默认值
         if not config.skills_dir:
@@ -252,6 +260,9 @@ class AgentConfig:
             "port": self.port,
             "max_cost_per_day": self.max_cost_per_day,
             "recursion_limit": self.recursion_limit,
+            "api_max_retries": self.api_max_retries,
+            "api_timeout_seconds": self.api_timeout_seconds,
+            "api_host_ips": self.api_host_ips,
         }
         CONFIG_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     
@@ -284,4 +295,7 @@ class AgentConfig:
             "port": self.port,
             "max_cost_per_day": self.max_cost_per_day,
             "recursion_limit": self.recursion_limit,
+            "api_max_retries": self.api_max_retries,
+            "api_timeout_seconds": self.api_timeout_seconds,
+            "api_host_ips": self.api_host_ips,
         }

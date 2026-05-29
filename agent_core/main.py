@@ -985,6 +985,9 @@ class SettingsRequest(BaseModel):
     model: str = ""
     base_url: str = ""
     recursion_limit: int = 60
+    api_max_retries: int = 3
+    api_timeout_seconds: float = 30.0
+    api_host_ips: str = ""
 
 
 @app.get("/settings")
@@ -1009,6 +1012,9 @@ def save_settings(req: SettingsRequest, request: Request):
         base_url=req.base_url,
     )
     cfg.recursion_limit = max(1, int(req.recursion_limit or 60))
+    cfg.api_max_retries = max(0, int(req.api_max_retries or 0))
+    cfg.api_timeout_seconds = max(1.0, float(req.api_timeout_seconds or 30.0))
+    cfg.api_host_ips = req.api_host_ips or cfg.api_host_ips
     
     # 持久化到文件（现在包含 API Key）
     cfg.save()
@@ -1019,6 +1025,12 @@ def save_settings(req: SettingsRequest, request: Request):
     os.environ["LLM_MODEL"] = cfg.model
     os.environ["LLM_PROVIDER"] = cfg.active_provider
     os.environ["AGENT_RECURSION_LIMIT"] = str(cfg.recursion_limit)
+    os.environ["AGENT_API_MAX_RETRIES"] = str(cfg.api_max_retries)
+    os.environ["AGENT_API_TIMEOUT_SECONDS"] = str(cfg.api_timeout_seconds)
+    if cfg.api_host_ips:
+        os.environ["AGENT_API_HOST_IPS"] = cfg.api_host_ips
+    else:
+        os.environ.pop("AGENT_API_HOST_IPS", None)
     if cfg.base_url:
         os.environ["LLM_BASE_URL"] = cfg.base_url
     else:

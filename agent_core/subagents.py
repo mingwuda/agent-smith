@@ -10,8 +10,10 @@ from langchain_core.messages import HumanMessage
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
+from urllib.parse import urlparse
 
 from config import AgentConfig
+from network_resolver import configure_host_resolution
 
 
 TaskStatus = Literal["pending", "running", "done", "error"]
@@ -90,11 +92,17 @@ class SubagentManager:
 
     async def _run_agent(self, item: SubagentTask) -> str:
         assert self._config is not None
+        if self._config.base_url:
+            host = urlparse(self._config.base_url).hostname
+            if host:
+                configure_host_resolution(host, self._config.api_host_ips)
         llm = ChatOpenAI(
             model=self._config.model,
             api_key=self._config.api_key,
             base_url=self._config.base_url or None,
             temperature=0,
+            max_retries=self._config.api_max_retries,
+            timeout=self._config.api_timeout_seconds,
         )
         prompt = (
             f"{SUBAGENT_PROMPTS[item.agent_type]}\n\n"

@@ -12,6 +12,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from config import AgentConfig
 from memory.local_memory import set_current_user
 from monitoring.usage_tracker import get_tracker, UsageTracker
+from network_resolver import configure_host_resolution
 from skills.registry import get_registry, SkillRegistry
 
 
@@ -107,7 +108,10 @@ def _connection_diagnostic(exc: Exception, config: AgentConfig) -> str:
 
     details = [
         message,
-        f"模型连接失败。当前 provider={config.active_provider}，model={config.model}，base_url={config.base_url or '默认 OpenAI'}。",
+        (
+            f"模型连接失败，已重试 {config.api_max_retries} 次仍未成功。"
+            f"当前 provider={config.active_provider}，model={config.model}，base_url={config.base_url or '默认 OpenAI'}。"
+        ),
     ]
     if config.base_url:
         host = urlparse(config.base_url).hostname
@@ -213,9 +217,14 @@ class DesktopAgent:
             "model": self.config.model,
             "api_key": self.config.api_key,
             "temperature": 0,
+            "max_retries": self.config.api_max_retries,
+            "timeout": self.config.api_timeout_seconds,
         }
         if self.config.base_url:
             kwargs["base_url"] = self.config.base_url
+            host = urlparse(self.config.base_url).hostname
+            if host:
+                configure_host_resolution(host, self.config.api_host_ips)
         return ChatOpenAI(**kwargs)
     
     def _build_system_prompt(self) -> str:

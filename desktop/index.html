@@ -1127,6 +1127,9 @@ async function saveSettings() {
         model: document.getElementById('s-model').value,
         base_url: document.getElementById('s-base-url').value,
         recursion_limit: Number(document.getElementById('s-recursion-limit').value || 60),
+        api_max_retries: settingsData?.api_max_retries ?? 3,
+        api_timeout_seconds: settingsData?.api_timeout_seconds ?? 30,
+        api_host_ips: settingsData?.api_host_ips || '',
       }),
     });
     const data = await res.json();
@@ -1173,6 +1176,9 @@ async function quickSwitchProvider() {
         model: provider.model || '',
         base_url: provider.base_url || '',
         recursion_limit: settingsData.recursion_limit || 60,
+        api_max_retries: settingsData.api_max_retries ?? 3,
+        api_timeout_seconds: settingsData.api_timeout_seconds ?? 30,
+        api_host_ips: settingsData.api_host_ips || '',
       }),
     });
     const data = await res.json();

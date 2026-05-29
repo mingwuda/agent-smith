@@ -125,6 +125,15 @@ python generate_login_url.py --host 127.0.0.1 --port 8899 --expires 300 --user a
 
 设置中还可以调整 **最大推理步数**，用于控制 LangGraph ReAct Agent 单次任务的最大循环步数。复杂任务可以适当调大，默认值为 `60`。
 
+模型 API 请求默认会对连接错误进行重试，避免网络短抖动时立即失败。默认最多重试 `3` 次，请求超时为 `30` 秒；可通过环境变量调整：
+
+```bash
+export AGENT_API_MAX_RETRIES=3
+export AGENT_API_TIMEOUT_SECONDS=30
+```
+
+如果某些自定义模型网关的 DNS 在 Python 运行时里不稳定，可以通过 `AGENT_API_HOST_IPS` 指定兜底 IP，多个 IP 用英文逗号分隔。服务默认不会内置任何厂商 IP；只有显式配置后，才会在正常 DNS 失败时轮换这些 IP。这个选项主要用于运维排障，不建议普通部署默认配置。
+
 ### 5. 开始对话
 
 在输入框发送消息，Agent 会自动调用工具完成任务。例如：
