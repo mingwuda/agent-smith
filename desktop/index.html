@@ -1452,7 +1452,27 @@ document.addEventListener('mousemove', (event) => {
 
 // ---------- 初始化 ----------
 
-input.onkeydown = (e) => { if (e.key === 'Enter') send(); };
+let inputComposing = false;
+let lastCompositionEndAt = 0;
+
+input.addEventListener('compositionstart', () => {
+  inputComposing = true;
+});
+
+input.addEventListener('compositionend', () => {
+  inputComposing = false;
+  lastCompositionEndAt = Date.now();
+});
+
+input.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter') return;
+  const justEndedComposition = Date.now() - lastCompositionEndAt < 120;
+  if (inputComposing || e.isComposing || e.keyCode === 229 || justEndedComposition) {
+    return;
+  }
+  e.preventDefault();
+  send();
+});
 sendBtn.onclick = send;
 
 // 定时刷新状态和会话列表
