@@ -11,8 +11,10 @@
 | 🤖 **AI Agent 核心** | LangGraph ReAct Agent，自主规划 + 执行任务 |
 | 📁 **文件操作** | 读写文件、管理目录、搜索文件、工作区隔离 |
 | 🐍 **代码执行** | 沙箱执行 Python 代码，适合数据分析与脚本测试 |
+| 🌿 **Git 操作** | 查看仓库状态、diff、提交日志和指定 revision 内容；用户明确要求时可暂存并创建本地提交 |
 | 🌐 **网页搜索** | 使用 `web_search` 搜索网页，使用 `web_fetch` 抓取网页正文 |
 | 💻 **系统信息** | 获取 OS、Python 版本、磁盘空间等信息 |
+| 🧑‍💻 **子代理** | 通过 `delegate_task` 将独立任务委派给 coder / reviewer / debugger 子代理，同步执行并预留并行任务状态模型 |
 | 🧩 **Skills 插件** | 基于 `SKILL.md` 的热加载技能系统，支持 YAML frontmatter、触发词匹配和项目内 `.opencode/skills` |
 | 📊 **用量追踪** | 区分模型 Token 与工具调用次数，按会话/日/Provider/模型统计 |
 | 💬 **会话管理** | 多会话按用户持久化到 SQLite，切换/删除/自动命名 |
@@ -137,9 +139,15 @@ python generate_login_url.py --host 127.0.0.1 --port 8899 --expires 300 --user a
 >
 > 「打开这个链接并总结正文：https://example.com/article」
 >
+> 「看一下这个仓库当前有哪些改动」
+>
+> 「把当前改动提交一下，提交信息是：完善 Skills 支持」
+>
 > 「帮我写一份日报」
 >
 > 「记住：我希望回复默认使用中文」
+
+Git 工具提供 `git_status`、`git_diff`、`git_log`、`git_show`、`git_add`、`git_commit`、`git_commit_all` 和受限的 `git_command`。只有用户明确要求提交代码时，Agent 才应暂存并创建本地 commit；默认不开放 `pull`、`push`、`reset`、`restore` 等高风险操作。
 
 ---
 
@@ -239,6 +247,7 @@ desktop-agent/
 ├── agent_core/                    # Python 后端
 │   ├── main.py                    # FastAPI 入口 + 所有 API 路由
 │   ├── agent.py                   # DesktopAgent 核心（LangGraph）
+│   ├── subagents.py               # 子代理运行时（同步 MVP + 任务状态模型）
 │   ├── config.py                  # 配置管理（文件 + 环境变量）
 │   ├── session_store.py           # 会话 SQLite 存储 + 旧 JSON 自动迁移
 │   ├── memory/
@@ -246,6 +255,7 @@ desktop-agent/
 │   ├── tools/
 │   │   ├── file_tools.py          # 文件操作（读写/列目录/搜索/删除）
 │   │   ├── code_tools.py          # Python 代码执行
+│   │   ├── git_tools.py           # Git 工具（status/diff/log/show/add/commit 等）
 │   │   ├── system_tools.py        # 系统信息获取
 │   │   ├── memory_tools.py        # 长期记忆工具（显式记忆/查询/删除）
 │   │   └── web_tools.py           # 网页搜索与正文抓取
@@ -297,6 +307,8 @@ desktop-agent/
 | `/sessions/{id}/rename` | PUT | 重命名会话 |
 | `/skills` | GET | 列出已加载技能（含格式、来源、触发词、是否声明 MCP） |
 | `/skills/reload` | POST | 热加载所有技能 |
+| `/subagents` | GET | 列出可用子代理类型 |
+| `/subagents/tasks/{id}` | GET | 查询子代理任务状态 |
 | `/settings` | GET | 获取当前配置 |
 | `/settings` | POST | 保存配置并重启 Agent |
 | `/usage` | GET | 今日用量统计 |
@@ -310,6 +322,24 @@ desktop-agent/
 | `/users/{user_id}` | DELETE | 删除用户及其数据 |
 | `/users/me` | GET | 获取当前登录用户 |
 | `/health` | GET | 健康检查 |
+
+---
+
+## 子代理
+
+当前版本提供同步子代理 MVP，主 Agent 可通过 `delegate_task` 工具委派独立任务：
+
+- `coder`：编码实现建议和修改执行
+- `reviewer`：代码审查，重点检查 bug、回归风险、边界条件和缺失测试
+- `debugger`：系统化排查问题，输出假设、验证步骤和根因判断
+
+第一版 `delegate_task` 会同步等待子代理完成并返回结果。内部已经保留 `task_id`、`status`、`result`、`error`、时间戳等任务状态，可通过 `/subagents/tasks/{id}` 查询。后续要扩展并行执行时，可以在现有 `SubagentManager` 上增加异步 `task_create` / `task_result` API，而不需要推翻工具和状态结构。
+
+当前限制：
+
+- 子代理不是独立进程，仍运行在同一服务进程内。
+- 第一版不做真正后台并行，也没有 team mode 成员通信。
+- 子代理可用工具由主服务配置，默认会过滤掉 `delegate_task`，避免递归委派。
 
 ---
 

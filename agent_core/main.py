@@ -30,7 +30,8 @@ def _app_base_dir() -> Path:
 
 from config import AgentConfig
 from agent import DesktopAgent
-from tools import file_tools, code_tools, system_tools, web_tools, memory_tools
+from tools import file_tools, code_tools, system_tools, web_tools, memory_tools, git_tools
+import subagents
 from monitoring.usage_tracker import get_tracker
 from skills.registry import get_registry
 from memory.local_memory import get_memory
@@ -194,6 +195,7 @@ def init_agent():
     
     # 初始化工作区
     file_tools.set_workspace(Path(config.workspace))
+    git_tools.set_workspace(Path(config.workspace))
     
     # 注册所有工具
     all_tools = []
@@ -202,6 +204,9 @@ def init_agent():
     all_tools.extend(system_tools.TOOLS)
     all_tools.extend(web_tools.TOOLS)
     all_tools.extend(memory_tools.TOOLS)
+    all_tools.extend(git_tools.TOOLS)
+    all_tools.extend(subagents.TOOLS)
+    subagents.manager.configure(config, all_tools)
     
     # 先加载 Skills，再构建 Agent graph；set_tools 会把技能块注入 system prompt。
     app_base = _app_base_dir()
@@ -243,6 +248,19 @@ class SkillInfo(BaseModel):
     format: str = "desktop-agent"
     source: str = ""
     mcp_declared: bool = False
+
+
+class SubagentTaskInfo(BaseModel):
+    id: str
+    agent_type: str
+    task: str
+    context: str = ""
+    status: str
+    result: str = ""
+    error: str = ""
+    created_at: float
+    started_at: float = 0
+    finished_at: float = 0
 
 
 class UsageStats(BaseModel):
@@ -768,6 +786,21 @@ def reload_skills():
         raise HTTPException(503, "Agent 尚未初始化")
     count = agent.reload_skills()
     return ReloadResponse(message=f"已重新加载 {count} 个技能", count=count)
+
+
+@app.get("/subagents")
+def list_subagents():
+    """列出可用子代理类型。"""
+    return {"items": subagents.manager.list_agent_types()}
+
+
+@app.get("/subagents/tasks/{task_id}", response_model=SubagentTaskInfo)
+def get_subagent_task(task_id: str):
+    """查询子代理任务状态。第一版任务为同步执行，后续并行任务会复用该结构。"""
+    item = subagents.manager.get_task(task_id)
+    if not item:
+        raise HTTPException(404, "子代理任务不存在")
+    return SubagentTaskInfo(**item.__dict__)
 
 
 # ---------- 会话路由 ----------
