@@ -156,8 +156,9 @@ export AGENT_API_TIMEOUT_SECONDS=30
 >
 > 「记住：我希望回复默认使用中文」
 
-Git 工具提供 `git_status`、`git_diff`、`git_log`、`git_show`、`git_add`、`git_commit`、`git_commit_all`、`git_push` 和受限的 `git_command`。只有用户明确要求提交代码时，Agent 才应暂存并创建本地 commit；只有用户明确要求推送代码时，Agent 才应执行 push；默认不开放 `pull`、`reset`、`restore` 等高风险操作。
+Git 工具提供 `git_status`、`git_diff`、`git_log`、`git_show`、`git_add`、`git_commit`、`git_commit_all`、`git_push`、`git_revert` 和受限的 `git_command`。只有用户明确要求提交代码时，Agent 才应暂存并创建本地 commit；只有用户明确要求推送代码时，Agent 才应执行 push；只有用户明确要求回退版本时，Agent 才应执行 revert；默认不开放 `pull`、`reset`、`restore` 等高风险操作。
 `git_push` 支持用户明确要求“推送代码”时执行受限推送：默认 `git push`，或 `git push origin <branch>` / `git push -u origin <branch>`；不支持 force、tags、删除远端分支等高风险参数。
+`git_revert` 支持用户明确要求“回退版本/撤销某个提交”时执行受限回退：默认 `git revert <revision>` 创建反向提交，或 `git revert --no-commit <revision>` 先应用反向改动等待检查；不支持 reset、range revert、merge revert 等高风险形态。
 
 ---
 

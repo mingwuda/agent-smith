@@ -113,6 +113,15 @@ def _recursion_limit_message(limit: int) -> str:
 def _connection_diagnostic(exc: Exception, config: AgentConfig) -> str:
     message = f"{type(exc).__name__}: {exc}"
     exc_name = type(exc).__name__
+    if "support image input" in message or "image input" in message:
+        return "\n".join([
+            message,
+            (
+                f"当前模型端点不支持图片输入：provider={config.active_provider}，"
+                f"model={config.model}，base_url={config.base_url or '默认 OpenAI'}。"
+            ),
+            "图片粘贴和前端传输已生效，但需要切换到支持 vision/image input 的模型或网关后才能分析图片。",
+        ])
     if exc_name == "ReadTimeout" or "ReadTimeout" in message:
         return "\n".join([
             message,
@@ -158,10 +167,47 @@ def _human_content(message: str, attachments: Optional[list[dict]] = None):
     if not valid_images:
         return message
 
-    content = [{"type": "text", "text": message or "请分析这些图片。"}]
+    content = []
     for item in valid_images:
         content.append({"type": "image_url", "image_url": {"url": item["data_url"]}})
+    content.append({"type": "text", "text": message or "请分析这些图片。"})
     return content
+
+
+def _strip_image_content_from_message(message):
+    content = getattr(message, "content", None)
+    if not isinstance(content, list):
+        return message, False
+
+    text_parts = []
+    removed_images = 0
+    for item in content:
+        if not isinstance(item, dict):
+            continue
+        item_type = item.get("type")
+        if item_type == "text":
+            text_parts.append(str(item.get("text") or ""))
+        elif item_type in {"image_url", "input_image", "image"}:
+            removed_images += 1
+
+    if removed_images == 0:
+        return message, False
+
+    text = "\n".join(part for part in text_parts if part).strip() or "请分析这些图片。"
+    text += f"\n\n[本轮曾包含 {removed_images} 张图片；图片内容已从会话内存中移除，避免后续纯文本请求重复携带图片。]"
+    if hasattr(message, "model_copy"):
+        return message.model_copy(update={"content": text}), True
+    return message.copy(update={"content": text}), True
+
+
+def _strip_image_content_from_messages(messages: list) -> tuple[list, bool]:
+    changed = False
+    stripped = []
+    for message in messages:
+        new_message, message_changed = _strip_image_content_from_message(message)
+        stripped.append(new_message)
+        changed = changed or message_changed
+    return stripped, changed
 
 
 def session_messages_to_langchain(messages: list[dict]) -> list:
@@ -255,9 +301,9 @@ class DesktopAgent:
         self.tools = tools
         self._rebuild_graph()
     
-    def _build_llm(self):
+    def _build_llm(self, model_override: str = ""):
         kwargs = {
-            "model": self.config.model,
+            "model": model_override or self.config.model,
             "api_key": self.config.api_key,
             "temperature": 0,
             "max_retries": self.config.api_max_retries,
@@ -269,6 +315,14 @@ class DesktopAgent:
             if host:
                 configure_host_resolution(host, self.config.api_host_ips)
         return ChatOpenAI(**kwargs)
+
+    def _create_graph(self, model_override: str = ""):
+        return create_react_agent(
+            self._build_llm(model_override),
+            self.tools,
+            prompt=self._build_system_prompt(),
+            checkpointer=self.memory,
+        )
     
     def _build_system_prompt(self) -> str:
         prompt = self.config.system_prompt
@@ -328,27 +382,41 @@ class DesktopAgent:
             f"threshold={compaction_threshold_tokens(self.config.model, self.config.context_window_tokens)}"
         )
 
+    async def _strip_checkpoint_images(self, run_config: dict, graph=None):
+        graph = graph or self._graph
+        if not graph:
+            return
+        try:
+            snapshot = await graph.aget_state(run_config)
+        except Exception:
+            return
+        values = getattr(snapshot, "values", {}) or {}
+        messages = list(values.get("messages") or [])
+        if not messages:
+            return
+        stripped, changed = _strip_image_content_from_messages(messages)
+        if changed:
+            await graph.aupdate_state(run_config, {"messages": checkpoint_replacement(stripped)})
+
     def _thread_key(self) -> str:
         return f"{self._user_id}:{self._thread_id}"
     
     def _rebuild_graph(self):
-        self._graph = create_react_agent(
-            self.llm,
-            self.tools,
-            prompt=self._build_system_prompt(),
-            checkpointer=self.memory,
-        )
+        self._graph = self._create_graph()
     
     async def run(
         self,
         message: str,
         history: Optional[list[dict]] = None,
         attachments: Optional[list[dict]] = None,
+        model_override: str = "",
     ) -> tuple[str, list[dict]]:
         """处理用户消息，返回 (最终回复, 中间步骤列表)"""
         config = self._run_config()
+        graph = self._create_graph(model_override) if model_override else self._graph
         input_messages = []
         thread_key = self._thread_key()
+        await self._strip_checkpoint_images(config, graph)
         if thread_key not in self._hydrated_threads:
             input_messages = compact_history_messages(session_messages_to_langchain(history or []), self.config)
         current_content = _human_content(message, attachments)
@@ -356,7 +424,7 @@ class DesktopAgent:
         
         try:
             await self._compact_checkpoint_if_needed(config)
-            result = await self._graph.ainvoke(
+            result = await graph.ainvoke(
                 {"messages": input_messages},
                 config,
             )
@@ -401,17 +469,22 @@ class DesktopAgent:
             return f"❌ 执行出错: {_connection_diagnostic(e, self.config)}", []
         finally:
             self._hydrated_threads.add(thread_key)
+            if attachments:
+                await self._strip_checkpoint_images(config, graph)
     
     async def stream_run(
         self,
         message: str,
         history: Optional[list[dict]] = None,
         attachments: Optional[list[dict]] = None,
+        model_override: str = "",
     ) -> AsyncGenerator[str, None]:
         """流式处理用户消息，yield SSE 格式事件"""
         run_config = self._run_config()
+        graph = self._create_graph(model_override) if model_override else self._graph
         input_messages = []
         thread_key = self._thread_key()
+        await self._strip_checkpoint_images(run_config, graph)
         if thread_key not in self._hydrated_threads:
             input_messages = compact_history_messages(session_messages_to_langchain(history or []), self.config)
         input_messages.append(HumanMessage(content=_human_content(message, attachments)))
@@ -431,7 +504,7 @@ class DesktopAgent:
         
         try:
             await self._compact_checkpoint_if_needed(run_config)
-            event_iter = self._graph.astream_events(input_data, run_config, version="v2").__aiter__()
+            event_iter = graph.astream_events(input_data, run_config, version="v2").__aiter__()
             pending_event = asyncio.create_task(event_iter.__anext__())
             while True:
                 try:
@@ -567,6 +640,8 @@ class DesktopAgent:
             if pending_event and not pending_event.done():
                 pending_event.cancel()
             self._hydrated_threads.add(thread_key)
+            if attachments:
+                await self._strip_checkpoint_images(run_config, graph)
             if not cancelled:
                 if not usage_recorded:
                     self.tracker.record_model_call(

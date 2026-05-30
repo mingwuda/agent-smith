@@ -648,6 +648,16 @@ def _display_user_message(message: str, attachments: list[dict]) -> str:
     return (message or "请分析这些图片。") + suffix
 
 
+def _image_model_override(attachments: list[dict]) -> str:
+    if not attachments or not agent:
+        return ""
+    cfg = agent.config
+    model = (cfg.model or "").strip().lower()
+    if "mimo" in model and model not in {"mimo-v2.5", "mimo-v2-omni"}:
+        return "mimo-v2.5"
+    return ""
+
+
 def _format_loaded_skills() -> str:
     skills = sorted(get_registry().list_all(), key=lambda item: item.name)
     if not skills:
@@ -699,13 +709,19 @@ async def run_agent(req: RunRequest, request: Request):
 
     attachments = _safe_attachments(req.attachments)
     session_store.add_message(uid, session_id, "user", _display_user_message(req.message, attachments))
+    model_override = _image_model_override(attachments)
     if _is_skill_inventory_query(req.message):
         result = _format_loaded_skills()
         _save_assistant_result(uid, session_id, req.message, result)
         return RunResponse(result=result, steps=[])
 
     agent.switch_thread(session_id)
-    result, steps = await agent.run(req.message, history=history_messages, attachments=attachments)
+    result, steps = await agent.run(
+        req.message,
+        history=history_messages,
+        attachments=attachments,
+        model_override=model_override,
+    )
     artifact_paths = [
         str(step.get("args", {}).get("path", ""))
         for step in steps
@@ -735,6 +751,7 @@ async def run_agent_stream(req: RunRequest, request: Request):
 
     attachments = _safe_attachments(req.attachments)
     session_store.add_message(uid, session_id, "user", _display_user_message(req.message, attachments))
+    model_override = _image_model_override(attachments)
     if _is_skill_inventory_query(req.message):
         result = _format_loaded_skills()
         _save_assistant_result(uid, session_id, req.message, result)
@@ -754,7 +771,14 @@ async def run_agent_stream(req: RunRequest, request: Request):
     
     async def event_stream():
         final_content = ""
-        stream = agent.stream_run(req.message, history=history_messages, attachments=attachments)
+        if model_override:
+            yield f"data: {json.dumps({'type': 'model_switch', 'model': model_override, 'reason': '图片输入'}, ensure_ascii=False)}\n\n"
+        stream = agent.stream_run(
+            req.message,
+            history=history_messages,
+            attachments=attachments,
+            model_override=model_override,
+        )
         try:
             async for sse_event in stream:
                 if await request.is_disconnected():

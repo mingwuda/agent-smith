@@ -22,6 +22,7 @@ _ALLOWED_SUBCOMMANDS = {
     "rev-parse",
     "ls-files",
     "push",
+    "revert",
 }
 _BLOCKED_ARGS = {"--output", "--output=", "-o", "--exec", "--ext-diff"}
 _MAX_OUTPUT_CHARS = 20000
@@ -130,6 +131,12 @@ def _validate_args(args: list[str]) -> Optional[str]:
         ):
             return None
         return "❌ git push 仅允许: git push、git push origin branch 或 git push -u origin branch"
+    if subcommand == "revert":
+        if len(args) == 2 and _is_safe_single_revision(args[1]):
+            return None
+        if len(args) == 3 and args[1] in {"--no-commit", "-n"} and _is_safe_single_revision(args[2]):
+            return None
+        return "❌ git revert 仅允许: git revert <revision> 或 git revert --no-commit <revision>"
     return None
 
 
@@ -138,6 +145,13 @@ def _is_safe_git_ref(value: str) -> bool:
         return False
     blocked_chars = set(" \t\n\r:;|&<>`$\\")
     return not any(char in blocked_chars for char in value)
+
+
+def _is_safe_single_revision(value: str) -> bool:
+    if not _is_safe_git_ref(value):
+        return False
+    blocked_patterns = ("..", "^@", "^!", "^{")
+    return not any(pattern in value for pattern in blocked_patterns)
 
 
 def _current_branch(path: str = "") -> str:
@@ -249,8 +263,19 @@ def git_push(path: str = "", remote: str = "origin", branch: str = "", set_upstr
 
 
 @tool
+def git_revert(revision: str, path: str = "", no_commit: bool = False) -> str:
+    """回退指定 Git 提交。默认创建一个反向提交；no_commit=True 时只应用反向改动不提交，便于检查。"""
+    revision = (revision or "").strip()
+    if not _is_safe_single_revision(revision):
+        return "❌ revision 不能为空，且不能包含危险字符"
+    if no_commit:
+        return _run_git(["revert", "--no-commit", revision], path)
+    return _run_git(["revert", revision], path)
+
+
+@tool
 def git_command(command: str, path: str = "") -> str:
-    """执行受限的 Git 命令。允许查看类命令、add/commit，以及受限 push；不允许 pull/reset/restore。"""
+    """执行受限的 Git 命令。允许查看类命令、add/commit、受限 push/revert；不允许 pull/reset/restore。"""
     try:
         args = shlex.split(command)
     except ValueError as exc:
@@ -269,5 +294,6 @@ TOOLS = [
     git_commit,
     git_commit_all,
     git_push,
+    git_revert,
     git_command,
 ]

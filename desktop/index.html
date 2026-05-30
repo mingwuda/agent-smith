@@ -913,6 +913,10 @@ function handleStreamEvent(data) {
       showGeneratingBadge(data.message || '后端仍在处理...');
       container.scrollTop = container.scrollHeight;
       break;
+
+    case 'model_switch':
+      addMessage(`本轮${data.reason || '请求'}已自动切换到支持的模型：${data.model}`, 'system');
+      break;
     
     case 'token':
       hideTyping();
