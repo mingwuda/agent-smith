@@ -1,93 +1,81 @@
-# Desktop Agent 桌面 AI 智能体
+# Desktop Agent
 
-> 一个 LangGraph + FastAPI 驱动的桌面 AI 智能体，支持文件操作、代码执行、网页搜索与抓取、Skills 插件扩展、会话持久化。
+Desktop Agent 是一个本地/私有部署的桌面 AI 智能体。它基于 FastAPI、LangGraph 和 OpenAI 兼容模型接口，提供聊天式任务执行、工具调用、文件制品下载、Skills 技能扩展、多用户隔离、长期记忆和可视化执行过程。
+
+适合用作个人或团队内网的项目助手：读写工作区文件、运行 Python、搜索网页、管理 Git、生成文档、分析图片、委派子代理处理独立任务。
 
 ---
 
-## 功能概览
+## 核心能力
 
-| 功能 | 说明 |
-|------|------|
-| 🤖 **AI Agent 核心** | LangGraph ReAct Agent，自主规划 + 执行任务 |
-| 📁 **文件操作** | 读写文件、管理目录、搜索文件、工作区隔离 |
-| 🐍 **代码执行** | 沙箱执行 Python 代码，适合数据分析与脚本测试 |
-| 🌿 **Git 操作** | 查看仓库状态、diff、提交日志和指定 revision 内容；用户明确要求时可暂存并创建本地提交 |
-| 🌐 **网页搜索** | 使用 `web_search` 搜索网页，使用 `web_fetch` 抓取网页正文 |
-| 💻 **系统信息** | 获取 OS、Python 版本、磁盘空间等信息 |
-| 🧑‍💻 **子代理** | 通过 `delegate_task` 将独立任务委派给 coder / reviewer / debugger 子代理，同步执行并预留并行任务状态模型 |
-| 🧩 **Skills 插件** | 基于 `SKILL.md` 的热加载技能系统，支持 YAML frontmatter、触发词匹配和项目内 `.opencode/skills` |
-| 📊 **用量追踪** | 区分模型 Token 与工具调用次数，按会话/日/Provider/模型统计 |
-| 💬 **会话管理** | 多会话按用户持久化到 SQLite，切换/删除/自动命名 |
-| ⚙️ **设置持久化** | API Key、模型、地址保存在配置文件，重启不丢失 |
-| 🔐 **登录保护** | 内置多用户登录页，未登录无法访问操作页面和 API，支持短期 URL Token 免密登录 |
-| 🧠 **长期记忆** | 按用户隔离保存长期偏好、项目事实和常用环境信息，可在页面中管理 |
-| 🖥 **桌面 UI** | Markdown 渲染聊天界面，暗色侧边栏，实时状态面板，支持流式回复、工具步骤展示、技能列表滚动和悬浮描述 |
+| 能力 | 说明 |
+| --- | --- |
+| 聊天式 Agent | LangGraph ReAct Agent，支持流式输出、思考/工具步骤展示、长任务进度提示和终止任务 |
+| 多行与图片输入 | 输入框支持多行文本、粘贴图片；图片只用于当轮分析，不把 base64 写入历史 |
+| 多模态模型切换 | MiMo 系列发图时，如果当前模型不支持图片，会本轮临时切换到 `mimo-v2.5` |
+| 文件工具 | 读写/追加/删除/列出/搜索工作区文件，大文件只返回摘要和路径，避免撑爆上下文 |
+| 文件制品 | AI 生成工作区文件后自动追加下载链接；Markdown 文件支持弹窗预览 |
+| Python 执行 | 运行 Python 代码并返回输出；超大输出只返回摘要、开头和结尾 |
+| 网页能力 | `web_search` 搜索网页，`web_fetch` 抓取正文；带重试和兜底请求 |
+| Git 工具 | 查看状态、diff、日志、show；按明确指令 add/commit/push/revert |
+| 子代理 | `delegate_task` 委派 coder / reviewer / debugger，同步执行，状态结构已为并行预留 |
+| Skills | 加载 `SKILL.md`，兼容 YAML frontmatter 和 oh-my-openagent / Superpowers 风格技能 |
+| 长期记忆 | 按用户隔离保存长期偏好、项目事实和常用环境信息 |
+| 多用户 | 登录保护、管理员用户管理、每个用户独立工作区、会话、用量和记忆 |
+| 上下文管理 | 按模型上下文窗口估算长度，达到阈值时压缩历史；大日志/大文件不直接塞全文 |
+| 用量统计 | 按用户、会话、Provider、模型和工具统计调用与 token |
 
 ---
 
 ## 快速开始
 
-### 前置条件
+### 环境要求
 
-- Python 3.10+（推荐 3.13）
-- 一个 LLM API Key（支持 OpenAI / DeepSeek / 通义千问 等兼容接口）
+- Python 3.10+，推荐 3.12/3.13
+- 一个 OpenAI 兼容模型 API Key
+- 可选：Git、curl、Windows 打包环境
 
-### 1. 克隆
+### 启动
 
 ```bash
 git clone https://gitee.com/mingwuda/desktop-agent.git
 cd desktop-agent
-```
-
-### 2. 安装依赖
-
-```bash
 pip install -r requirements.txt
-```
-
-### 3. 启动
-
-```bash
 ./start.sh
 ```
 
-浏览器打开 **http://127.0.0.1:8899/** 即可使用。
+启动后打开：
 
-也可以手动从后端入口启动：
+```text
+http://127.0.0.1:8899/
+```
+
+也可以直接启动后端：
 
 ```bash
 cd agent_core
 python main.py
 ```
 
-Windows 也可以在项目根目录直接双击或执行：
+Windows 可执行：
 
 ```cmd
 start.cmd
 ```
 
-它会自动创建 `.venv`、安装依赖并启动服务。
+首次启动会创建配置、认证和用户数据目录。默认如果没有配置用户，会创建 `admin / admin123`，正式部署请立即修改。
 
-如果要排查 Windows 依赖安装问题，可以先执行一个全新的在线验证环境：
+---
 
-```cmd
-packaging\windows\verify-venv.cmd
+## 登录与多用户
+
+服务默认启用登录保护。认证文件位于：
+
+```text
+~/.desktop_agent/auth.json
 ```
 
-如需使用内网 PyPI 镜像，可在执行脚本前设置：
-
-```cmd
-set DESKTOP_AGENT_PIP_INDEX_URL=http://your-internal-pypi/simple/
-set DESKTOP_AGENT_PIP_TRUSTED_HOST=your-internal-pypi-host
-```
-
-验证通过后，也可以直接用这个环境启动：
-
-```cmd
-packaging\windows\verify-venv.cmd run
-```
-
-首次公网部署时建议先配置登录密码，避免服务裸露：
+可通过环境变量初始化登录配置：
 
 ```bash
 export DESKTOP_AGENT_AUTH_USER=admin
@@ -95,9 +83,7 @@ export DESKTOP_AGENT_AUTH_PASSWORD='your-strong-password'
 export DESKTOP_AGENT_AUTH_SECRET='replace-with-a-random-secret'
 ```
 
-如果未显式设置密码，服务会在 `~/.desktop_agent/auth.json` 中自动生成一组本机登录凭据。
-
-启动过一次服务后，可以生成短期免密登录链接，适合本机或可信内网临时访问：
+支持短期免密登录链接：
 
 ```bash
 python generate_login_url.py --host 127.0.0.1 --port 8899 --expires 300 --user admin
@@ -105,96 +91,292 @@ python generate_login_url.py --host 127.0.0.1 --port 8899 --expires 300 --user a
 
 可选参数：
 
-- `--qr`：在终端输出二维码（需要安装 `qrcode`）
-- `--copy`：复制链接到剪贴板（需要安装 `pyperclip`）
+- `--qr`：在终端显示二维码
+- `--copy`：复制到剪贴板
 
-### 4. 配置 API Key
+多用户数据按用户隔离：
 
-打开页面后，点击右上角 **⚙️ 设置**，选择模型厂商并填写对应配置：
-
-| 字段 | 说明 | 示例 |
-|------|------|------|
-| 模型厂商 | 当前使用的模型服务商 | `OpenAI` / `DeepSeek` / `通义千问` / `自定义` |
-| API Key | 你的 LLM API 密钥 | `sk-xxx...` |
-| 模型名称 | 使用的模型 | `gpt-4o` / `deepseek-chat` / `qwen-plus` |
-| API 地址 | OpenAI 兼容 API 地址（可选） | `https://api.deepseek.com` / 留空用 OpenAI |
-
-内置支持 OpenAI、DeepSeek、通义千问；也可以新增多个自定义厂商，为每个厂商分别保存名称、API Key、模型和 API 地址。配置完成后，可以在顶部状态区的厂商/模型下拉框中快速切换。
-
-保存后自动生效，无需重启。
-
-设置中还可以调整 **最大推理步数**，用于控制 LangGraph ReAct Agent 单次任务的最大循环步数。复杂任务可以适当调大，默认值为 `60`。
-
-模型 API 请求默认会对连接错误进行重试，避免网络短抖动时立即失败。默认最多重试 `3` 次，请求超时为 `30` 秒；可通过环境变量调整：
-
-```bash
-export AGENT_API_MAX_RETRIES=3
-export AGENT_API_TIMEOUT_SECONDS=30
+```text
+~/.desktop_agent/users/{user_id}/sessions/sessions.sqlite3
+~/.desktop_agent/users/{user_id}/usage/usage.sqlite3
+~/.desktop_agent/users/{user_id}/memory/
+~/agent_workspace/{user_id}/
 ```
 
-如果某些自定义模型网关的 DNS 在 Python 运行时里不稳定，可以通过 `AGENT_API_HOST_IPS` 指定兜底 IP，多个 IP 用英文逗号分隔。服务默认不会内置任何厂商 IP；只有显式配置后，才会在正常 DNS 失败时轮换这些 IP。这个选项主要用于运维排障，不建议普通部署默认配置。
-
-### 5. 开始对话
-
-在输入框发送消息，Agent 会自动调用工具完成任务。例如：
-
-> 「帮我列出工作区文件」
->
-> 「写一段 Python 代码计算斐波那契数列，然后运行它」
->
-> 「告诉我系统信息」
->
-> 「搜索一下今天的 AI 新闻」
->
-> 「打开这个链接并总结正文：https://example.com/article」
->
-> 「看一下这个仓库当前有哪些改动」
->
-> 「把当前改动提交一下，提交信息是：完善 Skills 支持」
->
-> 「帮我写一份日报」
->
-> 「记住：我希望回复默认使用中文」
-
-Git 工具提供 `git_status`、`git_diff`、`git_log`、`git_show`、`git_add`、`git_commit`、`git_commit_all`、`git_push`、`git_revert` 和受限的 `git_command`。只有用户明确要求提交代码时，Agent 才应暂存并创建本地 commit；只有用户明确要求推送代码时，Agent 才应执行 push；只有用户明确要求回退版本时，Agent 才应执行 revert；默认不开放 `pull`、`reset`、`restore` 等高风险操作。
-`git_push` 支持用户明确要求“推送代码”时执行受限推送：默认 `git push`，或 `git push origin <branch>` / `git push -u origin <branch>`；不支持 force、tags、删除远端分支等高风险参数。
-`git_revert` 支持用户明确要求“回退版本/撤销某个提交”时执行受限回退：默认 `git revert <revision>` 创建反向提交，或 `git revert --no-commit <revision>` 先应用反向改动等待检查；不支持 reset、range revert、merge revert 等高风险形态。
+只有 `admin` 用户能看到设置和用户管理相关入口。
 
 ---
 
-## Windows 一键运行包
+## 模型配置
 
-在 Windows 机器上执行以下命令生成可分发包：
+在页面右上角点击“设置”，可以配置：
 
-```cmd
-packaging\windows\build.cmd
-```
+| 字段 | 说明 |
+| --- | --- |
+| 模型厂商 | OpenAI、DeepSeek、通义千问或自定义 Provider |
+| API Key | 模型服务密钥 |
+| 模型名称 | 例如 `gpt-4o`、`deepseek-chat`、`qwen-plus`、`mimo-v2.5-pro` |
+| API 地址 | OpenAI 兼容地址，留空则使用 OpenAI 默认地址 |
+| 最大推理步数 | LangGraph 单次任务最大循环步数，默认 `60` |
+| 请求重试次数 | 模型连接错误重试次数，默认 `3` |
+| 请求超时 | 模型读取超时，默认 `30` 秒 |
+| 上下文窗口 | 当前模型最大上下文长度；留空时按模型名内置估算 |
 
-也可以用 PowerShell：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\packaging\windows\build.ps1
-```
-
-构建完成后会生成：
-
-```text
-dist\windows\DesktopAgent-Windows\
-dist\windows\DesktopAgent-Windows.zip
-```
-
-把 `DesktopAgent-Windows.zip` 发给用户，用户解压后双击 **Start Desktop Agent.bat** 即可启动服务并自动打开浏览器。配置、会话和工作区默认保存在用户目录下：
+配置保存到：
 
 ```text
-%USERPROFILE%\.desktop_agent
-%USERPROFILE%\agent_workspace
+~/.desktop_agent/config.json
 ```
+
+常用环境变量：
+
+| 环境变量 | 说明 | 默认 |
+| --- | --- | --- |
+| `LLM_PROVIDER` | 当前 Provider | `openai` |
+| `LLM_API_KEY` / `OPENAI_API_KEY` | API Key | 空 |
+| `LLM_MODEL` | 模型名称 | `gpt-4o` |
+| `LLM_BASE_URL` / `OPENAI_BASE_URL` | API 地址 | 空 |
+| `AGENT_WORKSPACE` | 工作区根目录 | `~/agent_workspace` |
+| `AGENT_SKILLS_DIR` | 额外 Skills 目录 | 内置 samples |
+| `AGENT_HOST` | 监听地址 | `127.0.0.1` |
+| `AGENT_PORT` | 监听端口 | `8899` |
+| `AGENT_RECURSION_LIMIT` | 最大推理步数 | `60` |
+| `AGENT_API_MAX_RETRIES` | 模型连接错误重试次数 | `3` |
+| `AGENT_API_TIMEOUT_SECONDS` | 模型请求超时秒数 | `30` |
+| `AGENT_CONTEXT_WINDOW_TOKENS` | 手动指定模型上下文窗口 | 自动识别 |
+| `AGENT_API_HOST_IPS` | 自定义模型网关 DNS 兜底 IP 列表 | 空 |
+| `DESKTOP_AGENT_AUTH_COOKIE_SECURE` | Cookie 是否仅 HTTPS 发送 | `0` |
+
+`AGENT_API_HOST_IPS` 只用于 DNS/网络排障，服务不会内置任何厂商 IP。多个 IP 用英文逗号分隔。
+
+### 图片输入与视觉模型
+
+前端支持直接粘贴图片到输入区。后端会把图片转换为 OpenAI 兼容的 `image_url` 消息格式。
+
+图片不会写入 SQLite 历史，也会在本轮完成后从 LangGraph checkpoint 中清理，避免后续纯文本消息重复携带图片。
+
+MiMo 系列模型有特殊处理：当本轮包含图片，且当前模型名包含 `mimo` 但不是 `mimo-v2.5` / `mimo-v2-omni` 时，系统会临时使用 `mimo-v2.5` 执行本轮请求，并在前端显示提示。默认模型设置不会被修改。
 
 ---
 
-## Linux / 远程部署
+## 使用方式
 
-示例：部署到 `/opt/desktop-agent`，监听 `8080` 端口。
+输入框支持：
+
+- `Enter` 换行
+- `Cmd/Ctrl + Enter` 发送
+- 直接粘贴图片
+- 执行中点击“停止”终止当前任务
+
+示例问题：
+
+```text
+帮我列出工作区文件
+写一段 Python 代码计算斐波那契数列并运行
+搜索今天的 AI 新闻并总结
+打开这个链接并总结正文：https://example.com/article
+看一下这个仓库当前有哪些改动
+把当前改动提交一下，提交信息是：完善 Skills 支持
+帮我 push 当前分支
+回退上一个提交
+记住：我希望回复默认使用中文
+```
+
+### Git 工具边界
+
+Git 工具包括：
+
+```text
+git_status
+git_diff
+git_log
+git_show
+git_add
+git_commit
+git_commit_all
+git_push
+git_revert
+git_command
+```
+
+安全策略：
+
+- 只有用户明确要求提交时才使用 `git_add` / `git_commit` / `git_commit_all`
+- 只有用户明确要求推送时才使用 `git_push`
+- 只有用户明确要求回退版本时才使用 `git_revert`
+- `git_push` 只允许普通 push、指定 remote/branch、首次设置 upstream
+- `git_revert` 只允许单个 revision，支持 `--no-commit`
+- 不开放 `pull`、`reset`、`restore`、force push、range revert、merge revert 等高风险操作
+
+---
+
+## 文件制品
+
+如果 Agent 使用 `write_file` 或 `append_to_file` 在工作区生成文件，最终回复会自动追加“可下载文件”区域。
+
+Markdown 文件会同时提供：
+
+- `预览`：在页面弹窗中渲染 Markdown
+- `下载`：直接下载原文件
+
+普通文件只提供下载链接。
+
+---
+
+## 长上下文处理
+
+系统会估算 LangGraph checkpoint 中的消息长度，并根据模型最大上下文窗口的 80% 作为压缩阈值。
+
+内置识别示例：
+
+| 模型 | 上下文窗口 |
+| --- | --- |
+| `gpt-4o` / `gpt-4o-mini` | 128K |
+| `gpt-4.1` / `gpt-4.1-mini` | 1M |
+| `qwen-long` | 1M |
+| `mimo-v2.5-pro` / `mimo-*` | 1M |
+| `deepseek-chat` / `deepseek-reasoner` | 64K |
+
+达到阈值后会压缩旧消息，保留最近上下文。完整历史仍在 SQLite 中，可通过会话记录查看。
+
+大文件、大日志和 Python 超大输出不会完整塞入模型上下文，只返回摘要、路径、开头和结尾。
+
+---
+
+## Skills
+
+Desktop Agent 会加载以下目录中的 `SKILL.md`：
+
+```text
+agent_core/samples/
+AGENT_SKILLS_DIR 指定目录
+项目内 .opencode/skills/
+项目内 .claude/skills/
+项目内 .agents/skills/
+```
+
+支持两种格式：
+
+1. 简单 Markdown 章节：`Description`、`Trigger`、`Instructions`
+2. YAML frontmatter：兼容 oh-my-openagent / Superpowers 风格
+
+示例：
+
+```markdown
+---
+name: systematic-debugging
+description: 系统化定位根因
+triggers: [debug, 排查, 根因]
+---
+
+当用户需要排查问题时：
+1. 先复现现象
+2. 列出假设
+3. 逐步验证
+4. 给出根因和修复建议
+```
+
+侧边栏会显示已加载技能，区域固定高度并支持滚动；鼠标悬停会展示描述和触发词。用户问“你有哪些技能”时，后端会直接返回真实 SkillRegistry 内容，避免模型误报。
+
+当前项目内置/随项目保留的技能包括：
+
+- `daily-report`
+- `frontend-ui-ux`
+- `brainstorming`
+- `writing-plans`
+- `executing-plans`
+- `test-driven-development`
+- `systematic-debugging`
+- `verification-before-completion`
+- `receiving-code-review`
+
+---
+
+## 子代理
+
+`delegate_task` 可以把独立任务委派给子代理：
+
+| 子代理 | 用途 |
+| --- | --- |
+| `coder` | 编码实现、局部修改 |
+| `reviewer` | 代码审查、风险和缺失测试检查 |
+| `debugger` | 系统化排障、根因定位 |
+
+当前版本是同步 MVP：主 Agent 会等待子代理完成再继续。内部保留了 `task_id`、`status`、`result`、`error`、时间戳等状态结构，后续可以在此基础上扩展并行执行。
+
+为了避免递归委派，子代理默认不能再调用 `delegate_task`。
+
+---
+
+## 长期记忆
+
+长期记忆按用户隔离，适合保存：
+
+- 用户偏好：默认语言、回答风格
+- 项目事实：部署目录、端口、常用服务器
+- 长期约定：公网部署必须开启登录保护
+
+工具：
+
+```text
+remember
+recall_memory
+forget_memory
+list_memories
+```
+
+当前采用显式记忆策略：只有用户明确要求“记住/以后记得/保存偏好”时才写入。不要保存 API Key、密码、Cookie、Token 等敏感信息。
+
+页面顶部“记忆”按钮可打开管理面板，支持新增、搜索和删除。
+
+---
+
+## API
+
+启动后访问：
+
+```text
+http://127.0.0.1:8899/docs
+```
+
+主要接口：
+
+| 端点 | 方法 | 说明 |
+| --- | --- | --- |
+| `/` | GET | 桌面 UI |
+| `/login` | GET | 登录页 |
+| `/auth/login` | POST | 登录 |
+| `/auth/logout` | POST | 退出 |
+| `/auth/token-login` | GET | 短期 Token 登录 |
+| `/run` | POST | 非流式执行 |
+| `/run/stream` | POST | SSE 流式执行 |
+| `/sessions` | GET/POST | 列出或创建会话 |
+| `/sessions/{id}` | GET/DELETE | 获取或删除会话 |
+| `/sessions/{id}/rename` | PUT | 重命名会话 |
+| `/skills` | GET | 列出 Skills |
+| `/skills/reload` | POST | 热加载 Skills |
+| `/subagents` | GET | 列出子代理类型 |
+| `/subagents/tasks/{id}` | GET | 查询子代理任务 |
+| `/memories` | GET/POST | 查询或保存长期记忆 |
+| `/memories/{key}` | DELETE | 删除长期记忆 |
+| `/artifacts/download` | GET | 下载工作区文件制品 |
+| `/artifacts/preview` | GET | 预览 Markdown 制品 |
+| `/settings` | GET/POST | 读取或保存配置 |
+| `/usage` | GET | 今日用量 |
+| `/usage/session` | GET | 会话用量 |
+| `/usage/history` | GET | 历史用量 |
+| `/users` | GET/POST | 管理用户 |
+| `/users/{user_id}` | DELETE | 删除用户 |
+| `/users/me` | GET | 当前登录用户 |
+| `/health` | GET | 健康检查 |
+
+除登录、退出、Token 登录和健康检查外，其它 API 都需要登录。
+
+---
+
+## 远程部署
+
+示例部署到 `/opt/desktop-agent`，监听 `8080`：
 
 ```bash
 git clone https://gitee.com/mingwuda/desktop-agent.git /opt/desktop-agent
@@ -204,10 +386,9 @@ python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
 ```
 
-创建 systemd 服务：
+systemd 示例：
 
 ```ini
-# /etc/systemd/system/desktop-agent.service
 [Unit]
 Description=Desktop Agent
 After=network-online.target
@@ -230,7 +411,7 @@ RestartSec=3
 WantedBy=multi-user.target
 ```
 
-启动服务：
+启动：
 
 ```bash
 systemctl daemon-reload
@@ -239,287 +420,112 @@ systemctl restart desktop-agent
 systemctl status desktop-agent
 ```
 
-打开 `http://服务器IP:8080/`，登录后即可进入操作页面。
-
-常用运维命令：
+查看日志：
 
 ```bash
 journalctl -u desktop-agent -f
-systemctl restart desktop-agent
-systemctl is-active desktop-agent
+```
+
+公网部署建议放在 HTTPS 反向代理后，并设置强密码和固定 `DESKTOP_AGENT_AUTH_SECRET`。
+
+---
+
+## Windows 打包
+
+生成可分发包：
+
+```cmd
+packaging\windows\build.cmd
+```
+
+或：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\packaging\windows\build.ps1
+```
+
+输出：
+
+```text
+dist\windows\DesktopAgent-Windows\
+dist\windows\DesktopAgent-Windows.zip
+```
+
+用户解压后双击 `Start Desktop Agent.bat` 即可启动。配置、会话和工作区默认保存在用户目录。
+
+依赖排查：
+
+```cmd
+packaging\windows\verify-venv.cmd
+packaging\windows\verify-venv.cmd run
+```
+
+内网 PyPI：
+
+```cmd
+set DESKTOP_AGENT_PIP_INDEX_URL=http://your-internal-pypi/simple/
+set DESKTOP_AGENT_PIP_TRUSTED_HOST=your-internal-pypi-host
 ```
 
 ---
 
 ## 项目结构
 
-```
+```text
 desktop-agent/
-├── agent_core/                    # Python 后端
-│   ├── main.py                    # FastAPI 入口 + 所有 API 路由
-│   ├── agent.py                   # DesktopAgent 核心（LangGraph）
-│   ├── subagents.py               # 子代理运行时（同步 MVP + 任务状态模型）
-│   ├── config.py                  # 配置管理（文件 + 环境变量）
-│   ├── session_store.py           # 会话 SQLite 存储 + 旧 JSON 自动迁移
+├── agent_core/
+│   ├── main.py                 # FastAPI 入口、API、认证、用户与制品路由
+│   ├── agent.py                # DesktopAgent、LangGraph、流式事件、上下文处理
+│   ├── config.py               # Provider、模型、环境变量和配置持久化
+│   ├── context_manager.py      # 上下文估算、阈值和压缩
+│   ├── subagents.py            # coder/reviewer/debugger 子代理
+│   ├── session_store.py        # SQLite 会话存储
+│   ├── user_manager.py         # 多用户数据目录
 │   ├── memory/
-│   │   └── local_memory.py        # 本地长期记忆存储
-│   ├── tools/
-│   │   ├── file_tools.py          # 文件操作（读写/列目录/搜索/删除）
-│   │   ├── code_tools.py          # Python 代码执行
-│   │   ├── git_tools.py           # Git 工具（status/diff/log/show/add/commit 等）
-│   │   ├── system_tools.py        # 系统信息获取
-│   │   ├── memory_tools.py        # 长期记忆工具（显式记忆/查询/删除）
-│   │   └── web_tools.py           # 网页搜索与正文抓取
-│   ├── skills/
-│   │   ├── loader.py              # SKILL.md 解析器
-│   │   └── registry.py            # 技能注册表（热加载/触发词匹配）
+│   │   └── local_memory.py     # 长期记忆
 │   ├── monitoring/
-│   │   └── usage_tracker.py       # Token 用量追踪
-│   └── samples/daily-report/
-│       └── SKILL.md               # 示例技能：日报生成
-├── .opencode/skills/              # 项目内 Skills（兼容 oh-my-openagent / Superpowers 风格）
-│   ├── frontend-ui-ux/
-│   ├── test-driven-development/
-│   ├── systematic-debugging/
-│   ├── verification-before-completion/
-│   ├── brainstorming/
-│   ├── writing-plans/
-│   ├── executing-plans/
-│   └── receiving-code-review/
-├── desktop/                       # 前端 UI
-│   ├── index.html                 # 单页聊天应用
-│   └── package.json
-├── start.sh                       # 启动脚本
-├── start.cmd                      # Windows 启动脚本
-├── generate_login_url.py          # 生成短期 URL Token 登录链接
-├── requirements.txt               # Python 依赖
-└── .gitignore
+│   │   └── usage_tracker.py    # 用量统计
+│   ├── skills/
+│   │   ├── loader.py           # SKILL.md 解析
+│   │   └── registry.py         # SkillRegistry
+│   └── tools/
+│       ├── file_tools.py       # 文件工具
+│       ├── code_tools.py       # Python 执行
+│       ├── git_tools.py        # Git 工具
+│       ├── web_tools.py        # 搜索和网页抓取
+│       ├── memory_tools.py     # 记忆工具
+│       └── system_tools.py     # 系统信息和 Skills 列表
+├── desktop/
+│   └── index.html              # 单页前端
+├── .opencode/skills/           # 项目内 Skills
+├── packaging/windows/          # Windows 打包脚本
+├── start.sh
+├── start.cmd
+├── generate_login_url.py
+└── requirements.txt
 ```
-
----
-
-## API 文档
-
-启动后访问 **http://127.0.0.1:8899/docs** 可交互式测试所有接口。启用登录保护后，除 `/login`、`/auth/login`、`/auth/logout`、`/auth/token-login`、`/health` 外，其它页面和 API 都需要先登录。
-
-| 端点 | 方法 | 说明 |
-|------|------|------|
-| `/` | GET | 桌面 UI |
-| `/login` | GET | 登录页 |
-| `/auth/login` | POST | 登录并写入 HttpOnly Cookie |
-| `/auth/logout` | POST | 退出登录 |
-| `/auth/token-login` | GET | 使用短期 URL Token 登录 |
-| `/run` | POST | 发送消息给 Agent |
-| `/run/stream` | POST | SSE 流式发送消息给 Agent，返回 token、思考、工具调用和完成事件 |
-| `/sessions` | GET | 列出所有会话 |
-| `/sessions` | POST | 创建新会话 |
-| `/sessions/{id}` | GET | 获取会话消息历史 |
-| `/sessions/{id}` | DELETE | 删除会话 |
-| `/sessions/{id}/rename` | PUT | 重命名会话 |
-| `/skills` | GET | 列出已加载技能（含格式、来源、触发词、是否声明 MCP） |
-| `/skills/reload` | POST | 热加载所有技能 |
-| `/subagents` | GET | 列出可用子代理类型 |
-| `/subagents/tasks/{id}` | GET | 查询子代理任务状态 |
-| `/settings` | GET | 获取当前配置 |
-| `/settings` | POST | 保存配置并重启 Agent |
-| `/usage` | GET | 今日用量统计 |
-| `/usage/session` | GET | 当前会话用量 |
-| `/usage/history` | GET | 历史用量（支持 `?days=7`） |
-| `/memories` | GET | 列出或搜索长期记忆 |
-| `/memories` | POST | 保存长期记忆 |
-| `/memories/{key}` | DELETE | 删除长期记忆 |
-| `/users` | GET | 列出用户 |
-| `/users` | POST | 创建用户 |
-| `/users/{user_id}` | DELETE | 删除用户及其数据 |
-| `/users/me` | GET | 获取当前登录用户 |
-| `/health` | GET | 健康检查 |
-
----
-
-## 子代理
-
-当前版本提供同步子代理 MVP，主 Agent 可通过 `delegate_task` 工具委派独立任务：
-
-- `coder`：编码实现建议和修改执行
-- `reviewer`：代码审查，重点检查 bug、回归风险、边界条件和缺失测试
-- `debugger`：系统化排查问题，输出假设、验证步骤和根因判断
-
-第一版 `delegate_task` 会同步等待子代理完成并返回结果。内部已经保留 `task_id`、`status`、`result`、`error`、时间戳等任务状态，可通过 `/subagents/tasks/{id}` 查询。后续要扩展并行执行时，可以在现有 `SubagentManager` 上增加异步 `task_create` / `task_result` API，而不需要推翻工具和状态结构。
-
-当前限制：
-
-- 子代理不是独立进程，仍运行在同一服务进程内。
-- 第一版不做真正后台并行，也没有 team mode 成员通信。
-- 子代理可用工具由主服务配置，默认会过滤掉 `delegate_task`，避免递归委派。
-
----
-
-## Skills 插件开发
-
-### 最小 Skill 结构
-
-```
-my-skill/
-└── SKILL.md
-```
-
-### SKILL.md 示例
-
-```markdown
-# 日报生成助手
-
-## Description
-自动生成结构化日报，按项目分类今日工作
-
-## Trigger
-写日报、今日总结、生成日报、每日汇报
-
-## Instructions
-1. 询问用户今天完成了哪些工作
-2. 按项目分类整理
-3. 生成 markdown 格式的日报文件
-4. 保存到工作区的 reports/ 目录
-
-## Tools Required
-file_write
-```
-
-将 Skill 目录放到 `agent_core/samples/`、项目内 `.opencode/skills/`、`.claude/skills/`、`.agents/skills/`，或通过 `AGENT_SKILLS_DIR` 指定目录，然后调用 `/skills/reload` 即可热加载。
-
-### oh-my-openagent Skill 兼容
-
-当前已支持第一阶段兼容：可以直接加载带 YAML frontmatter 的 `SKILL.md`，并自动扫描 oh-my-openagent 常见目录：
-
-- `agent_core/samples/`
-- `~/.config/opencode/skills/`
-- 当前项目下的 `.opencode/skills/`
-- 当前项目下的 `.claude/skills/`
-- 当前项目下的 `.agents/skills/`
-
-也可以通过 `AGENT_SKILLS_DIR` 指定额外目录；多个目录用系统路径分隔符连接（macOS/Linux 为 `:`，Windows 为 `;`）。
-
-```markdown
----
-name: router-project-helper
-description: 智能路由项目脚手架助手
-triggers: [智能路由, 路由项目, 脚手架]
-mcp:
-  servers:
-    example: {}
----
-
-当用户需要创建智能路由项目时：
-1. 先确认目标平台和路由协议
-2. 生成项目目录结构
-3. 输出 README 和启动脚本
-```
-
-说明：
-- `name`、`description`、`trigger` / `triggers` 会被解析为技能元数据。
-- 如果没有 `## Instructions`，frontmatter 后的正文会作为技能说明注入系统提示词。
-- `mcp` 字段当前只会被识别并在 `/skills` 中标记，暂不启动或执行 MCP Server。
-
-### 当前随项目导入的 Skills
-
-项目内 `.opencode/skills/` 目前保留少量适配当前系统的纯提示词型技能：
-
-- `frontend-ui-ux`：界面与交互体验设计
-- `brainstorming`：需求澄清和方案推敲
-- `writing-plans`：实现计划拆解
-- `executing-plans`：按计划执行
-- `test-driven-development`：TDD 红绿重构流程
-- `systematic-debugging`：系统化定位根因
-- `verification-before-completion`：完成前验证
-- `receiving-code-review`：处理代码评审反馈
-
-加上内置示例 `agent_core/samples/daily-report`，默认会加载 9 个 Skills。侧边栏会展示已加载技能，列表区域固定高度并支持滚动；鼠标悬停在技能名称上会显示描述和触发词。
-
-用户询问“你有哪些技能”“已加载哪些 Skills”等问题时，后端会直接从 `SkillRegistry` 返回真实技能清单，避免模型把底层工具能力误报为 Skills。
-
----
-
-## 配置说明
-
-配置文件路径：`~/.desktop_agent/config.json`
-
-登录凭据文件路径：`~/.desktop_agent/auth.json`
-
-用户数据根目录：`~/.desktop_agent/users/{user_id}/`
-
-会话数据库路径：`~/.desktop_agent/users/{user_id}/sessions/sessions.sqlite3`
-
-用量数据库路径：`~/.desktop_agent/users/{user_id}/usage/usage.sqlite3`
-
-长期记忆文件路径：`~/.desktop_agent/users/{user_id}/memory/*.json`
-
-支持通过环境变量覆盖：
-
-| 环境变量 | 对应配置 | 默认值 |
-|---------|---------|--------|
-| `LLM_PROVIDER` | 当前模型厂商 | `openai` |
-| `LLM_API_KEY` / `OPENAI_API_KEY` | API Key | - |
-| `LLM_MODEL` | 模型名称 | `gpt-4o` |
-| `LLM_BASE_URL` / `OPENAI_BASE_URL` | API 地址 | - |
-| `AGENT_WORKSPACE` | 工作区目录 | `~/agent_workspace` |
-| `AGENT_SKILLS_DIR` | Skills 目录 | 内置 samples |
-| `AGENT_HOST` | 监听地址 | `127.0.0.1` |
-| `AGENT_PORT` | 监听端口 | `8899` |
-| `AGENT_RECURSION_LIMIT` | 最大推理步数 | `60` |
-| `DESKTOP_AGENT_AUTH_USER` | 登录用户名 | `admin` |
-| `DESKTOP_AGENT_AUTH_PASSWORD` | 登录密码 | 自动生成 |
-| `DESKTOP_AGENT_AUTH_SECRET` | Cookie 签名密钥 | 自动生成 |
-| `DESKTOP_AGENT_AUTH_COOKIE_SECURE` | Cookie 是否仅 HTTPS 发送 | `0` |
-
-### URL Token 登录
-
-`generate_login_url.py` 会读取 `~/.desktop_agent/auth.json` 中的签名密钥，生成默认 5 分钟有效的登录链接。多用户场景可以用 `--user` 指定用户：
-
-```bash
-python generate_login_url.py --host 192.168.1.100 --port 8899 --expires 300 --user test
-```
-
-服务端验证通过后会写入正常的 7 天会话 Cookie，并跳转到主页。Token 过期或签名无效时会提示重新登录。公网部署时仍建议优先使用固定密码和 HTTPS，URL Token 只用于可信场景下的临时访问。
-
-### 用量统计说明
-
-用量记录按用户保存在 `~/.desktop_agent/users/{user_id}/usage/usage.sqlite3` 的 `usage_records` 表中。
-
-- `model_calls`：模型调用次数
-- `tool_calls`：工具调用次数
-- `total_input_tokens` / `total_output_tokens`：只统计模型 Token
-- `provider_breakdown`：按模型厂商聚合
-- `model_breakdown`：按 `provider:model` 聚合
-- `tool_breakdown`：按工具名统计调用次数
-
-工具返回内容不会计入模型 Token。
-
-### 长期记忆说明
-
-长期记忆用于保存跨会话、跨重启仍有价值的信息，例如：
-
-- 用户偏好：默认语言、回答风格
-- 项目事实：部署目录、端口、常用服务器
-- 长期约定：公网部署必须开启登录保护
-
-当前采用显式记忆策略：只有用户明确要求“记住/以后记得/保存偏好”时，Agent 才会调用 `remember` 工具写入当前登录用户的长期记忆。不要保存 API Key、密码、Cookie、Token 等敏感信息。
-
-页面顶部 **记忆** 按钮可打开记忆管理面板，支持新增、搜索和删除。
 
 ---
 
 ## 技术栈
 
 | 层面 | 技术 |
-|------|------|
-| Agent 框架 | **LangGraph** (ReAct Agent) |
-| 大模型接口 | **LangChain OpenAI** (兼容 OpenAI / DeepSeek / 通义等) |
-| Web 框架 | **FastAPI** + Uvicorn |
-| 前端 | 原生 HTML/CSS/JS + **marked.js** (Markdown 渲染) |
-| 记忆/状态 | LangGraph MemorySaver + SQLite 会话库 |
-| Python 版本 | 3.10+（推荐 3.13） |
+| --- | --- |
+| Agent | LangGraph ReAct Agent |
+| LLM 接口 | LangChain OpenAI，兼容 OpenAI 风格接口 |
+| 后端 | FastAPI + Uvicorn |
+| 前端 | 原生 HTML/CSS/JS + marked.js |
+| 状态 | LangGraph MemorySaver + SQLite |
+| 认证 | HttpOnly Cookie + HMAC 签名 |
+| 运行时 | Python 3.10+ |
 
 ---
 
-## 许可证
+## 安全边界
 
-MIT
+- 工具默认限制在当前用户工作区内。
+- 文件下载和预览只能访问当前用户工作区内的文件。
+- Git 高风险命令默认不开放。
+- 图片不会持久化保存到历史数据库。
+- 长期记忆需要用户明确要求才写入。
+- 公网部署必须配置强密码、固定密钥和 HTTPS。
