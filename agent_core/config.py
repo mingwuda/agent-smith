@@ -83,13 +83,14 @@ class AgentConfig:
     api_max_retries: int = 3
     api_timeout_seconds: float = 30.0
     api_host_ips: str = ""
+    context_window_tokens: int = 0
     
     system_prompt: str = (
         "你是一个桌面 AI 智能体，可以自主完成用户交给你的任务。\n\n"
         "## 核心能力\n"
         "- 读写文件、管理目录\n"
         "- 执行 Python 代码\n"
-        "- 查看 Git 仓库状态、diff、日志和提交内容，并在用户明确要求时暂存和提交代码\n"
+        "- 查看 Git 仓库状态、diff、日志和提交内容，并在用户明确要求时暂存、提交和推送代码\n"
         "- 搜索网页和获取网页内容\n"
         "- 获取系统信息\n"
         "- 将独立子任务委派给 coder、reviewer、debugger 子代理\n\n"
@@ -100,7 +101,7 @@ class AgentConfig:
         "4. 最终给用户清晰的结果总结\n"
         "5. 如果遇到错误，尝试修复或告知用户\n"
         "6. 需要了解代码变更时，优先使用 git_status、git_diff、git_log、git_show 等 Git 查看工具\n"
-        "7. 只有用户明确要求提交代码时，才使用 git_add、git_commit、git_commit_all 创建本地提交；不要主动 push、pull、reset 或 restore\n"
+        "7. 只有用户明确要求提交或推送代码时，才使用 git_add、git_commit、git_commit_all、git_push；不要主动 pull、reset 或 restore\n"
         "8. 对独立编码、审查、排障任务，可以使用 delegate_task 子代理工具；当前版本同步等待结果，接口已为后续并行执行预留 task id/status\n\n"
         "## 工作区\n"
         f"你的工作区目录是：{Path.home() / 'agent_workspace'}\n"
@@ -140,6 +141,7 @@ class AgentConfig:
             "AGENT_API_MAX_RETRIES": ("api_max_retries", int),
             "AGENT_API_TIMEOUT_SECONDS": ("api_timeout_seconds", float),
             "AGENT_API_HOST_IPS": ("api_host_ips", str),
+            "AGENT_CONTEXT_WINDOW_TOKENS": ("context_window_tokens", int),
         }
         env_overrides = set()
         for env_key, (attr_name, cast_fn) in env_map.items():
@@ -157,6 +159,7 @@ class AgentConfig:
         config.recursion_limit = max(1, int(config.recursion_limit or 60))
         config.api_max_retries = max(0, int(config.api_max_retries or 0))
         config.api_timeout_seconds = max(1.0, float(config.api_timeout_seconds or 30.0))
+        config.context_window_tokens = max(0, int(config.context_window_tokens or 0))
         
         # 3. 填充默认值
         if not config.skills_dir:
@@ -263,6 +266,7 @@ class AgentConfig:
             "api_max_retries": self.api_max_retries,
             "api_timeout_seconds": self.api_timeout_seconds,
             "api_host_ips": self.api_host_ips,
+            "context_window_tokens": self.context_window_tokens,
         }
         CONFIG_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     
@@ -298,4 +302,5 @@ class AgentConfig:
             "api_max_retries": self.api_max_retries,
             "api_timeout_seconds": self.api_timeout_seconds,
             "api_host_ips": self.api_host_ips,
+            "context_window_tokens": self.context_window_tokens,
         }

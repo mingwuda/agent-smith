@@ -1,4 +1,5 @@
 """桌面 AI 智能体 —— FastAPI 服务器入口"""
+import asyncio
 import hashlib
 import hmac
 import json
@@ -15,7 +16,7 @@ from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException, Request, Response, Query
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import uvicorn
 
 # 确保能找到 agent_core 内的模块
@@ -230,9 +231,16 @@ def init_agent():
 
 # ---------- API 模型 ----------
 
+class AttachmentRequest(BaseModel):
+    name: str = "pasted-image.png"
+    mime_type: str = "image/png"
+    data_url: str
+
+
 class RunRequest(BaseModel):
     message: str
     thread_id: str = "default"
+    attachments: list[AttachmentRequest] = Field(default_factory=list)
 
 
 class RunResponse(BaseModel):
@@ -616,6 +624,30 @@ def _is_skill_inventory_query(message: str) -> bool:
     return any(term in text for term in skill_terms) and any(term in text for term in inventory_terms)
 
 
+def _safe_attachments(attachments: list[AttachmentRequest]) -> list[dict]:
+    safe: list[dict] = []
+    for item in attachments[:4]:
+        mime_type = (item.mime_type or "").strip().lower()
+        data_url = (item.data_url or "").strip()
+        if not mime_type.startswith("image/") or not data_url.startswith(f"data:{mime_type};base64,"):
+            continue
+        if len(data_url) > 8 * 1024 * 1024:
+            continue
+        safe.append({
+            "name": item.name or "pasted-image.png",
+            "mime_type": mime_type,
+            "data_url": data_url,
+        })
+    return safe
+
+
+def _display_user_message(message: str, attachments: list[dict]) -> str:
+    if not attachments:
+        return message
+    suffix = f"\n\n[已附加 {len(attachments)} 张图片，仅用于本轮模型分析，图片原文不写入历史记录。]"
+    return (message or "请分析这些图片。") + suffix
+
+
 def _format_loaded_skills() -> str:
     skills = sorted(get_registry().list_all(), key=lambda item: item.name)
     if not skills:
@@ -665,14 +697,15 @@ async def run_agent(req: RunRequest, request: Request):
     session = await _ensure_session(uid, session_id)
     history_messages = session.get("messages", [])
 
-    session_store.add_message(uid, session_id, "user", req.message)
+    attachments = _safe_attachments(req.attachments)
+    session_store.add_message(uid, session_id, "user", _display_user_message(req.message, attachments))
     if _is_skill_inventory_query(req.message):
         result = _format_loaded_skills()
         _save_assistant_result(uid, session_id, req.message, result)
         return RunResponse(result=result, steps=[])
 
     agent.switch_thread(session_id)
-    result, steps = await agent.run(req.message, history=history_messages)
+    result, steps = await agent.run(req.message, history=history_messages, attachments=attachments)
     artifact_paths = [
         str(step.get("args", {}).get("path", ""))
         for step in steps
@@ -700,7 +733,8 @@ async def run_agent_stream(req: RunRequest, request: Request):
     session = await _ensure_session(uid, session_id)
     history_messages = session.get("messages", [])
 
-    session_store.add_message(uid, session_id, "user", req.message)
+    attachments = _safe_attachments(req.attachments)
+    session_store.add_message(uid, session_id, "user", _display_user_message(req.message, attachments))
     if _is_skill_inventory_query(req.message):
         result = _format_loaded_skills()
         _save_assistant_result(uid, session_id, req.message, result)
@@ -720,25 +754,33 @@ async def run_agent_stream(req: RunRequest, request: Request):
     
     async def event_stream():
         final_content = ""
-        async for sse_event in agent.stream_run(req.message, history=history_messages):
-            if sse_event.strip() == "data: [DONE]":
-                continue
-            if '"type": "tool_start"' in sse_event:
-                try:
+        stream = agent.stream_run(req.message, history=history_messages, attachments=attachments)
+        try:
+            async for sse_event in stream:
+                if await request.is_disconnected():
+                    await stream.aclose()
+                    return
+                if sse_event.strip() == "data: [DONE]":
+                    continue
+                if '"type": "tool_start"' in sse_event:
+                    try:
+                        m = re.search(r'data: ({.*})', sse_event)
+                        if m:
+                            data = json.loads(m.group(1))
+                            args = data.get("args") or {}
+                            if data.get("tool") in {"write_file", "append_to_file"} and args.get("path"):
+                                artifact_paths.append(str(args["path"]))
+                    except Exception:
+                        pass
+                if '"type": "done"' in sse_event:
                     m = re.search(r'data: ({.*})', sse_event)
                     if m:
-                        data = json.loads(m.group(1))
-                        args = data.get("args") or {}
-                        if data.get("tool") in {"write_file", "append_to_file"} and args.get("path"):
-                            artifact_paths.append(str(args["path"]))
-                except Exception:
-                    pass
-            if '"type": "done"' in sse_event:
-                m = re.search(r'data: ({.*})', sse_event)
-                if m:
-                    final_content = json.loads(m.group(1)).get("content", "")
-                continue
-            yield sse_event
+                        final_content = json.loads(m.group(1)).get("content", "")
+                    continue
+                yield sse_event
+        except asyncio.CancelledError:
+            await stream.aclose()
+            raise
         
         if final_content:
             final_content = _append_artifact_links(final_content, uid, artifact_paths)
@@ -988,6 +1030,7 @@ class SettingsRequest(BaseModel):
     api_max_retries: int = 3
     api_timeout_seconds: float = 30.0
     api_host_ips: str = ""
+    context_window_tokens: int = 0
 
 
 @app.get("/settings")
@@ -1015,6 +1058,7 @@ def save_settings(req: SettingsRequest, request: Request):
     cfg.api_max_retries = max(0, int(req.api_max_retries or 0))
     cfg.api_timeout_seconds = max(1.0, float(req.api_timeout_seconds or 30.0))
     cfg.api_host_ips = req.api_host_ips or cfg.api_host_ips
+    cfg.context_window_tokens = max(0, int(req.context_window_tokens or 0))
     
     # 持久化到文件（现在包含 API Key）
     cfg.save()
@@ -1031,6 +1075,10 @@ def save_settings(req: SettingsRequest, request: Request):
         os.environ["AGENT_API_HOST_IPS"] = cfg.api_host_ips
     else:
         os.environ.pop("AGENT_API_HOST_IPS", None)
+    if cfg.context_window_tokens:
+        os.environ["AGENT_CONTEXT_WINDOW_TOKENS"] = str(cfg.context_window_tokens)
+    else:
+        os.environ.pop("AGENT_CONTEXT_WINDOW_TOKENS", None)
     if cfg.base_url:
         os.environ["LLM_BASE_URL"] = cfg.base_url
     else:

@@ -21,6 +21,7 @@ _ALLOWED_SUBCOMMANDS = {
     "remote",
     "rev-parse",
     "ls-files",
+    "push",
 }
 _BLOCKED_ARGS = {"--output", "--output=", "-o", "--exec", "--ext-diff"}
 _MAX_OUTPUT_CHARS = 20000
@@ -116,7 +117,45 @@ def _validate_args(args: list[str]) -> Optional[str]:
     if subcommand == "commit":
         if len(args) != 3 or args[1] != "-m" or not args[2].strip():
             return "❌ git commit 仅允许普通提交格式: git commit -m \"message\""
+    if subcommand == "push":
+        if len(args) == 1:
+            return None
+        if len(args) == 3 and _is_safe_git_ref(args[1]) and _is_safe_git_ref(args[2]):
+            return None
+        if (
+            len(args) == 4
+            and args[1] in {"-u", "--set-upstream"}
+            and _is_safe_git_ref(args[2])
+            and _is_safe_git_ref(args[3])
+        ):
+            return None
+        return "❌ git push 仅允许: git push、git push origin branch 或 git push -u origin branch"
     return None
+
+
+def _is_safe_git_ref(value: str) -> bool:
+    if not value or value.startswith("-"):
+        return False
+    blocked_chars = set(" \t\n\r:;|&<>`$\\")
+    return not any(char in blocked_chars for char in value)
+
+
+def _current_branch(path: str = "") -> str:
+    cwd = _resolve_repo(path)
+    completed = subprocess.run(
+        ["git", "branch", "--show-current"],
+        cwd=cwd,
+        env={
+            **os.environ,
+            "PATH": "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin",
+            "GIT_PAGER": "cat",
+        },
+        text=True,
+        capture_output=True,
+        timeout=_TIMEOUT_SECONDS,
+        check=False,
+    )
+    return (completed.stdout or "").strip()
 
 
 @tool
@@ -185,8 +224,33 @@ def git_commit_all(message: str, path: str = "") -> str:
 
 
 @tool
+def git_push(path: str = "", remote: str = "origin", branch: str = "", set_upstream: bool = False) -> str:
+    """推送当前 Git 分支。只有用户明确要求推送代码时使用；不支持 force、tags、delete 等高风险参数。"""
+    remote = (remote or "origin").strip()
+    branch = (branch or "").strip()
+    if not _is_safe_git_ref(remote):
+        return "❌ remote 名称不安全或为空"
+    if branch and not _is_safe_git_ref(branch):
+        return "❌ branch 名称不安全"
+
+    if set_upstream:
+        if not branch:
+            try:
+                branch = _current_branch(path)
+            except Exception as exc:
+                return f"❌ 获取当前分支失败: {exc}"
+        if not branch:
+            return "❌ 当前不在普通分支上，无法设置 upstream"
+        return _run_git(["push", "-u", remote, branch], path)
+
+    if branch:
+        return _run_git(["push", remote, branch], path)
+    return _run_git(["push"], path)
+
+
+@tool
 def git_command(command: str, path: str = "") -> str:
-    """执行受限的 Git 命令。允许查看类命令，以及 add/commit；不允许 push/pull/reset/restore。"""
+    """执行受限的 Git 命令。允许查看类命令、add/commit，以及受限 push；不允许 pull/reset/restore。"""
     try:
         args = shlex.split(command)
     except ValueError as exc:
@@ -196,4 +260,14 @@ def git_command(command: str, path: str = "") -> str:
     return _run_git(args, path)
 
 
-TOOLS = [git_status, git_diff, git_log, git_show, git_add, git_commit, git_commit_all, git_command]
+TOOLS = [
+    git_status,
+    git_diff,
+    git_log,
+    git_show,
+    git_add,
+    git_commit,
+    git_commit_all,
+    git_push,
+    git_command,
+]

@@ -12,6 +12,13 @@ from langgraph.prebuilt import create_react_agent
 from langgraph.checkpoint.memory import MemorySaver
 
 from config import AgentConfig
+from context_manager import (
+    checkpoint_replacement,
+    compact_messages,
+    compaction_threshold_tokens,
+    estimate_messages_tokens,
+    should_compact,
+)
 from memory.local_memory import set_current_user
 from monitoring.usage_tracker import get_tracker, UsageTracker
 from network_resolver import configure_host_resolution
@@ -140,6 +147,23 @@ def _connection_diagnostic(exc: Exception, config: AgentConfig) -> str:
     return "\n".join(details)
 
 
+def _human_content(message: str, attachments: Optional[list[dict]] = None):
+    attachments = attachments or []
+    valid_images = [
+        item for item in attachments
+        if isinstance(item, dict)
+        and str(item.get("mime_type") or "").startswith("image/")
+        and str(item.get("data_url") or "").startswith("data:image/")
+    ]
+    if not valid_images:
+        return message
+
+    content = [{"type": "text", "text": message or "请分析这些图片。"}]
+    for item in valid_images:
+        content.append({"type": "image_url", "image_url": {"url": item["data_url"]}})
+    return content
+
+
 def session_messages_to_langchain(messages: list[dict]) -> list:
     """Convert persisted chat messages into LangChain messages."""
     converted = []
@@ -153,6 +177,12 @@ def session_messages_to_langchain(messages: list[dict]) -> list:
         elif role == "assistant":
             converted.append(AIMessage(content=content))
     return converted
+
+
+def compact_history_messages(messages: list, config: AgentConfig) -> list:
+    if should_compact(messages, config.model, config.context_window_tokens):
+        return compact_messages(messages, config.model, config.context_window_tokens)
+    return messages
 
 
 def _extract_steps_from_messages(messages: list) -> list[dict]:
@@ -274,6 +304,30 @@ class DesktopAgent:
             "recursion_limit": max(1, int(self.config.recursion_limit or 60)),
         }
 
+    async def _compact_checkpoint_if_needed(self, run_config: dict):
+        if not self._graph:
+            return
+        try:
+            snapshot = await self._graph.aget_state(run_config)
+        except Exception:
+            return
+        values = getattr(snapshot, "values", {}) or {}
+        messages = list(values.get("messages") or [])
+        if not messages:
+            return
+        if not should_compact(messages, self.config.model, self.config.context_window_tokens):
+            return
+        before = estimate_messages_tokens(messages)
+        compacted = compact_messages(messages, self.config.model, self.config.context_window_tokens)
+        await self._graph.aupdate_state(run_config, {"messages": checkpoint_replacement(compacted)})
+        after = estimate_messages_tokens(compacted)
+        print(
+            "🧹 上下文已压缩: "
+            f"{len(messages)} -> {len(compacted)} messages, "
+            f"~{before} -> ~{after} tokens, "
+            f"threshold={compaction_threshold_tokens(self.config.model, self.config.context_window_tokens)}"
+        )
+
     def _thread_key(self) -> str:
         return f"{self._user_id}:{self._thread_id}"
     
@@ -285,16 +339,23 @@ class DesktopAgent:
             checkpointer=self.memory,
         )
     
-    async def run(self, message: str, history: Optional[list[dict]] = None) -> tuple[str, list[dict]]:
+    async def run(
+        self,
+        message: str,
+        history: Optional[list[dict]] = None,
+        attachments: Optional[list[dict]] = None,
+    ) -> tuple[str, list[dict]]:
         """处理用户消息，返回 (最终回复, 中间步骤列表)"""
         config = self._run_config()
         input_messages = []
         thread_key = self._thread_key()
         if thread_key not in self._hydrated_threads:
-            input_messages = session_messages_to_langchain(history or [])
-        input_messages.append(HumanMessage(content=message))
+            input_messages = compact_history_messages(session_messages_to_langchain(history or []), self.config)
+        current_content = _human_content(message, attachments)
+        input_messages.append(HumanMessage(content=current_content))
         
         try:
+            await self._compact_checkpoint_if_needed(config)
             result = await self._graph.ainvoke(
                 {"messages": input_messages},
                 config,
@@ -305,7 +366,7 @@ class DesktopAgent:
             current_start = 0
             for idx in range(len(messages) - 1, -1, -1):
                 msg = messages[idx]
-                if getattr(msg, "type", "") == "human" and getattr(msg, "content", "") == message:
+                if getattr(msg, "type", "") == "human" and getattr(msg, "content", "") == current_content:
                     current_start = idx + 1
                     break
             steps = _extract_steps_from_messages(messages[current_start:])
@@ -341,14 +402,19 @@ class DesktopAgent:
         finally:
             self._hydrated_threads.add(thread_key)
     
-    async def stream_run(self, message: str, history: Optional[list[dict]] = None) -> AsyncGenerator[str, None]:
+    async def stream_run(
+        self,
+        message: str,
+        history: Optional[list[dict]] = None,
+        attachments: Optional[list[dict]] = None,
+    ) -> AsyncGenerator[str, None]:
         """流式处理用户消息，yield SSE 格式事件"""
         run_config = self._run_config()
         input_messages = []
         thread_key = self._thread_key()
         if thread_key not in self._hydrated_threads:
-            input_messages = session_messages_to_langchain(history or [])
-        input_messages.append(HumanMessage(content=message))
+            input_messages = compact_history_messages(session_messages_to_langchain(history or []), self.config)
+        input_messages.append(HumanMessage(content=_human_content(message, attachments)))
         input_data = {"messages": input_messages}
         
         thinking_buffer = ""        # 累积推理文本（工具调用前的内容）
@@ -361,8 +427,10 @@ class DesktopAgent:
         active_tool_started_at = 0.0
         last_progress_at = 0.0
         pending_event = None
+        cancelled = False
         
         try:
+            await self._compact_checkpoint_if_needed(run_config)
             event_iter = self._graph.astream_events(input_data, run_config, version="v2").__aiter__()
             pending_event = asyncio.create_task(event_iter.__anext__())
             while True:
@@ -477,6 +545,16 @@ class DesktopAgent:
                         self._record_model_usage(input_tok, output_tok, cached_tok, source="chat_model_end")
                         usage_recorded = True
         
+        except asyncio.CancelledError:
+            cancelled = True
+            if pending_event and not pending_event.done():
+                pending_event.cancel()
+            raise
+        except GeneratorExit:
+            cancelled = True
+            if pending_event and not pending_event.done():
+                pending_event.cancel()
+            raise
         except Exception as e:
             if _is_recursion_limit_error(e):
                 final_buffer = _recursion_limit_message(run_config["recursion_limit"])
@@ -489,22 +567,23 @@ class DesktopAgent:
             if pending_event and not pending_event.done():
                 pending_event.cancel()
             self._hydrated_threads.add(thread_key)
-            if not usage_recorded:
-                self.tracker.record_model_call(
-                    provider=self.config.active_provider,
-                    model=self.config.model,
-                    input_tokens=0,
-                    output_tokens=0,
-                    thread_id=self._thread_id,
-                    source="chat_model_end",
-                    estimated=True,
-                )
-            # 发送完成事件（thinking_buffer 中剩余的是最终回复）
-            remaining = thinking_buffer.strip()
-            if remaining:
-                final_buffer = remaining
-            yield _sse({"type": "done", "content": final_buffer})
-            yield "data: [DONE]\n\n"
+            if not cancelled:
+                if not usage_recorded:
+                    self.tracker.record_model_call(
+                        provider=self.config.active_provider,
+                        model=self.config.model,
+                        input_tokens=0,
+                        output_tokens=0,
+                        thread_id=self._thread_id,
+                        source="chat_model_end",
+                        estimated=True,
+                    )
+                # 发送完成事件（thinking_buffer 中剩余的是最终回复）
+                remaining = thinking_buffer.strip()
+                if remaining:
+                    final_buffer = remaining
+                yield _sse({"type": "done", "content": final_buffer})
+                yield "data: [DONE]\n\n"
     
     def switch_thread(self, thread_id: str):
         self._thread_id = thread_id

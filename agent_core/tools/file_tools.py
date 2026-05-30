@@ -5,6 +5,9 @@ from langchain_core.tools import tool
 
 # 工作区由调用方注入
 _workspace: Optional[Path] = None
+MAX_FILE_RETURN_CHARS = 20000
+FILE_HEAD_CHARS = 8000
+FILE_TAIL_CHARS = 8000
 
 def set_workspace(path: Path):
     global _workspace
@@ -38,7 +41,21 @@ def read_file(path: str) -> str:
         return f"❌ 文件不存在: {path}"
     if not full.is_file():
         return f"❌ 不是文件: {path}"
-    return full.read_text(encoding="utf-8")
+    content = full.read_text(encoding="utf-8")
+    if len(content) <= MAX_FILE_RETURN_CHARS:
+        return content
+    rel = _display_path(full)
+    return (
+        "⚠️ 文件较大，未将全文放入模型上下文。\n"
+        f"路径: {rel}\n"
+        f"字符数: {len(content)}\n"
+        f"字节数: {full.stat().st_size}\n"
+        "如需精确处理，请针对具体片段、关键词或行号继续读取。\n\n"
+        f"--- 文件开头 {FILE_HEAD_CHARS} 字符 ---\n"
+        f"{content[:FILE_HEAD_CHARS]}\n\n"
+        f"--- 文件结尾 {FILE_TAIL_CHARS} 字符 ---\n"
+        f"{content[-FILE_TAIL_CHARS:]}"
+    )
 
 @tool
 def write_file(path: str, content: str) -> str:
@@ -147,6 +164,14 @@ def _fmt_size(size: int) -> str:
             return f"{size:.1f}{unit}"
         size /= 1024
     return f"{size:.1f}TB"
+
+
+def _display_path(path: Path) -> str:
+    workspace = (_workspace or Path.home() / "agent_workspace").expanduser().resolve()
+    try:
+        return path.resolve(strict=False).relative_to(workspace).as_posix()
+    except ValueError:
+        return str(path)
 
 
 TOOLS = [read_file, write_file, append_to_file, list_files, delete_file, search_files, get_workspace_path]
