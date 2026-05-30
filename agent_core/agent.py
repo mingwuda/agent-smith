@@ -1,6 +1,8 @@
 """桌面 AI 智能体核心"""
+import asyncio
 import json
 import socket
+import time
 from typing import AsyncGenerator, Optional
 from urllib.parse import urlparse
 
@@ -103,7 +105,18 @@ def _recursion_limit_message(limit: int) -> str:
 
 def _connection_diagnostic(exc: Exception, config: AgentConfig) -> str:
     message = f"{type(exc).__name__}: {exc}"
-    if type(exc).__name__ != "APIConnectionError" and "Connection error" not in str(exc):
+    exc_name = type(exc).__name__
+    if exc_name == "ReadTimeout" or "ReadTimeout" in message:
+        return "\n".join([
+            message,
+            (
+                f"模型响应读超时：当前 provider={config.active_provider}，model={config.model}，"
+                f"timeout={config.api_timeout_seconds}s，base_url={config.base_url or '默认 OpenAI'}。"
+            ),
+            "这通常表示模型网关已连接，但在超时时间内没有返回下一段响应；长上下文、工具结果较多或模型端排队都会触发。",
+            "可以新开会话减少上下文，或把 AGENT_API_TIMEOUT_SECONDS 临时调大到 60 再重试。",
+        ])
+    if exc_name != "APIConnectionError" and "Connection error" not in str(exc):
         return message
 
     details = [
@@ -343,11 +356,36 @@ class DesktopAgent:
         step_count = 0
         in_tool_call = False        # 当前是否正在产生工具调用
         usage_recorded = False
+        active_tool = ""
+        active_step = 0
+        active_tool_started_at = 0.0
+        last_progress_at = 0.0
+        pending_event = None
         
         try:
-            async for event in self._graph.astream_events(
-                input_data, run_config, version="v2",
-            ):
+            event_iter = self._graph.astream_events(input_data, run_config, version="v2").__aiter__()
+            pending_event = asyncio.create_task(event_iter.__anext__())
+            while True:
+                try:
+                    event = await asyncio.wait_for(asyncio.shield(pending_event), timeout=2.0)
+                except asyncio.TimeoutError:
+                    now = time.time()
+                    if active_tool and now - last_progress_at >= 1.5:
+                        elapsed = int(now - active_tool_started_at)
+                        label = "子代理仍在执行" if active_tool == "delegate_task" else "工具仍在执行"
+                        yield _sse({
+                            "type": "progress",
+                            "tool": active_tool,
+                            "step": active_step,
+                            "elapsed": elapsed,
+                            "message": f"{label}，已耗时 {elapsed}s",
+                        })
+                        last_progress_at = now
+                    continue
+                except StopAsyncIteration:
+                    break
+                pending_event = asyncio.create_task(event_iter.__anext__())
+
                 kind = event["event"]
                 node = event.get("metadata", {}).get("langgraph_node", "")
                 
@@ -377,6 +415,10 @@ class DesktopAgent:
                 elif kind == "on_tool_start":
                     step_count += 1
                     tool_name = event.get("name", "")
+                    active_tool = tool_name
+                    active_step = step_count
+                    active_tool_started_at = time.time()
+                    last_progress_at = active_tool_started_at
                     
                     # 取出推理文本
                     thought = thinking_buffer.strip()
@@ -424,6 +466,9 @@ class DesktopAgent:
                     
                     # 重置状态，准备接收下一轮推理
                     in_tool_call = False
+                    active_tool = ""
+                    active_step = 0
+                    active_tool_started_at = 0.0
 
                 elif kind == "on_chat_model_end" and node == "agent":
                     output = event.get("data", {}).get("output")
@@ -441,6 +486,8 @@ class DesktopAgent:
                 yield _sse({"type": "error", "content": final_buffer})
         
         finally:
+            if pending_event and not pending_event.done():
+                pending_event.cancel()
             self._hydrated_threads.add(thread_key)
             if not usage_recorded:
                 self.tracker.record_model_call(

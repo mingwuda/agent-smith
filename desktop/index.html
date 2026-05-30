@@ -774,6 +774,34 @@ function handleStreamEvent(data) {
       showThinkingHint('🤔 分析结果');
       container.scrollTop = container.scrollHeight;
       break;
+
+    case 'progress':
+      hideTyping();
+      removeThinkingHint();
+      hasToolCalls = true;
+      ensureStepsContainer();
+      updateProgress();
+      const progressToggle = findStepToggle(data.step);
+      if (progressToggle) {
+        const statusSpan = progressToggle.querySelector('.step-status');
+        if (statusSpan) {
+          statusSpan.className = 'step-status running';
+          statusSpan.innerHTML = `<span class="mini-spin"></span>${escapeHtml(data.message || '执行中...')}`;
+        }
+        const details = progressToggle.nextElementSibling;
+        if (details) {
+          let live = details.querySelector('.live-progress');
+          if (!live) {
+            live = document.createElement('div');
+            live.className = 'result live-progress';
+            details.appendChild(live);
+          }
+          live.textContent = `⏳ ${data.message || '后端仍在处理...'}`;
+        }
+      }
+      showGeneratingBadge(data.message || '后端仍在处理...');
+      container.scrollTop = container.scrollHeight;
+      break;
     
     case 'token':
       hideTyping();
