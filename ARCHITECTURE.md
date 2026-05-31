@@ -1,4 +1,4 @@
-# Desktop Agent 架构图
+# AgentSmith 架构图
 
 > 生成时间：2026-05-24  
 > 项目版本：v1.0.0  

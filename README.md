@@ -1,8 +1,8 @@
-# Desktop Agent
+# AgentSmith
 
 [中文](README.md) | [English](README.en.md)
 
-Desktop Agent 是一个本地/私有部署的桌面 AI 智能体。它基于 FastAPI、LangGraph 和 OpenAI 兼容模型接口，提供聊天式任务执行、工具调用、文件制品下载、Skills 技能扩展、多用户隔离、长期记忆和可视化执行过程。
+AgentSmith 是一个本地/私有部署的桌面 AI 智能体。它基于 FastAPI、LangGraph 和 OpenAI 兼容模型接口，提供聊天式任务执行、工具调用、文件制品下载、Skills 技能扩展、多用户隔离、长期记忆和可视化执行过程。
 
 适合用作个人或团队内网的项目助手：读写工作区文件、运行 Python、搜索网页、管理 Git、生成文档、分析图片、委派子代理处理独立任务。
 
@@ -247,7 +247,7 @@ Markdown 文件会同时提供：
 
 ## Skills
 
-Desktop Agent 会加载以下目录中的 `SKILL.md`：
+AgentSmith 会加载以下目录中的 `SKILL.md`：
 
 ```text
 agent_core/samples/
@@ -392,7 +392,7 @@ systemd 示例：
 
 ```ini
 [Unit]
-Description=Desktop Agent
+Description=AgentSmith
 After=network-online.target
 Wants=network-online.target
 

@@ -1,4 +1,4 @@
-Desktop Agent for Windows
+AgentSmith for Windows
 =========================
 
 How to run

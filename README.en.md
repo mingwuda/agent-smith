@@ -1,8 +1,8 @@
-# Desktop Agent
+# AgentSmith
 
 [中文](README.md) | [English](README.en.md)
 
-Desktop Agent is a locally hosted, private desktop AI agent. It is built with FastAPI, LangGraph, and OpenAI-compatible model APIs, and provides chat-based task execution, tool calls, downloadable artifacts, Skills extensions, multi-user isolation, long-term memory, and visible execution steps.
+AgentSmith is a locally hosted, private desktop AI agent. It is built with FastAPI, LangGraph, and OpenAI-compatible model APIs, and provides chat-based task execution, tool calls, downloadable artifacts, Skills extensions, multi-user isolation, long-term memory, and visible execution steps.
 
 It works well as a personal or intranet team assistant for reading and writing workspace files, running Python, searching the web, managing Git, generating documents, analyzing images, and delegating independent tasks to subagents.
 
@@ -227,7 +227,7 @@ Other files only provide download links.
 
 ## Skills
 
-Desktop Agent loads `SKILL.md` from:
+AgentSmith loads `SKILL.md` from:
 
 ```text
 agent_core/samples/
@@ -303,7 +303,7 @@ Example systemd unit:
 
 ```ini
 [Unit]
-Description=Desktop Agent
+Description=AgentSmith
 After=network-online.target
 Wants=network-online.target
 
