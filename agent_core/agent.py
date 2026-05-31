@@ -52,6 +52,53 @@ def _sse(data: dict) -> str:
     return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
+def _tool_signature(tool_name: str, args: object) -> str:
+    if isinstance(args, dict):
+        normalized = {k: str(v)[:300] for k, v in sorted(args.items()) if not k.startswith("_")}
+    else:
+        normalized = str(args)[:300]
+    return f"{tool_name}:{json.dumps(normalized, ensure_ascii=False, sort_keys=True)}"
+
+
+def _loop_guard_message(reason: str, calls: list[dict], recursion_limit: int) -> str:
+    recent = " -> ".join(item.get("tool", "") for item in calls[-8:] if item.get("tool"))
+    return (
+        "检测到工具调用可能陷入重复循环，已提前停止本轮任务，避免继续消耗步骤和上下文。\n\n"
+        f"- 判断原因：{reason}\n"
+        f"- 最近工具链路：{recent or '无'}\n"
+        f"- 当前最大推理步数：{recursion_limit}\n\n"
+        "建议把任务拆得更具体一些，或直接指定要检查的文件/关键词后重试。"
+    )
+
+
+def _detect_tool_loop(calls: list[dict], recursion_limit: int) -> str:
+    latest = calls[-1]
+    latest_sig = latest.get("signature", "")
+    exact_repeat_count = sum(1 for item in calls[-8:] if item.get("signature") == latest_sig)
+    if latest_sig and exact_repeat_count >= 3:
+        return f"最近 8 次工具调用中，同一工具和参数重复了 {exact_repeat_count} 次"
+
+    if len(calls) < 6:
+        return ""
+
+    recent12 = calls[-12:]
+    tool_names = [item.get("tool", "") for item in recent12]
+    unique_tools = set(tool_names)
+    exploratory_tools = {"search_files", "read_file", "list_files", "web_search", "web_fetch"}
+    if len(recent12) >= 10 and unique_tools and unique_tools.issubset(exploratory_tools) and len(unique_tools) <= 2:
+        dominant = max(unique_tools, key=tool_names.count)
+        return f"最近 {len(recent12)} 次调用一直在 {', '.join(sorted(unique_tools))} 中循环，{dominant} 出现 {tool_names.count(dominant)} 次"
+
+    estimated_graph_steps = len(calls) * 2 + 1
+    if estimated_graph_steps >= max(6, recursion_limit - 3):
+        tail = calls[-8:]
+        tail_unique = {item.get("tool", "") for item in tail}
+        if len(tail_unique) <= 3:
+            return f"已接近最大推理步数，且最近工具类型仍高度重复：{', '.join(sorted(tail_unique))}"
+
+    return ""
+
+
 def _get_nested(mapping: dict, *keys: str):
     value = mapping
     for key in keys:
@@ -501,6 +548,8 @@ class DesktopAgent:
         last_progress_at = 0.0
         pending_event = None
         cancelled = False
+        loop_guard_triggered = False
+        tool_call_history: list[dict] = []
         
         try:
             await self._compact_checkpoint_if_needed(run_config)
@@ -583,6 +632,10 @@ class DesktopAgent:
                         args_preview = {k: str(v)[:80] for k, v in inp.items() if not k.startswith("_")}
                     else:
                         args_preview = {"input": str(inp)[:80]}
+                    tool_call_history.append({
+                        "tool": tool_name,
+                        "signature": _tool_signature(tool_name, inp),
+                    })
                     
                     yield _sse({
                         "type": "tool_start",
@@ -590,6 +643,15 @@ class DesktopAgent:
                         "args": args_preview,
                         "step": step_count,
                     })
+
+                    loop_reason = _detect_tool_loop(tool_call_history, run_config["recursion_limit"])
+                    if loop_reason:
+                        loop_guard_triggered = True
+                        final_buffer = _loop_guard_message(loop_reason, tool_call_history, run_config["recursion_limit"])
+                        yield _sse({"type": "error", "content": final_buffer})
+                        if pending_event and not pending_event.done():
+                            pending_event.cancel()
+                        break
                 
                 # ── 工具结束 ──
                 elif kind == "on_tool_end":
@@ -642,7 +704,7 @@ class DesktopAgent:
             self._hydrated_threads.add(thread_key)
             if attachments:
                 await self._strip_checkpoint_images(run_config, graph)
-            if not cancelled:
+            if not cancelled and not loop_guard_triggered:
                 if not usage_recorded:
                     self.tracker.record_model_call(
                         provider=self.config.active_provider,

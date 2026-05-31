@@ -771,6 +771,8 @@ async def run_agent_stream(req: RunRequest, request: Request):
     
     async def event_stream():
         final_content = ""
+        error_content = ""
+        forwarded_terminal_event = False
         if model_override:
             yield f"data: {json.dumps({'type': 'model_switch', 'model': model_override, 'reason': '图片输入'}, ensure_ascii=False)}\n\n"
         stream = agent.stream_run(
@@ -800,7 +802,13 @@ async def run_agent_stream(req: RunRequest, request: Request):
                     m = re.search(r'data: ({.*})', sse_event)
                     if m:
                         final_content = json.loads(m.group(1)).get("content", "")
+                    forwarded_terminal_event = True
                     continue
+                if '"type": "error"' in sse_event:
+                    m = re.search(r'data: ({.*})', sse_event)
+                    if m:
+                        error_content = json.loads(m.group(1)).get("content", "")
+                    forwarded_terminal_event = True
                 yield sse_event
         except asyncio.CancelledError:
             await stream.aclose()
@@ -810,6 +818,16 @@ async def run_agent_stream(req: RunRequest, request: Request):
             final_content = _append_artifact_links(final_content, uid, artifact_paths)
             yield f"data: {json.dumps({'type': 'done', 'content': final_content}, ensure_ascii=False)}\n\n"
             _save_assistant_result(uid, session_id, req.message, final_content)
+        elif error_content:
+            _save_assistant_result(uid, session_id, req.message, "❌ " + error_content)
+        elif not forwarded_terminal_event:
+            fallback = (
+                "任务已结束，但模型没有生成最终回答。"
+                "这通常发生在接近最大推理步数时，模型仍在继续调用工具。"
+                f"当前最大推理步数为 {agent.config.recursion_limit}，可以提高该值，或把任务拆小后重试。"
+            )
+            yield f"data: {json.dumps({'type': 'done', 'content': fallback}, ensure_ascii=False)}\n\n"
+            _save_assistant_result(uid, session_id, req.message, fallback)
         yield "data: [DONE]\n\n"
     
     return StreamingResponse(
