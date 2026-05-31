@@ -331,6 +331,7 @@ LOGIN_HTML = """<!DOCTYPE html>
 html, body { filter:none !important; opacity:1 !important; }
 body { margin:0; min-height:100vh; display:grid; place-items:center; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:#f5f5f7 !important; color:#1d1d1f; }
 .login { position:relative; z-index:2147483647; width:min(380px, calc(100vw - 32px)); background:#fff; border:1px solid #e5e5ea; border-radius:10px; padding:28px; box-shadow:0 18px 50px rgba(0,0,0,.08); }
+.lang { position:fixed; top:16px; right:16px; z-index:2147483647; height:34px; border:1px solid #d2d2d7; border-radius:8px; padding:0 8px; background:#fff; color:#1d1d1f; }
 h1 { margin:0 0 6px; font-size:24px; }
 p { margin:0 0 22px; color:#6e6e73; font-size:14px; }
 label { display:block; margin:14px 0 6px; font-size:13px; color:#515154; }
@@ -342,17 +343,61 @@ button:disabled { opacity:.65; cursor:not-allowed; }
 </style>
 </head>
 <body>
+<select class="lang" id="language-select" aria-label="Language">
+  <option value="zh-CN">中文</option>
+  <option value="en">English</option>
+</select>
 <form class="login" onsubmit="login(event)">
   <h1>Desktop Agent</h1>
-  <p>请登录后继续操作</p>
-  <label for="username">用户名</label>
+  <p data-i18n="subtitle">请登录后继续操作</p>
+  <label for="username" data-i18n="username">用户名</label>
   <input id="username" autocomplete="username" value="admin" autofocus>
-  <label for="password">密码</label>
+  <label for="password" data-i18n="password">密码</label>
   <input id="password" type="password" autocomplete="current-password">
-  <button id="submit" type="submit">登录</button>
+  <button id="submit" type="submit" data-i18n="login">登录</button>
   <div class="error" id="error"></div>
 </form>
 <script>
+const I18N = {
+  'zh-CN': {
+    title: 'Desktop Agent 登录',
+    subtitle: '请登录后继续操作',
+    username: '用户名',
+    password: '密码',
+    login: '登录',
+    invalid: '用户名或密码错误',
+    network: '网络错误，请稍后重试',
+  },
+  en: {
+    title: 'Desktop Agent Login',
+    subtitle: 'Sign in to continue',
+    username: 'Username',
+    password: 'Password',
+    login: 'Log in',
+    invalid: 'Incorrect username or password',
+    network: 'Network error. Please try again later.',
+  },
+};
+let currentLanguage = localStorage.getItem('desktop-agent-language') || ((navigator.language || '').toLowerCase().startsWith('zh') ? 'zh-CN' : 'en');
+if (!I18N[currentLanguage]) currentLanguage = 'zh-CN';
+function t(key) {
+  return (I18N[currentLanguage] && I18N[currentLanguage][key]) || I18N['zh-CN'][key] || key;
+}
+function applyI18n() {
+  document.documentElement.lang = currentLanguage;
+  document.title = t('title');
+  document.querySelectorAll('[data-i18n]').forEach(el => {
+    el.textContent = t(el.dataset.i18n);
+  });
+  document.getElementById('language-select').value = currentLanguage;
+}
+document.getElementById('language-select').addEventListener('change', (event) => {
+  currentLanguage = event.target.value;
+  localStorage.setItem('desktop-agent-language', currentLanguage);
+  applyI18n();
+});
+applyI18n();
+
 function clearOverlays() {
   document.documentElement.style.filter = 'none';
   document.documentElement.style.opacity = '1';
@@ -390,10 +435,10 @@ async function login(event) {
       location.href = '/';
     } else {
       const data = await res.json().catch(() => ({}));
-      err.textContent = data.detail || '用户名或密码错误';
+      err.textContent = currentLanguage === 'en' ? t('invalid') : (data.detail || t('invalid'));
     }
   } catch {
-    err.textContent = '网络错误，请稍后重试';
+    err.textContent = t('network');
   } finally {
     btn.disabled = false;
   }

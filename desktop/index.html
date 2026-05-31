@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>桌面智能体</title>
+<title>Desktop Agent</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤖</text></svg>">
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <style>
@@ -51,6 +51,8 @@
   .header-btn:hover { background:#e0e0e0; }
   #logout-btn { padding:6px 12px; background:transparent; border:1px solid #ddd; border-radius:8px; font-size:13px; cursor:pointer; transition:all .2s; color:#8e8e93; }
   #logout-btn:hover { background:#fbe9e7; border-color:#ff453a; color:#ff453a; }
+  #language-select { padding:6px 8px; background:#fff; border:1px solid #ddd; border-radius:8px; font-size:13px; outline:none; }
+  #language-select:focus { border-color:#007aff; }
   
   #messages { flex:1; overflow-y:auto; padding:20px 24px; }
   .msg { margin-bottom:16px; max-width:85%; padding:12px 18px; border-radius:14px; font-size:14px; line-height:1.6; word-break:break-word; }
@@ -236,6 +238,7 @@
     #header .left { gap:4px; }
     #header .right { gap:4px; }
     #status-text { display:none; }
+    #language-select { max-width:72px; padding:6px 4px; font-size:12px; }
     #logout-btn { font-size:0; padding:6px 8px; }
     #logout-btn::after { content:"🚪"; font-size:16px; }
     #sidebar-toggle { font-size:18px; padding:2px; }
@@ -261,36 +264,36 @@
 <!-- 侧边栏 -->
 <div id="sidebar">
   <div id="session-header">
-    <h2>💬 会话</h2>
-    <button id="new-session-btn">＋ 新建</button>
+    <h2 data-i18n="sessionsTitle">💬 会话</h2>
+    <button id="new-session-btn" data-i18n="newSession">＋ 新建</button>
   </div>
   <div id="session-list">
-    <div style="padding:16px;color:#8e8e93;font-size:13px;font-style:italic;">加载中...</div>
+    <div style="padding:16px;color:#8e8e93;font-size:13px;font-style:italic;" data-i18n="loading">加载中...</div>
   </div>
   
   <div style="border-top:1px solid #2c2c2e; padding:12px 16px;">
     <div class="stat-card" id="provider-card" style="border:none;padding:0 0 10px;display:none;">
-      <div class="label">🌐 模型服务商</div>
-      <select id="quick-provider-select" title="切换模型厂商" onchange="quickSwitchProvider()" style="width:100%;margin-top:4px;padding:6px 8px;background:#2c2c2e;color:#fff;border:1px solid #3a3a3c;border-radius:6px;font-size:13px;outline:none;"></select>
+      <div class="label" data-i18n="modelProvider">🌐 模型服务商</div>
+      <select id="quick-provider-select" title="切换模型厂商" data-i18n-title="switchProviderTitle" onchange="quickSwitchProvider()" style="width:100%;margin-top:4px;padding:6px 8px;background:#2c2c2e;color:#fff;border:1px solid #3a3a3c;border-radius:6px;font-size:13px;outline:none;"></select>
     </div>
     <div class="stat-card" style="border:none;padding:0 0 8px;">
-      <div class="label">工具调用</div>
+      <div class="label" data-i18n="toolCalls">工具调用</div>
       <div class="value" id="stat-calls">-</div>
     </div>
     <div class="stat-card" style="border:none;padding:0 0 8px;">
-      <div class="label">模型 Token</div>
+      <div class="label" data-i18n="modelTokens">模型 Token</div>
       <div class="value" id="stat-total" style="font-size:14px;">-</div>
     </div>
     <div class="stat-card" style="border:none;padding:0;">
-      <div class="label">估算费用</div>
+      <div class="label" data-i18n="estimatedCost">估算费用</div>
       <div class="value" id="stat-cost" style="font-size:14px;">$ -</div>
     </div>
   </div>
 
   <div class="skills-panel">
-    <h3>🧩 技能</h3>
+    <h3 data-i18n="skillsTitle">🧩 技能</h3>
     <div id="skills-list">
-      <div class="skill-item" style="color:#8e8e93;font-style:italic;">加载中...</div>
+      <div class="skill-item" style="color:#8e8e93;font-style:italic;" data-i18n="loading">加载中...</div>
     </div>
   </div>
 </div>
@@ -302,51 +305,55 @@
     <div class="left">
       <button id="sidebar-toggle">☰</button>
       <span id="status-dot"></span>
-      <span id="status-text">连接中...</span>
+      <span id="status-text" data-i18n="connecting">连接中...</span>
     </div>
     <div class="right">
-      <button class="header-btn" id="memory-btn">🧠 记忆</button>
-      <button class="header-btn" id="settings-btn" style="display:none;">⚙️ 设置</button>
-      <button id="logout-btn" onclick="logout()">🚪 登出</button>
+      <select id="language-select" aria-label="Language">
+        <option value="zh-CN">中文</option>
+        <option value="en">English</option>
+      </select>
+      <button class="header-btn" id="memory-btn" data-i18n="memoryButton">🧠 记忆</button>
+      <button class="header-btn" id="settings-btn" style="display:none;" data-i18n="settingsButton">⚙️ 设置</button>
+      <button id="logout-btn" onclick="logout()" data-i18n="logoutButton">🚪 登出</button>
     </div>
   </div>
   
   <div id="messages"></div>
   
-  <div id="loading-bar"><div class="bar-track"><div class="bar-fill"></div></div><span class="label">AI 思考中...</span></div>
+  <div id="loading-bar"><div class="bar-track"><div class="bar-fill"></div></div><span class="label" data-i18n="thinking">AI 思考中...</span></div>
   <div id="input-area">
     <div id="composer">
       <div id="attachment-preview"></div>
-      <textarea id="input" placeholder="说点什么...（Enter 换行，⌘/Ctrl+Enter 发送，可直接粘贴图片）" autocomplete="off" rows="1"></textarea>
+      <textarea id="input" placeholder="说点什么...（Enter 换行，⌘/Ctrl+Enter 发送，可直接粘贴图片）" data-i18n-placeholder="composerPlaceholder" autocomplete="off" rows="1"></textarea>
     </div>
-    <button id="send">发送</button>
+    <button id="send" data-i18n="sendButton">发送</button>
   </div>
 </div>
 
 <!-- 记忆管理弹窗 -->
 <div class="modal-overlay" id="memory-modal">
   <div class="modal">
-    <h2>长期记忆</h2>
+    <h2 data-i18n="memoryTitle">长期记忆</h2>
     <div class="form-group">
-      <label for="m-key">记忆 Key</label>
-      <input id="m-key" placeholder="例如 remote.deploy.host" />
+      <label for="m-key" data-i18n="memoryKeyLabel">记忆 Key</label>
+      <input id="m-key" placeholder="例如 remote.deploy.host" data-i18n-placeholder="memoryKeyPlaceholder" />
     </div>
     <div class="form-group">
-      <label for="m-value">记忆内容</label>
-      <input id="m-value" placeholder="只保存长期有用、非敏感的信息" />
-      <div class="hint">不要保存 API Key、密码、Cookie、Token 等敏感信息。</div>
+      <label for="m-value" data-i18n="memoryValueLabel">记忆内容</label>
+      <input id="m-value" placeholder="只保存长期有用、非敏感的信息" data-i18n-placeholder="memoryValuePlaceholder" />
+      <div class="hint" data-i18n="memorySensitiveHint">不要保存 API Key、密码、Cookie、Token 等敏感信息。</div>
     </div>
     <div class="memory-toolbar">
-      <input id="m-search" placeholder="搜索记忆" />
-      <button class="btn-secondary" type="button" onclick="loadMemories()">搜索</button>
-      <button class="btn-primary" type="button" onclick="saveMemory()">保存</button>
+      <input id="m-search" placeholder="搜索记忆" data-i18n-placeholder="memorySearchPlaceholder" />
+      <button class="btn-secondary" type="button" onclick="loadMemories()" data-i18n="searchButton">搜索</button>
+      <button class="btn-primary" type="button" onclick="saveMemory()" data-i18n="saveButton">保存</button>
     </div>
     <div class="memory-list" id="memory-list">
-      <div style="padding:12px;color:#8e8e93;font-size:13px;">加载中...</div>
+      <div style="padding:12px;color:#8e8e93;font-size:13px;" data-i18n="loading">加载中...</div>
     </div>
     <div class="save-feedback" id="memory-feedback"></div>
     <div class="modal-actions">
-      <button class="btn-secondary" onclick="closeMemory()">关闭</button>
+      <button class="btn-secondary" onclick="closeMemory()" data-i18n="closeButton">关闭</button>
     </div>
   </div>
 </div>
@@ -354,45 +361,45 @@
 <!-- 设置弹窗 -->
 <div class="modal-overlay" id="settings-modal">
   <div class="modal">
-    <h2>⚙️ 设置</h2>
+    <h2 data-i18n="settingsTitle">⚙️ 设置</h2>
     <div class="form-group">
-      <label for="s-provider">模型厂商</label>
+      <label for="s-provider" data-i18n="providerLabel">模型厂商</label>
       <div class="provider-row">
         <select id="s-provider" onchange="onProviderChange()"></select>
-        <button type="button" onclick="addCustomProvider()">新增自定义</button>
+        <button type="button" onclick="addCustomProvider()" data-i18n="addCustomProvider">新增自定义</button>
       </div>
-      <div class="hint" id="s-provider-hint">选择要使用的模型厂商。</div>
+      <div class="hint" id="s-provider-hint" data-i18n="providerHint">选择要使用的模型厂商。</div>
     </div>
     <div class="form-group hidden" id="s-provider-name-group">
-      <label for="s-provider-name">厂商名称</label>
-      <input id="s-provider-name" placeholder="例如 Mimo / 本地 LM Studio / 公司网关" />
-      <div class="hint">自定义厂商会按这个名称显示在顶部切换器里。</div>
+      <label for="s-provider-name" data-i18n="providerNameLabel">厂商名称</label>
+      <input id="s-provider-name" placeholder="例如 Mimo / 本地 LM Studio / 公司网关" data-i18n-placeholder="providerNamePlaceholder" />
+      <div class="hint" data-i18n="providerNameHint">自定义厂商会按这个名称显示在顶部切换器里。</div>
     </div>
     <div class="form-group">
       <label for="s-api-key">API Key</label>
       <input id="s-api-key" type="password" placeholder="sk-..." autocomplete="new-password" />
-      <div class="hint" id="s-api-key-hint">留空则保留当前厂商已保存的 API Key。</div>
+      <div class="hint" id="s-api-key-hint" data-i18n="apiKeyHint">留空则保留当前厂商已保存的 API Key。</div>
     </div>
     <div class="form-group">
-      <label for="s-model">模型名称</label>
-      <input id="s-model" list="s-model-options" placeholder="选择或输入模型名称" />
+      <label for="s-model" data-i18n="modelLabel">模型名称</label>
+      <input id="s-model" list="s-model-options" placeholder="选择或输入模型名称" data-i18n-placeholder="modelPlaceholder" />
       <datalist id="s-model-options"></datalist>
-      <div class="hint">可从候选中选择，也可以输入兼容接口支持的模型名。</div>
+      <div class="hint" data-i18n="modelHint">可从候选中选择，也可以输入兼容接口支持的模型名。</div>
     </div>
     <div class="form-group">
-      <label for="s-base-url">API 地址（可选）</label>
-      <input id="s-base-url" placeholder="留空用 OpenAI 官方，DeepSeek: https://api.deepseek.com" />
-      <div class="hint">自定义 API 地址，如 DeepSeek 填 https://api.deepseek.com</div>
+      <label for="s-base-url" data-i18n="baseUrlLabel">API 地址（可选）</label>
+      <input id="s-base-url" placeholder="留空用 OpenAI 官方，DeepSeek: https://api.deepseek.com" data-i18n-placeholder="baseUrlPlaceholder" />
+      <div class="hint" data-i18n="baseUrlHint">自定义 API 地址，如 DeepSeek 填 https://api.deepseek.com</div>
     </div>
     <div class="form-group">
-      <label for="s-recursion-limit">最大推理步数</label>
+      <label for="s-recursion-limit" data-i18n="recursionLimitLabel">最大推理步数</label>
       <input id="s-recursion-limit" type="number" min="10" max="200" step="1" />
-      <div class="hint">复杂任务或多次工具调用可适当调大；过大时循环任务会运行更久。</div>
+      <div class="hint" data-i18n="recursionLimitHint">复杂任务或多次工具调用可适当调大；过大时循环任务会运行更久。</div>
     </div>
     <div class="save-feedback" id="save-feedback"></div>
     <div class="modal-actions">
-      <button class="btn-secondary" onclick="closeSettings()">取消</button>
-      <button class="btn-primary" id="save-settings-btn" onclick="saveSettings()">保存并重启</button>
+      <button class="btn-secondary" onclick="closeSettings()" data-i18n="cancelButton">取消</button>
+      <button class="btn-primary" id="save-settings-btn" onclick="saveSettings()" data-i18n="saveRestartButton">保存并重启</button>
     </div>
   </div>
 </div>
@@ -400,12 +407,12 @@
 <!-- Markdown 制品预览弹窗 -->
 <div class="modal-overlay" id="artifact-preview-modal">
   <div class="modal artifact-preview-modal">
-    <h2 id="artifact-preview-title">文件预览</h2>
+    <h2 id="artifact-preview-title" data-i18n="artifactPreviewTitle">文件预览</h2>
     <div class="artifact-preview-path" id="artifact-preview-path"></div>
     <div class="artifact-preview-body" id="artifact-preview-body"></div>
     <div class="modal-actions">
-      <a class="btn-secondary" id="artifact-preview-download" href="#" download>下载</a>
-      <button class="btn-secondary" onclick="closeArtifactPreview()">关闭</button>
+      <a class="btn-secondary" id="artifact-preview-download" href="#" download data-i18n="downloadButton">下载</a>
+      <button class="btn-secondary" onclick="closeArtifactPreview()" data-i18n="closeButton">关闭</button>
     </div>
   </div>
 </div>
@@ -420,6 +427,7 @@ const statusText = document.getElementById('status-text');
 const quickProviderSelect = document.getElementById('quick-provider-select');
 const settingsBtn = document.getElementById('settings-btn');
 const providerCard = document.getElementById('provider-card');
+const languageSelect = document.getElementById('language-select');
 
 let threadId = 'default';
 let isLoading = false;
@@ -431,6 +439,265 @@ let isAdmin = false;
 let pendingAttachments = [];
 let currentAbortController = null;
 let userStoppedCurrentRun = false;
+
+const I18N = {
+  'zh-CN': {
+    appTitle: 'Desktop Agent',
+    sessionsTitle: '💬 会话',
+    newSession: '＋ 新建',
+    loading: '加载中...',
+    modelProvider: '🌐 模型服务商',
+    switchProviderTitle: '切换模型厂商',
+    toolCalls: '工具调用',
+    modelTokens: '模型 Token',
+    estimatedCost: '估算费用',
+    skillsTitle: '🧩 技能',
+    connecting: '连接中...',
+    connected: '已连接',
+    connectionFailed: '连接失败',
+    memoryButton: '🧠 记忆',
+    settingsButton: '⚙️ 设置',
+    logoutButton: '🚪 登出',
+    composerPlaceholder: '说点什么...（Enter 换行，⌘/Ctrl+Enter 发送，可直接粘贴图片）',
+    sendButton: '发送',
+    stopButton: '停止',
+    stoppingButton: '停止中...',
+    stopTitle: '终止正在执行的任务',
+    memoryTitle: '长期记忆',
+    memoryKeyLabel: '记忆 Key',
+    memoryKeyPlaceholder: '例如 remote.deploy.host',
+    memoryValueLabel: '记忆内容',
+    memoryValuePlaceholder: '只保存长期有用、非敏感的信息',
+    memorySensitiveHint: '不要保存 API Key、密码、Cookie、Token 等敏感信息。',
+    memorySearchPlaceholder: '搜索记忆',
+    searchButton: '搜索',
+    saveButton: '保存',
+    closeButton: '关闭',
+    settingsTitle: '⚙️ 设置',
+    providerLabel: '模型厂商',
+    addCustomProvider: '新增自定义',
+    providerHint: '选择要使用的模型厂商。',
+    providerNameLabel: '厂商名称',
+    providerNamePlaceholder: '例如 Mimo / 本地 LM Studio / 公司网关',
+    providerNameHint: '自定义厂商会按这个名称显示在顶部切换器里。',
+    apiKeyHint: '留空则保留当前厂商已保存的 API Key。',
+    modelLabel: '模型名称',
+    modelPlaceholder: '选择或输入模型名称',
+    modelHint: '可从候选中选择，也可以输入兼容接口支持的模型名。',
+    baseUrlLabel: 'API 地址（可选）',
+    baseUrlPlaceholder: '留空用 OpenAI 官方，DeepSeek: https://api.deepseek.com',
+    baseUrlHint: '自定义 API 地址，如 DeepSeek 填 https://api.deepseek.com',
+    recursionLimitLabel: '最大推理步数',
+    recursionLimitHint: '复杂任务或多次工具调用可适当调大；过大时循环任务会运行更久。',
+    cancelButton: '取消',
+    saveRestartButton: '保存并重启',
+    artifactPreviewTitle: '文件预览',
+    downloadButton: '下载',
+    analyzingImages: '请分析这些图片。',
+    imageTooLarge: '⚠️ 图片 {name} 超过 6MB，已忽略',
+    imageLimit: '⚠️ 单次最多粘贴 4 张图片',
+    thinking: 'AI 正在思考...',
+    stillProcessing: '后端仍在处理...',
+    generating: '正在生成回复...',
+    runStopRequested: '已请求终止当前任务。',
+    taskEndedNoFinal: '任务已结束，但后端没有返回最终回答。',
+    connectionInterrupted: '⚠️ 连接中断',
+    preparing: '准备中...',
+    stepCount: '步骤 {count}',
+    thought: '思考',
+    stepLabel: '第 {step} 步',
+    keepAnalyzing: '🤔 继续分析',
+    running: '执行中...',
+    done: '✅ 完成',
+    analyzeResult: '🤔 分析结果',
+    runningFallback: '执行中...',
+    liveProgressPrefix: '⏳ ',
+    modelSwitched: '本轮{reason}已自动切换到支持的模型：{model}',
+    continueProcessing: '继续处理...',
+    stopped: '⛔ 已停止',
+    completeText: '完成 ✓',
+    unnamed: '未命名',
+    messagesCount: '{count} 条消息',
+    deleteTitle: '删除',
+    noSessions: '暂无会话，新建一个开始对话',
+    emptySession: '这是新的空白会话，发条消息开始吧',
+    newSessionReady: '新会话已创建，发条消息开始吧',
+    deleteSessionConfirm: '确定删除此会话？',
+    modelNotConfigured: '未配置模型',
+    currentProvider: '当前厂商：{name}',
+    apiKeySaved: '已保存：{preview}。留空则继续使用已保存的 API Key。',
+    apiKeyNotSaved: '尚未保存 API Key。',
+    customProviderName: '新的自定义厂商',
+    saving: '保存中...',
+    settingsSaved: '设置已保存',
+    saveFailed: '保存失败',
+    networkSettingsError: '❌ 网络错误，无法连接服务器',
+    switchProviderFailed: '切换模型失败',
+    switchProviderNetworkFailed: '⚠️ 切换模型失败，无法连接服务器',
+    memoryEmpty: '暂无长期记忆',
+    deleteMemory: '删除',
+    fillMemory: '请填写 key 和内容',
+    memorySaved: '已保存',
+    memorySaveFailed: '保存失败',
+    memoryNetworkError: '网络错误，保存失败',
+    deleteMemoryConfirm: '确定删除记忆 {key}？',
+    artifactLoading: '加载中...',
+    artifactPreviewFailed: '预览失败',
+    statusModel: '模型',
+    statusConfiguredMissing: '未配置',
+    needsApiKey: '⚠️ 需要设置 API Key（当前: {provider} · {model}）',
+    connectedWithModel: '已连接 · {provider} · {model}',
+    noSkills: '暂无技能',
+    noDescription: '无描述',
+    noTriggers: '未声明',
+    triggersLabel: '触发词：',
+    welcome: '你好！我是你的桌面智能体。',
+    welcomeCapabilities: '我可以：\n📁 读写文件、管理目录\n🐍 执行 Python 代码\n💻 获取系统信息\n🧩 按 Skills 插件执行专业任务\n\n试试说「帮我写一份日报」「列出工作区文件」或「告诉我系统信息」',
+    agentUnavailable: '⚠️ 无法连接到 Agent 服务。请在终端运行：',
+    refreshAfterStart: '然后刷新页面。',
+    tokensSuffix: ' tokens',
+  },
+  en: {
+    appTitle: 'Desktop Agent',
+    sessionsTitle: '💬 Sessions',
+    newSession: '+ New',
+    loading: 'Loading...',
+    modelProvider: '🌐 Model provider',
+    switchProviderTitle: 'Switch model provider',
+    toolCalls: 'Tool calls',
+    modelTokens: 'Model tokens',
+    estimatedCost: 'Estimated cost',
+    skillsTitle: '🧩 Skills',
+    connecting: 'Connecting...',
+    connected: 'Connected',
+    connectionFailed: 'Connection failed',
+    memoryButton: '🧠 Memory',
+    settingsButton: '⚙️ Settings',
+    logoutButton: '🚪 Log out',
+    composerPlaceholder: 'Say something... (Enter for newline, Cmd/Ctrl+Enter to send, paste images directly)',
+    sendButton: 'Send',
+    stopButton: 'Stop',
+    stoppingButton: 'Stopping...',
+    stopTitle: 'Stop the running task',
+    memoryTitle: 'Long-term Memory',
+    memoryKeyLabel: 'Memory key',
+    memoryKeyPlaceholder: 'Example: remote.deploy.host',
+    memoryValueLabel: 'Memory content',
+    memoryValuePlaceholder: 'Save only long-term, useful, non-sensitive information',
+    memorySensitiveHint: 'Do not save sensitive information such as API keys, passwords, cookies, or tokens.',
+    memorySearchPlaceholder: 'Search memory',
+    searchButton: 'Search',
+    saveButton: 'Save',
+    closeButton: 'Close',
+    settingsTitle: '⚙️ Settings',
+    providerLabel: 'Model provider',
+    addCustomProvider: 'Add custom',
+    providerHint: 'Choose the model provider to use.',
+    providerNameLabel: 'Provider name',
+    providerNamePlaceholder: 'Example: Mimo / local LM Studio / company gateway',
+    providerNameHint: 'Custom providers appear in the top switcher with this name.',
+    apiKeyHint: 'Leave blank to keep the saved API key for this provider.',
+    modelLabel: 'Model name',
+    modelPlaceholder: 'Choose or enter a model name',
+    modelHint: 'Pick a suggestion or enter any model supported by the compatible endpoint.',
+    baseUrlLabel: 'API base URL (optional)',
+    baseUrlPlaceholder: 'Leave blank for OpenAI; DeepSeek: https://api.deepseek.com',
+    baseUrlHint: 'Custom API base URL, for example DeepSeek: https://api.deepseek.com',
+    recursionLimitLabel: 'Max reasoning steps',
+    recursionLimitHint: 'Increase this for complex tasks or many tool calls; very high values can make looping tasks run longer.',
+    cancelButton: 'Cancel',
+    saveRestartButton: 'Save and restart',
+    artifactPreviewTitle: 'File preview',
+    downloadButton: 'Download',
+    analyzingImages: 'Please analyze these images.',
+    imageTooLarge: '⚠️ Image {name} is larger than 6 MB and was ignored',
+    imageLimit: '⚠️ You can paste up to 4 images at once',
+    thinking: 'AI is thinking...',
+    stillProcessing: 'Backend is still processing...',
+    generating: 'Generating reply...',
+    runStopRequested: 'Stop requested for the current task.',
+    taskEndedNoFinal: 'The task ended, but the backend did not return a final answer.',
+    connectionInterrupted: '⚠️ Connection interrupted',
+    preparing: 'Preparing...',
+    stepCount: 'Step {count}',
+    thought: 'Thought',
+    stepLabel: 'Step {step}',
+    keepAnalyzing: '🤔 Continuing analysis',
+    running: 'Running...',
+    done: '✅ Done',
+    analyzeResult: '🤔 Analyzing result',
+    runningFallback: 'Running...',
+    liveProgressPrefix: '⏳ ',
+    modelSwitched: 'This {reason} automatically switched to a supported model: {model}',
+    continueProcessing: 'Continuing...',
+    stopped: '⛔ Stopped',
+    completeText: 'Complete ✓',
+    unnamed: 'Untitled',
+    messagesCount: '{count} messages',
+    deleteTitle: 'Delete',
+    noSessions: 'No sessions yet. Create one to start chatting.',
+    emptySession: 'This is a new empty session. Send a message to begin.',
+    newSessionReady: 'New session created. Send a message to begin.',
+    deleteSessionConfirm: 'Delete this session?',
+    modelNotConfigured: 'No model configured',
+    currentProvider: 'Current provider: {name}',
+    apiKeySaved: 'Saved: {preview}. Leave blank to keep the saved API key.',
+    apiKeyNotSaved: 'No API key saved yet.',
+    customProviderName: 'New custom provider',
+    saving: 'Saving...',
+    settingsSaved: 'Settings saved',
+    saveFailed: 'Save failed',
+    networkSettingsError: '❌ Network error. Could not reach the server.',
+    switchProviderFailed: 'Failed to switch model',
+    switchProviderNetworkFailed: '⚠️ Failed to switch model. Could not reach the server.',
+    memoryEmpty: 'No long-term memories yet',
+    deleteMemory: 'Delete',
+    fillMemory: 'Please fill in both key and content',
+    memorySaved: 'Saved',
+    memorySaveFailed: 'Save failed',
+    memoryNetworkError: 'Network error. Save failed.',
+    deleteMemoryConfirm: 'Delete memory {key}?',
+    artifactLoading: 'Loading...',
+    artifactPreviewFailed: 'Preview failed',
+    statusModel: 'Model',
+    statusConfiguredMissing: 'Not configured',
+    needsApiKey: '⚠️ API key required (current: {provider} · {model})',
+    connectedWithModel: 'Connected · {provider} · {model}',
+    noSkills: 'No skills',
+    noDescription: 'No description',
+    noTriggers: 'Not declared',
+    triggersLabel: 'Triggers: ',
+    welcome: 'Hi! I am your desktop agent.',
+    welcomeCapabilities: 'I can:\n📁 Read, write, and manage files\n🐍 Run Python code\n💻 Get system information\n🧩 Use Skills for specialized tasks\n\nTry asking: "write a daily report", "list workspace files", or "tell me system information".',
+    agentUnavailable: '⚠️ Cannot connect to the Agent service. Run this in a terminal:',
+    refreshAfterStart: 'Then refresh this page.',
+    tokensSuffix: ' tokens',
+  },
+};
+
+let currentLanguage = localStorage.getItem('desktop-agent-language') || ((navigator.language || '').toLowerCase().startsWith('zh') ? 'zh-CN' : 'en');
+if (!I18N[currentLanguage]) currentLanguage = 'zh-CN';
+
+function t(key, params = {}) {
+  const template = (I18N[currentLanguage] && I18N[currentLanguage][key]) || I18N['zh-CN'][key] || key;
+  return template.replace(/\{(\w+)\}/g, (_, name) => params[name] ?? '');
+}
+
+function applyI18n() {
+  document.documentElement.lang = currentLanguage;
+  document.title = t('appTitle');
+  document.querySelectorAll('[data-i18n]').forEach(el => {
+    el.textContent = t(el.dataset.i18n);
+  });
+  document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
+    el.setAttribute('placeholder', t(el.dataset.i18nPlaceholder));
+  });
+  document.querySelectorAll('[data-i18n-title]').forEach(el => {
+    el.setAttribute('title', t(el.dataset.i18nTitle));
+  });
+  if (languageSelect) languageSelect.value = currentLanguage;
+  setSendButtonRunning(isLoading);
+}
 
 // 配置 Markdown 渲染（开启 XSS 过滤）
 marked.setOptions({
@@ -476,7 +743,7 @@ function addMessage(text, role) {
 }
 
 function addUserMessage(text, attachments = []) {
-  const div = addMessage(text || (attachments.length ? '请分析这些图片。' : ''), 'user');
+  const div = addMessage(text || (attachments.length ? t('analyzingImages') : ''), 'user');
   if (attachments.length) {
     const grid = document.createElement('div');
     grid.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;';
@@ -509,7 +776,7 @@ function renderAttachmentPreview() {
     img.alt = item.name || 'pasted image';
     const removeBtn = document.createElement('button');
     removeBtn.type = 'button';
-    removeBtn.setAttribute('aria-label', '移除图片');
+    removeBtn.setAttribute('aria-label', currentLanguage === 'en' ? 'Remove image' : '移除图片');
     removeBtn.textContent = '×';
     removeBtn.addEventListener('click', () => {
       pendingAttachments.splice(index, 1);
@@ -524,11 +791,11 @@ function renderAttachmentPreview() {
 function addImageFile(file) {
   if (!file || !file.type.startsWith('image/')) return;
   if (file.size > 6 * 1024 * 1024) {
-    addMessage(`⚠️ 图片 ${file.name || ''} 超过 6MB，已忽略`, 'system');
+    addMessage(t('imageTooLarge', { name: file.name || '' }), 'system');
     return;
   }
   if (pendingAttachments.length >= 4) {
-    addMessage('⚠️ 单次最多粘贴 4 张图片', 'system');
+    addMessage(t('imageLimit'), 'system');
     return;
   }
   const reader = new FileReader();
@@ -546,7 +813,7 @@ function addImageFile(file) {
 function showTyping() {
   const bar = document.getElementById('loading-bar');
   const label = bar.querySelector('.label');
-  if (label) label.textContent = 'AI 正在思考...';
+  if (label) label.textContent = t('thinking');
   bar.classList.add('show');
   messages.scrollTop = messages.scrollHeight;
 }
@@ -568,7 +835,7 @@ let generatingBadgeEl = null;     // 生成中徽章 DOM
 let streamIdleTimer = null;        // 流式响应空闲提示定时器
 let lastStreamEventAt = 0;         // 最近一次收到后端事件的时间
 
-function showGeneratingBadge(text = '正在生成回复...') {
+function showGeneratingBadge(text = t('generating')) {
   if (!generatingBadgeEl) {
     generatingBadgeEl = document.createElement('div');
     generatingBadgeEl.className = 'generating-badge';
@@ -603,7 +870,7 @@ function startStreamIdleWatch() {
     const idleMs = Date.now() - lastStreamEventAt;
     if (idleMs > 1800) {
       if (currentBotMsgEl || currentStepsEl) {
-        showGeneratingBadge('后端仍在处理...');
+        showGeneratingBadge(t('stillProcessing'));
       } else {
         showTyping();
       }
@@ -626,17 +893,17 @@ function resetBlockingOverlays() {
 
 function setSendButtonRunning(running) {
   sendBtn.disabled = false;
-  sendBtn.textContent = running ? '停止' : '发送';
+  sendBtn.textContent = running ? t('stopButton') : t('sendButton');
   sendBtn.classList.toggle('stop', running);
-  sendBtn.title = running ? '终止正在执行的任务' : '';
+  sendBtn.title = running ? t('stopTitle') : '';
 }
 
 function stopCurrentRun() {
   if (!isLoading || !currentAbortController) return;
   userStoppedCurrentRun = true;
   currentAbortController.abort();
-  addMessage('已请求终止当前任务。', 'system');
-  sendBtn.textContent = '停止中...';
+  addMessage(t('runStopRequested'), 'system');
+  sendBtn.textContent = t('stoppingButton');
   sendBtn.disabled = true;
 }
 
@@ -718,7 +985,7 @@ async function send() {
     if (streamDone && !gotTerminalEvent) {
       handleStreamEvent({
         type: 'done',
-        content: currentFinalContent || '任务已结束，但后端没有返回最终回答。',
+        content: currentFinalContent || t('taskEndedNoFinal'),
       });
     }
     
@@ -728,7 +995,7 @@ async function send() {
         currentBotMsgEl.classList.remove('streaming-final');
       }
     } else if (streamingActive) {
-      addMessage('⚠️ 连接中断', 'system');
+      addMessage(t('connectionInterrupted'), 'system');
     }
   } finally {
     stopStreamIdleWatch();
@@ -766,7 +1033,7 @@ function handleStreamEvent(data) {
     if (!prog) {
       prog = document.createElement('div');
       prog.className = 'step-progress';
-      prog.innerHTML = '<div class="progress-bar"><div class="fill" style="width:0%"></div></div><span class="progress-text">准备中...</span>';
+      prog.innerHTML = `<div class="progress-bar"><div class="fill" style="width:0%"></div></div><span class="progress-text">${escapeHtml(t('preparing'))}</span>`;
       currentStepsEl.prepend(prog);
     }
     const fill = prog.querySelector('.fill');
@@ -774,7 +1041,7 @@ function handleStreamEvent(data) {
     if (fill && text) {
       const pct = totalSteps > 0 ? Math.min(90, Math.round((totalSteps / (totalSteps + 1)) * 100)) : 10;
       fill.style.width = pct + '%';
-      text.textContent = `步骤 ${totalSteps}`;
+      text.textContent = t('stepCount', { count: totalSteps });
     }
   }
 
@@ -822,14 +1089,14 @@ function handleStreamEvent(data) {
         <div class="step-toggle open" onclick="toggleStep(this)">
           <span class="arrow">▶</span>
           <span class="tool-icon">🤔</span>
-          <span class="tool-name">思考</span>
-          <span class="step-status">第 ${data.step || '?'} 步</span>
+          <span class="tool-name">${escapeHtml(t('thought'))}</span>
+          <span class="step-status">${escapeHtml(t('stepLabel', { step: data.step || '?' }))}</span>
         </div>
         <div class="step-details open">
           <div class="thought">${renderMarkdown(thoughtText)}</div>
         </div>`;
       currentStepsEl.appendChild(thoughtDiv);
-      showThinkingHint('🤔 继续分析');
+      showThinkingHint(t('keepAnalyzing'));
       container.scrollTop = container.scrollHeight;
       break;
     
@@ -862,7 +1129,7 @@ function handleStreamEvent(data) {
           <span class="arrow">▶</span>
           <span class="tool-icon">${toolIcon}</span>
           <span class="tool-name">${escapeHtml(data.tool)}</span>
-          <span class="step-status running"><span class="mini-spin"></span>执行中...</span>
+          <span class="step-status running"><span class="mini-spin"></span>${escapeHtml(t('running'))}</span>
         </div>
         <div class="step-details open">
           ${argsHtml}
@@ -879,7 +1146,7 @@ function handleStreamEvent(data) {
           const statusSpan = lastToggle.querySelector('.step-status');
           if (statusSpan) {
             statusSpan.className = 'step-status done';
-            statusSpan.textContent = '✅ 完成';
+            statusSpan.textContent = t('done');
           }
           
           const details = lastToggle.nextElementSibling;
@@ -892,7 +1159,7 @@ function handleStreamEvent(data) {
         }
       }
       // 显示"分析中，准备下一步..."
-      showThinkingHint('🤔 分析结果');
+      showThinkingHint(t('analyzeResult'));
       container.scrollTop = container.scrollHeight;
       break;
 
@@ -907,7 +1174,7 @@ function handleStreamEvent(data) {
         const statusSpan = progressToggle.querySelector('.step-status');
         if (statusSpan) {
           statusSpan.className = 'step-status running';
-          statusSpan.innerHTML = `<span class="mini-spin"></span>${escapeHtml(data.message || '执行中...')}`;
+          statusSpan.innerHTML = `<span class="mini-spin"></span>${escapeHtml(data.message || t('runningFallback'))}`;
         }
         const details = progressToggle.nextElementSibling;
         if (details) {
@@ -917,15 +1184,15 @@ function handleStreamEvent(data) {
             live.className = 'result live-progress';
             details.appendChild(live);
           }
-          live.textContent = `⏳ ${data.message || '后端仍在处理...'}`;
+          live.textContent = `${t('liveProgressPrefix')}${data.message || t('stillProcessing')}`;
         }
       }
-      showGeneratingBadge(data.message || '后端仍在处理...');
+      showGeneratingBadge(data.message || t('stillProcessing'));
       container.scrollTop = container.scrollHeight;
       break;
 
     case 'model_switch':
-      addMessage(`本轮${data.reason || '请求'}已自动切换到支持的模型：${data.model}`, 'system');
+      addMessage(t('modelSwitched', { reason: data.reason || (currentLanguage === 'en' ? 'request' : '请求'), model: data.model }), 'system');
       break;
     
     case 'token':
@@ -943,7 +1210,7 @@ function handleStreamEvent(data) {
       }
       currentFinalContent += data.content;
       currentBotMsgEl.innerHTML = renderMarkdown(currentFinalContent);
-      if (hasToolCalls) showGeneratingBadge('继续处理...');
+      if (hasToolCalls) showGeneratingBadge(t('continueProcessing'));
       container.scrollTop = container.scrollHeight;
       break;
     
@@ -954,7 +1221,7 @@ function handleStreamEvent(data) {
       if (currentStepsEl) {
         currentStepsEl.querySelectorAll('.step-status.running').forEach(statusSpan => {
           statusSpan.className = 'step-status done';
-          statusSpan.textContent = '⛔ 已停止';
+          statusSpan.textContent = t('stopped');
         });
       }
       addMessage('❌ ' + data.content, 'system');
@@ -971,7 +1238,7 @@ function handleStreamEvent(data) {
           const statusSpan = t.querySelector('.step-status.running');
           if (statusSpan) {
             statusSpan.className = 'step-status done';
-            statusSpan.textContent = '✅ 完成';
+            statusSpan.textContent = t('done');
           }
           t.classList.remove('open');
           const details = t.nextElementSibling;
@@ -983,7 +1250,7 @@ function handleStreamEvent(data) {
           const fill = prog.querySelector('.fill');
           const text = prog.querySelector('.progress-text');
           if (fill) fill.style.width = '100%';
-          if (text) text.textContent = `完成 ✓`;
+          if (text) text.textContent = t('completeText');
         }
       }
       if (data.content && !currentBotMsgEl) {
@@ -1032,18 +1299,18 @@ function toggleStep(el) {
 function renderSessionList(sessions, currentId) {
   const container = document.getElementById('session-list');
   if (!sessions || sessions.length === 0) {
-    container.innerHTML = '<div style="padding:16px;color:#8e8e93;font-size:13px;">暂无会话，新建一个开始对话</div>';
+    container.innerHTML = `<div style="padding:16px;color:#8e8e93;font-size:13px;">${escapeHtml(t('noSessions'))}</div>`;
     return;
   }
   container.innerHTML = sessions.map(s => {
     const isActive = s.id === currentId;
     const time = s.updated_at ? s.updated_at.slice(5, 16).replace('T', ' ') : '';
     return `<div class="session-item ${isActive ? 'active' : ''}" data-id="${s.id}" onclick="switchSession('${s.id}')">
-      <div class="s-title">${escapeHtml(s.title || '未命名')}</div>
+      <div class="s-title">${escapeHtml(s.title || t('unnamed'))}</div>
       <div class="s-meta">
-        <span>${s.message_count || 0} 条消息</span>
+        <span>${escapeHtml(t('messagesCount', { count: s.message_count || 0 }))}</span>
         <span>${time}</span>
-        <button class="s-del" onclick="event.stopPropagation(); deleteSession('${s.id}')" title="删除">✕</button>
+        <button class="s-del" onclick="event.stopPropagation(); deleteSession('${s.id}')" title="${escapeHtml(t('deleteTitle'))}">✕</button>
       </div>
     </div>`;
   }).join('');
@@ -1086,7 +1353,7 @@ async function loadSessionMessages(sessionId) {
           addMessage(msg.content, msg.role === 'user' ? 'user' : 'bot');
         });
       } else {
-        addMessage('这是新的空白会话，发条消息开始吧', 'system');
+        addMessage(t('emptySession'), 'system');
       }
     }
   } catch {}
@@ -1116,13 +1383,13 @@ async function newSession() {
     threadId = data.id;
     // 清空消息区域
     document.getElementById('messages').innerHTML = '';
-    addMessage('新会话已创建，发条消息开始吧', 'system');
+    addMessage(t('newSessionReady'), 'system');
     await loadSessions();
   } catch {}
 }
 
 async function deleteSession(sessionId) {
-  if (!confirm('确定删除此会话？')) return;
+  if (!confirm(t('deleteSessionConfirm'))) return;
   try {
     await fetch(`/sessions/${sessionId}`, { method: 'DELETE' });
     if (sessionId === currentSessionId) {
@@ -1142,7 +1409,7 @@ async function deleteSession(sessionId) {
 
 function providerLabel(provider, id) {
   const name = provider.name || id;
-  const model = provider.model || '未配置模型';
+  const model = provider.model || t('modelNotConfigured');
   return `${name} · ${model}`;
 }
 
@@ -1217,10 +1484,10 @@ function renderProviderFields(providerId) {
   document.getElementById('s-api-key').value = '';
   document.getElementById('s-provider-name').value = provider.name || '';
   document.getElementById('s-provider-name-group').classList.toggle('hidden', !isCustom);
-  document.getElementById('s-provider-hint').textContent = `当前厂商：${provider.name || providerId}`;
+  document.getElementById('s-provider-hint').textContent = t('currentProvider', { name: provider.name || providerId });
   document.getElementById('s-api-key-hint').textContent = provider.api_key_configured
-    ? `已保存：${provider.api_key_preview}。留空则继续使用已保存的 API Key。`
-    : '尚未保存 API Key。';
+    ? t('apiKeySaved', { preview: provider.api_key_preview })
+    : t('apiKeyNotSaved');
 }
 
 function onProviderChange() {
@@ -1231,10 +1498,10 @@ function addCustomProvider() {
   if (!settingsData) settingsData = { providers: {} };
   const id = `custom_${Date.now()}`;
   settingsData.providers[id] = {
-    name: '新的自定义厂商',
+    name: t('customProviderName'),
     is_custom: true,
     api_key_configured: false,
-    api_key_preview: '未设置',
+    api_key_preview: currentLanguage === 'en' ? 'Not set' : '未设置',
     model: '',
     base_url: '',
     models: [],
@@ -1272,7 +1539,7 @@ async function saveSettings() {
   const btn = document.getElementById('save-settings-btn');
   const feedback = document.getElementById('save-feedback');
   btn.disabled = true;
-  feedback.textContent = '保存中...';
+  feedback.textContent = t('saving');
   feedback.className = 'save-feedback';
   
   try {
@@ -1294,7 +1561,7 @@ async function saveSettings() {
     });
     const data = await res.json();
     if (data.status === 'ok') {
-      feedback.textContent = '✅ ' + (data.message || '设置已保存');
+      feedback.textContent = '✅ ' + (currentLanguage === 'en' ? t('settingsSaved') : (data.message || t('settingsSaved')));
       feedback.className = 'save-feedback ok';
       // 清空密码框
       document.getElementById('s-api-key').value = '';
@@ -1306,12 +1573,12 @@ async function saveSettings() {
         refreshStats();
       }, 1000);
     } else {
-      feedback.textContent = '⚠️ ' + (data.message || '保存失败');
+      feedback.textContent = '⚠️ ' + (currentLanguage === 'en' ? t('saveFailed') : (data.message || t('saveFailed')));
       feedback.className = 'save-feedback err';
       btn.disabled = false;
     }
   } catch (e) {
-    feedback.textContent = '❌ 网络错误，无法连接服务器';
+    feedback.textContent = t('networkSettingsError');
     feedback.className = 'save-feedback err';
     btn.disabled = false;
   }
@@ -1344,12 +1611,12 @@ async function quickSwitchProvider() {
     });
     const data = await res.json();
     if (data.status !== 'ok') {
-      addMessage('⚠️ ' + (data.message || '切换模型失败'), 'system');
+      addMessage('⚠️ ' + (currentLanguage === 'en' ? t('switchProviderFailed') : (data.message || t('switchProviderFailed'))), 'system');
     }
     await loadSettingsForSwitcher();
     await checkHealth();
   } catch {
-    addMessage('⚠️ 切换模型失败，无法连接服务器', 'system');
+    addMessage(t('switchProviderNetworkFailed'), 'system');
   } finally {
     quickProviderSelect.disabled = false;
   }
@@ -1371,7 +1638,7 @@ function closeMemory() {
 function renderMemories(items) {
   const list = document.getElementById('memory-list');
   if (!items || items.length === 0) {
-    list.innerHTML = '<div style="padding:12px;color:#8e8e93;font-size:13px;">暂无长期记忆</div>';
+    list.innerHTML = `<div style="padding:12px;color:#8e8e93;font-size:13px;">${escapeHtml(t('memoryEmpty'))}</div>`;
     return;
   }
   list.innerHTML = items.map(item => {
@@ -1381,7 +1648,7 @@ function renderMemories(items) {
     return `<div class="memory-item">
       <div class="memory-key">
         <span>${key}</span>
-        <button class="memory-delete" onclick="deleteMemory(decodeURIComponent('${encodedKey}'))">删除</button>
+        <button class="memory-delete" onclick="deleteMemory(decodeURIComponent('${encodedKey}'))">${escapeHtml(t('deleteMemory'))}</button>
       </div>
       <div class="memory-value">${value}</div>
     </div>`;
@@ -1413,7 +1680,7 @@ async function saveMemory() {
   const key = keyEl.value.trim();
   const value = valueEl.value.trim();
   if (!key || !value) {
-    feedback.textContent = '请填写 key 和内容';
+    feedback.textContent = t('fillMemory');
     feedback.className = 'save-feedback err';
     return;
   }
@@ -1425,23 +1692,23 @@ async function saveMemory() {
     });
     const data = await res.json();
     if (res.ok) {
-      feedback.textContent = data.message || '已保存';
+      feedback.textContent = currentLanguage === 'en' ? t('memorySaved') : (data.message || t('memorySaved'));
       feedback.className = 'save-feedback ok';
       keyEl.value = '';
       valueEl.value = '';
       await loadMemories();
     } else {
-      feedback.textContent = data.detail || '保存失败';
+      feedback.textContent = currentLanguage === 'en' ? t('memorySaveFailed') : (data.detail || t('memorySaveFailed'));
       feedback.className = 'save-feedback err';
     }
   } catch {
-    feedback.textContent = '网络错误，保存失败';
+    feedback.textContent = t('memoryNetworkError');
     feedback.className = 'save-feedback err';
   }
 }
 
 async function deleteMemory(key) {
-  if (!confirm(`确定删除记忆 ${key}？`)) return;
+  if (!confirm(t('deleteMemoryConfirm', { key }))) return;
   try {
     await fetch(`/memories/${encodeURIComponent(key)}`, { method: 'DELETE' });
     await loadMemories();
@@ -1456,20 +1723,20 @@ async function openArtifactPreview(path) {
   const pathEl = document.getElementById('artifact-preview-path');
   const body = document.getElementById('artifact-preview-body');
   const download = document.getElementById('artifact-preview-download');
-  title.textContent = '文件预览';
+  title.textContent = t('artifactPreviewTitle');
   pathEl.textContent = path;
-  body.textContent = '加载中...';
+  body.textContent = t('artifactLoading');
   download.href = `/artifacts/download?path=${encodeURIComponent(path)}`;
   modal.classList.add('active');
   try {
     const res = await fetch(`/artifacts/preview?path=${encodeURIComponent(path)}`);
     const data = await res.json();
-    if (!res.ok) throw new Error(data.detail || '预览失败');
-    title.textContent = data.name || '文件预览';
+    if (!res.ok) throw new Error(currentLanguage === 'en' ? t('artifactPreviewFailed') : (data.detail || t('artifactPreviewFailed')));
+    title.textContent = data.name || t('artifactPreviewTitle');
     pathEl.textContent = data.path || path;
     body.innerHTML = renderMarkdown(data.content || '');
   } catch (error) {
-    body.textContent = error.message || '预览失败';
+    body.textContent = error.message || t('artifactPreviewFailed');
   }
 }
 
@@ -1493,6 +1760,14 @@ document.getElementById('settings-btn').onclick = openSettings;
 document.getElementById('memory-btn').onclick = openMemory;
 // 新建会话按钮
 document.getElementById('new-session-btn').onclick = newSession;
+languageSelect.addEventListener('change', () => {
+  currentLanguage = languageSelect.value;
+  localStorage.setItem('desktop-agent-language', currentLanguage);
+  applyI18n();
+  renderSessionList(sessionsCache, currentSessionId);
+  refreshSkills();
+  checkHealth();
+});
 
 // 登出
 function logout() {
@@ -1535,7 +1810,7 @@ window.addEventListener('resize', function() {
 
 function setStatus(state) {
   statusDot.className = state === 'ok' ? 'online' : state === 'error' ? 'error' : '';
-  statusText.textContent = state === 'ok' ? '已连接' : state === 'error' ? '连接失败' : '连接中...';
+  statusText.textContent = state === 'ok' ? t('connected') : state === 'error' ? t('connectionFailed') : t('connecting');
 }
 
 async function checkHealth() {
@@ -1543,17 +1818,17 @@ async function checkHealth() {
     const res = await fetch(`/health`);
     if (res.ok) {
       const data = await res.json();
-      const modelName = data.model || '未配置';
-      const providerName = data.provider_name || data.provider || '模型';
+      const modelName = data.model || t('statusConfiguredMissing');
+      const providerName = data.provider_name || data.provider || t('statusModel');
       if (data.status === 'ok') {
         setStatus('ok');
-        statusText.textContent = `已连接 · ${providerName} · ${modelName}`;
+        statusText.textContent = t('connectedWithModel', { provider: providerName, model: modelName });
       } else if (data.error && data.error.includes('credentials')) {
         setStatus('ok');
-        statusText.textContent = `⚠️ 需要设置 API Key（当前: ${providerName} · ${modelName}）`;
+        statusText.textContent = t('needsApiKey', { provider: providerName, model: modelName });
       } else {
         setStatus('ok');
-        statusText.textContent = `已连接 · ${providerName} · ${modelName}`;
+        statusText.textContent = t('connectedWithModel', { provider: providerName, model: modelName });
       }
       return true;
     }
@@ -1586,10 +1861,10 @@ async function refreshSkills() {
       const data = await res.json();
       const container = document.getElementById('skills-list');
       if (data.length === 0) {
-        container.innerHTML = '<div class="skill-item" style="color:#8e8e93;">暂无技能</div>';
+        container.innerHTML = `<div class="skill-item" style="color:#8e8e93;">${escapeHtml(t('noSkills'))}</div>`;
       } else {
         container.innerHTML = data.map(s => 
-          `<div class="skill-item" title="${escapeHtml(s.description || '无描述')}" data-name="${escapeHtml(s.name)}" data-description="${escapeHtml(s.description || '无描述')}" data-triggers="${escapeHtml((s.triggers || []).join('、') || '未声明')}">📌 ${escapeHtml(s.name)}</div>`
+          `<div class="skill-item" title="${escapeHtml(s.description || t('noDescription'))}" data-name="${escapeHtml(s.name)}" data-description="${escapeHtml(s.description || t('noDescription'))}" data-triggers="${escapeHtml((s.triggers || []).join('、') || t('noTriggers'))}">📌 ${escapeHtml(s.name)}</div>`
         ).join('');
       }
     }
@@ -1606,8 +1881,8 @@ document.addEventListener('mousemove', (event) => {
   }
   tooltip.innerHTML = `
     <div class="tooltip-title">${item.dataset.name}</div>
-    <div>${item.dataset.description || '无描述'}</div>
-    <div class="tooltip-muted">触发词：${item.dataset.triggers || '未声明'}</div>
+    <div>${item.dataset.description || t('noDescription')}</div>
+    <div class="tooltip-muted">${t('triggersLabel')}${item.dataset.triggers || t('noTriggers')}</div>
   `;
   tooltip.style.display = 'block';
   const margin = 12;
@@ -1665,6 +1940,7 @@ setInterval(() => { checkHealth(); refreshStats(); }, 5000);
 setInterval(loadSessions, 10000);
 
 (async () => {
+  applyI18n();
   resetBlockingOverlays();
   const ok = await checkHealth();
   await loadCurrentUser();
@@ -1679,15 +1955,15 @@ setInterval(loadSessions, 10000);
         : sessionsCache[0].id;
       await switchSession(initialSessionId, true);
     } else {
-      addMessage('你好！我是你的桌面智能体。', 'bot');
-      addMessage('我可以：\n📁 读写文件、管理目录\n🐍 执行 Python 代码\n💻 获取系统信息\n🧩 按 Skills 插件执行专业任务\n\n试试说「帮我写一份日报」「列出工作区文件」或「告诉我系统信息」', 'bot');
+      addMessage(t('welcome'), 'bot');
+      addMessage(t('welcomeCapabilities'), 'bot');
     }
     refreshSkills();
     refreshStats();
   } else {
-    addMessage('⚠️ 无法连接到 Agent 服务。请在终端运行：', 'system');
+    addMessage(t('agentUnavailable'), 'system');
     addMessage('cd agent_core\npython main.py', 'system');
-    addMessage('然后刷新页面。', 'system');
+    addMessage(t('refreshAfterStart'), 'system');
   }
 })();
 </script>
