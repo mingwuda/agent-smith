@@ -33,7 +33,7 @@ AgentSmith 是一个本地/私有部署的桌面 AI 智能体。它基于 FastAP
 
 ### 环境要求
 
-- Python 3.10+，推荐 3.12/3.13
+- Python 3.9+，推荐 3.10+（3.9 通过 `from __future__ import annotations` 兼容）
 - 一个 OpenAI 兼容模型 API Key
 - 可选：Git、curl、Windows 打包环境
 
@@ -519,7 +519,7 @@ desktop-agent/
 | 前端 | 原生 HTML/CSS/JS + marked.js |
 | 状态 | LangGraph MemorySaver + SQLite |
 | 认证 | HttpOnly Cookie + HMAC 签名 |
-| 运行时 | Python 3.10+ |
+| 运行时 | Python 3.9+（推荐 3.10+） |
 
 ---
 

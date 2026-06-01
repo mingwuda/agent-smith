@@ -33,7 +33,7 @@ It works well as a personal or intranet team assistant for reading and writing w
 
 ### Requirements
 
-- Python 3.10+, with 3.12 or 3.13 recommended
+- Python 3.9+ (3.10+ recommended; 3.9 uses `from __future__ import annotations` for PEP 604 syntax)
 - An OpenAI-compatible model API key
 - Optional: Git, curl, and a Windows packaging environment
 
@@ -410,4 +410,4 @@ desktop-agent/
 | Frontend | Plain HTML/CSS/JS + marked.js |
 | State | LangGraph MemorySaver + SQLite |
 | Auth | HttpOnly Cookie + HMAC signature |
-| Runtime | Python 3.10+ |
+| Runtime | Python 3.9+ (3.10+ recommended) |
