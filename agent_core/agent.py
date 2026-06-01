@@ -60,8 +60,21 @@ def _tool_signature(tool_name: str, args: object) -> str:
     return f"{tool_name}:{json.dumps(normalized, ensure_ascii=False, sort_keys=True)}"
 
 
+def _tool_call_label(item: dict) -> str:
+    tool = item.get("tool", "") or "unknown"
+    args = item.get("args")
+    if isinstance(args, dict):
+        if tool == "web_search" and args.get("query"):
+            return f"{tool}({str(args.get('query'))[:48]})"
+        if tool == "web_fetch" and args.get("url"):
+            return f"{tool}({str(args.get('url'))[:48]})"
+        if args.get("path"):
+            return f"{tool}({str(args.get('path'))[:48]})"
+    return tool
+
+
 def _loop_guard_message(reason: str, calls: list[dict], recursion_limit: int) -> str:
-    recent = " -> ".join(item.get("tool", "") for item in calls[-8:] if item.get("tool"))
+    recent = " -> ".join(_tool_call_label(item) for item in calls[-8:] if item.get("tool"))
     return (
         "检测到工具调用可能陷入重复循环，已提前停止本轮任务，避免继续消耗步骤和上下文。\n\n"
         f"- 判断原因：{reason}\n"
@@ -83,17 +96,30 @@ def _detect_tool_loop(calls: list[dict], recursion_limit: int) -> str:
 
     recent12 = calls[-12:]
     tool_names = [item.get("tool", "") for item in recent12]
+    signatures = [item.get("signature", "") for item in recent12 if item.get("signature")]
+    unique_signatures = set(signatures)
     unique_tools = set(tool_names)
     exploratory_tools = {"search_files", "read_file", "list_files", "web_search", "web_fetch"}
-    if len(recent12) >= 10 and unique_tools and unique_tools.issubset(exploratory_tools) and len(unique_tools) <= 2:
+    low_argument_diversity = len(unique_signatures) <= max(3, len(signatures) // 4)
+    if (
+        len(recent12) >= 10
+        and unique_tools
+        and unique_tools.issubset(exploratory_tools)
+        and len(unique_tools) <= 2
+        and low_argument_diversity
+    ):
         dominant = max(unique_tools, key=tool_names.count)
-        return f"最近 {len(recent12)} 次调用一直在 {', '.join(sorted(unique_tools))} 中循环，{dominant} 出现 {tool_names.count(dominant)} 次"
+        return (
+            f"最近 {len(recent12)} 次调用集中在 {', '.join(sorted(unique_tools))}，"
+            f"但不同参数签名只有 {len(unique_signatures)} 个，{dominant} 出现 {tool_names.count(dominant)} 次"
+        )
 
     estimated_graph_steps = len(calls) * 2 + 1
     if estimated_graph_steps >= max(6, recursion_limit - 3):
         tail = calls[-8:]
         tail_unique = {item.get("tool", "") for item in tail}
-        if len(tail_unique) <= 3:
+        tail_signatures = {item.get("signature", "") for item in tail if item.get("signature")}
+        if len(tail_unique) <= 3 and len(tail_signatures) <= 3:
             return f"已接近最大推理步数，且最近工具类型仍高度重复：{', '.join(sorted(tail_unique))}"
 
     return ""
@@ -255,6 +281,46 @@ def _strip_image_content_from_messages(messages: list) -> tuple[list, bool]:
         stripped.append(new_message)
         changed = changed or message_changed
     return stripped, changed
+
+
+def _tool_call_ids(message) -> set[str]:
+    ids: set[str] = set()
+    for tool_call in getattr(message, "tool_calls", None) or []:
+        if isinstance(tool_call, dict):
+            call_id = tool_call.get("id")
+        else:
+            call_id = getattr(tool_call, "id", "")
+        if call_id:
+            ids.add(str(call_id))
+    return ids
+
+
+def _tool_message_id(message) -> str:
+    return str(getattr(message, "tool_call_id", "") or "")
+
+
+def _drop_dangling_tool_call_messages(messages: list) -> tuple[list, bool]:
+    result = []
+    changed = False
+    idx = 0
+    while idx < len(messages):
+        message = messages[idx]
+        expected_ids = _tool_call_ids(message) if getattr(message, "type", "") == "ai" else set()
+        if expected_ids:
+            next_idx = idx + 1
+            seen_ids: set[str] = set()
+            while next_idx < len(messages) and getattr(messages[next_idx], "type", "") == "tool":
+                tool_call_id = _tool_message_id(messages[next_idx])
+                if tool_call_id:
+                    seen_ids.add(tool_call_id)
+                next_idx += 1
+            if not expected_ids.issubset(seen_ids):
+                changed = True
+                idx = next_idx
+                continue
+        result.append(message)
+        idx += 1
+    return result, changed
 
 
 def session_messages_to_langchain(messages: list[dict]) -> list:
@@ -429,6 +495,22 @@ class DesktopAgent:
             f"threshold={compaction_threshold_tokens(self.config.model, self.config.context_window_tokens)}"
         )
 
+    async def _repair_checkpoint_tool_history(self, run_config: dict, graph=None):
+        graph = graph or self._graph
+        if not graph:
+            return
+        try:
+            snapshot = await graph.aget_state(run_config)
+        except Exception:
+            return
+        values = getattr(snapshot, "values", {}) or {}
+        messages = list(values.get("messages") or [])
+        if not messages:
+            return
+        repaired, changed = _drop_dangling_tool_call_messages(messages)
+        if changed:
+            await graph.aupdate_state(run_config, {"messages": checkpoint_replacement(repaired)})
+
     async def _strip_checkpoint_images(self, run_config: dict, graph=None):
         graph = graph or self._graph
         if not graph:
@@ -463,6 +545,7 @@ class DesktopAgent:
         graph = self._create_graph(model_override) if model_override else self._graph
         input_messages = []
         thread_key = self._thread_key()
+        await self._repair_checkpoint_tool_history(config, graph)
         await self._strip_checkpoint_images(config, graph)
         if thread_key not in self._hydrated_threads:
             input_messages = compact_history_messages(session_messages_to_langchain(history or []), self.config)
@@ -531,6 +614,7 @@ class DesktopAgent:
         graph = self._create_graph(model_override) if model_override else self._graph
         input_messages = []
         thread_key = self._thread_key()
+        await self._repair_checkpoint_tool_history(run_config, graph)
         await self._strip_checkpoint_images(run_config, graph)
         if thread_key not in self._hydrated_threads:
             input_messages = compact_history_messages(session_messages_to_langchain(history or []), self.config)
@@ -635,6 +719,7 @@ class DesktopAgent:
                     tool_call_history.append({
                         "tool": tool_name,
                         "signature": _tool_signature(tool_name, inp),
+                        "args": inp,
                     })
                     
                     yield _sse({
@@ -644,15 +729,6 @@ class DesktopAgent:
                         "step": step_count,
                     })
 
-                    loop_reason = _detect_tool_loop(tool_call_history, run_config["recursion_limit"])
-                    if loop_reason:
-                        loop_guard_triggered = True
-                        final_buffer = _loop_guard_message(loop_reason, tool_call_history, run_config["recursion_limit"])
-                        yield _sse({"type": "error", "content": final_buffer})
-                        if pending_event and not pending_event.done():
-                            pending_event.cancel()
-                        break
-                
                 # ── 工具结束 ──
                 elif kind == "on_tool_end":
                     output = event.get("data", {}).get("output", "")
@@ -672,6 +748,15 @@ class DesktopAgent:
                     active_tool = ""
                     active_step = 0
                     active_tool_started_at = 0.0
+
+                    loop_reason = _detect_tool_loop(tool_call_history, run_config["recursion_limit"])
+                    if loop_reason:
+                        loop_guard_triggered = True
+                        final_buffer = _loop_guard_message(loop_reason, tool_call_history, run_config["recursion_limit"])
+                        yield _sse({"type": "error", "content": final_buffer})
+                        if pending_event and not pending_event.done():
+                            pending_event.cancel()
+                        break
 
                 elif kind == "on_chat_model_end" and node == "agent":
                     output = event.get("data", {}).get("output")
