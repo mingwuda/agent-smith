@@ -859,25 +859,29 @@ async def run_agent_stream(req: RunRequest, request: Request):
             await stream.aclose()
             raise
         
-        if final_content:
-            final_content = _append_artifact_links(final_content, uid, artifact_paths)
-            yield f"data: {json.dumps({'type': 'done', 'content': final_content}, ensure_ascii=False)}\n\n"
-            _save_assistant_result(uid, session_id, req.message, final_content)
-        elif error_content:
-            _save_assistant_result(uid, session_id, req.message, "❌ " + error_content)
-        elif artifact_paths:
-            # 模型执行了写文件但没有生成最终回复，用工具结果拼内容
-            summary = _append_artifact_links("任务已完成，文件已保存。", uid, artifact_paths)
-            yield f"data: {json.dumps({'type': 'done', 'content': summary}, ensure_ascii=False)}\n\n"
-            _save_assistant_result(uid, session_id, req.message, summary)
-        elif not forwarded_terminal_event:
-            fallback = (
-                "任务已结束，但模型没有生成最终回答。"
-                "这通常发生在接近最大推理步数时，模型仍在继续调用工具。"
-                f"当前最大推理步数为 {agent.config.recursion_limit}，可以提高该值，或把任务拆小后重试。"
-            )
-            yield f"data: {json.dumps({'type': 'done', 'content': fallback}, ensure_ascii=False)}\n\n"
-            _save_assistant_result(uid, session_id, req.message, fallback)
+        try:
+            final_content = final_content or ""
+            if final_content:
+                final_content = _append_artifact_links(final_content, uid, artifact_paths)
+                yield f"data: {json.dumps({'type': 'done', 'content': final_content}, ensure_ascii=False)}\n\n"
+                _save_assistant_result(uid, session_id, req.message, final_content)
+            elif error_content:
+                _save_assistant_result(uid, session_id, req.message, "❌ " + error_content)
+            elif artifact_paths:
+                summary = _append_artifact_links("任务已完成，文件已保存。", uid, artifact_paths)
+                yield f"data: {json.dumps({'type': 'done', 'content': summary}, ensure_ascii=False)}\n\n"
+                _save_assistant_result(uid, session_id, req.message, summary)
+            elif not forwarded_terminal_event:
+                fallback = (
+                    "任务已结束，但模型没有生成最终回答。"
+                    "这通常发生在接近最大推理步数时，模型仍在继续调用工具。"
+                    f"当前最大推理步数为 {agent.config.recursion_limit}，可以提高该值，或把任务拆小后重试。"
+                )
+                yield f"data: {json.dumps({'type': 'done', 'content': fallback}, ensure_ascii=False)}\n\n"
+                _save_assistant_result(uid, session_id, req.message, fallback)
+        except Exception as e:
+            err_msg = f"服务内部错误: {e}"
+            yield f"data: {json.dumps({'type': 'done', 'content': err_msg}, ensure_ascii=False)}\n\n"
         yield "data: [DONE]\n\n"
     
     return StreamingResponse(
