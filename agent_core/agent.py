@@ -136,7 +136,7 @@ def _detect_tool_loop(calls: list[dict], recursion_limit: int) -> str:
     return ""
 
 
-def _detect_search_overuse(calls: list[dict], max_searches: int = 6) -> bool:
+def _detect_search_overuse(calls: list[dict], max_searches: int = 12) -> bool:
     searches = [item for item in calls if item.get("tool") == "web_search"]
     if len(searches) < max_searches:
         return False
@@ -786,7 +786,7 @@ class DesktopAgent:
                         break
                     if _detect_search_overuse(tool_call_history):
                         loop_guard_triggered = True
-                        final_buffer = _search_budget_message(tool_call_history, 6)
+                        final_buffer = _search_budget_message(tool_call_history, 12)
                         yield _sse({"type": "error", "content": final_buffer})
                         if pending_event and not pending_event.done():
                             pending_event.cancel()
