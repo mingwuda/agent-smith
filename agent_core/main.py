@@ -865,6 +865,11 @@ async def run_agent_stream(req: RunRequest, request: Request):
             _save_assistant_result(uid, session_id, req.message, final_content)
         elif error_content:
             _save_assistant_result(uid, session_id, req.message, "❌ " + error_content)
+        elif artifact_paths:
+            # 模型执行了写文件但没有生成最终回复，用工具结果拼内容
+            summary = _append_artifact_links("任务已完成，文件已保存。", uid, artifact_paths)
+            yield f"data: {json.dumps({'type': 'done', 'content': summary}, ensure_ascii=False)}\n\n"
+            _save_assistant_result(uid, session_id, req.message, summary)
         elif not forwarded_terminal_event:
             fallback = (
                 "任务已结束，但模型没有生成最终回答。"
