@@ -1,4 +1,5 @@
 """Subagent runtime with a synchronous MVP and task-state model for future parallel execution."""
+from __future__ import annotations
 import asyncio
 import threading
 import time
