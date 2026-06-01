@@ -1,4 +1,5 @@
 """网页搜索与抓取工具"""
+from datetime import date, timedelta
 import re
 import socket
 import subprocess
@@ -23,6 +24,45 @@ HEADERS = {
 }
 REQUEST_TIMEOUT = (5, 25)
 RETRY_TOTAL = 3
+
+_RELATIVE_DATE_RE = re.compile(
+    r"(今天|今日|昨天|昨日|今年|本年|最新|近期|最近|当前|现在|today|yesterday|latest|recent|current|this year|now)",
+    re.IGNORECASE,
+)
+_YEAR_RE = re.compile(r"\b(20\d{2})\b")
+
+
+def _current_date_context() -> str:
+    today = date.today()
+    return f"当前日期: {today.isoformat()}，当前年份: {today.year}"
+
+
+def _looks_time_sensitive(query: str) -> bool:
+    return bool(_RELATIVE_DATE_RE.search(query or ""))
+
+
+def _normalize_search_query(query: str, recency_days: int = 0) -> tuple[str, str]:
+    raw = (query or "").strip()
+    today = date.today()
+    recency_days = max(0, min(int(recency_days or 0), 365))
+    normalized = raw
+    notes: list[str] = []
+
+    years = {int(item) for item in _YEAR_RE.findall(raw)}
+    if _looks_time_sensitive(raw):
+        if today.year not in years:
+            normalized = f"{normalized} {today.year}"
+            notes.append(f"检测到相对时间词，已补充当前年份 {today.year}")
+        old_years = sorted(year for year in years if year != today.year)
+        if old_years:
+            notes.append(f"查询中包含非当前年份 {', '.join(map(str, old_years))}；如用户要最新信息，请优先以 {today.year} 为准")
+
+    if recency_days > 0:
+        since = today - timedelta(days=recency_days)
+        normalized = f"{normalized} after:{since.isoformat()}"
+        notes.append(f"已追加近 {recency_days} 天约束 after:{since.isoformat()}")
+
+    return normalized, "；".join(notes)
 
 
 class _SimpleResponse:
@@ -191,8 +231,14 @@ def _search_duckduckgo(query: str, max_results: int) -> list[dict]:
     return results
 
 
-def _format_results(query: str, results: list[dict], source: str) -> str:
-    lines = [f"🔍 搜索「{query}」找到 {len(results)} 条结果（来源: {source}）：\n"]
+def _format_results(query: str, results: list[dict], source: str, *, original_query: str = "", note: str = "") -> str:
+    lines = [f"🔍 搜索「{query}」找到 {len(results)} 条结果（来源: {source}）："]
+    lines.append(_current_date_context())
+    if original_query and original_query != query:
+        lines.append(f"原始查询: {original_query}")
+    if note:
+        lines.append(f"搜索提示: {note}")
+    lines.append("")
     for i, r in enumerate(results, 1):
         title = r.get("title", "").strip()
         url = r.get("href", "").strip()
@@ -203,25 +249,28 @@ def _format_results(query: str, results: list[dict], source: str) -> str:
             snippet = (snippet[:240] + "...") if len(snippet) > 240 else snippet
             lines.append(f"   摘要: {snippet}")
         lines.append("")
+    lines.append("搜索建议: 优先从上述结果选择 1-3 个权威/高相关链接调用 web_fetch，然后综合回答；不要仅为微调关键词反复 web_search。")
     return "\n".join(lines)
 
 
 @tool
-def web_search(query: str, max_results: int = 5) -> str:
+def web_search(query: str, max_results: int = 5, recency_days: int = 0) -> str:
     """搜索互联网，返回相关网页标题、链接和摘要。优先使用 Bing，失败时自动切换 DuckDuckGo，无需 API Key。
 
     参数:
-        query: 搜索关键词（如"今天热点新闻""Python教程""2025诺贝尔奖"）
-        max_results: 返回结果数量（默认 5，建议 3-8）
+        query: 搜索关键词。查询“今天/最新/近期/current/latest”等实时信息时必须包含正确年份；工具会按当前日期辅助补全年份。
+        max_results: 返回结果数量（默认 5，建议 5-8）。先用一次高质量搜索，再 fetch 1-3 个最相关链接，避免多轮改写搜索。
+        recency_days: 可选，限制近 N 天结果（1-365）。例如今天/最新新闻用 7，近期事件用 30；不需要近期约束时传 0。
     """
     max_results = max(1, min(max_results, 10))
+    normalized_query, note = _normalize_search_query(query, recency_days)
     errors = []
 
     for source, search_fn in (("Bing", _search_bing), ("DuckDuckGo", _search_duckduckgo)):
         try:
-            results = search_fn(query, max_results)
+            results = search_fn(normalized_query, max_results)
             if results:
-                return _format_results(query, results, source)
+                return _format_results(normalized_query, results, source, original_query=query, note=note)
             errors.append(f"{source}: 未找到结果")
         except requests.exceptions.Timeout:
             errors.append(f"{source}: 搜索超时")
@@ -233,7 +282,10 @@ def web_search(query: str, max_results: int = 5) -> str:
             errors.append(f"{source}: {type(e).__name__}: {e}")
 
     return (
-        f"❌ 未能获取「{query}」的搜索结果。已尝试 Bing 和 DuckDuckGo。\n"
+        f"❌ 未能获取「{normalized_query}」的搜索结果。已尝试 Bing 和 DuckDuckGo。\n"
+        + _current_date_context()
+        + (f"\n搜索提示: {note}" if note else "")
+        + "\n"
         + "\n".join(f"- {item}" for item in errors)
     )
 

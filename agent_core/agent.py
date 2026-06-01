@@ -3,6 +3,7 @@ import asyncio
 import json
 import socket
 import time
+from datetime import datetime
 from typing import AsyncGenerator, Optional
 from urllib.parse import urlparse
 
@@ -84,6 +85,16 @@ def _loop_guard_message(reason: str, calls: list[dict], recursion_limit: int) ->
     )
 
 
+def _search_budget_message(calls: list[dict], max_searches: int) -> str:
+    searches = [item for item in calls if item.get("tool") == "web_search"]
+    recent = "\n".join(f"- {_tool_call_label(item)}" for item in searches[-max_searches:])
+    return (
+        f"本轮任务已经完成 {len(searches)} 次 web_search，已达到搜索预算上限，避免继续低效改写关键词。\n\n"
+        "建议基于已有搜索结果和已抓取页面先做综合判断；如果仍缺信息，请用更具体的问题重新发起。\n\n"
+        f"最近搜索：\n{recent}"
+    )
+
+
 def _detect_tool_loop(calls: list[dict], recursion_limit: int) -> str:
     latest = calls[-1]
     latest_sig = latest.get("signature", "")
@@ -123,6 +134,14 @@ def _detect_tool_loop(calls: list[dict], recursion_limit: int) -> str:
             return f"已接近最大推理步数，且最近工具类型仍高度重复：{', '.join(sorted(tail_unique))}"
 
     return ""
+
+
+def _detect_search_overuse(calls: list[dict], max_searches: int = 6) -> bool:
+    searches = [item for item in calls if item.get("tool") == "web_search"]
+    if len(searches) < max_searches:
+        return False
+    signatures = {item.get("signature", "") for item in searches if item.get("signature")}
+    return len(signatures) >= max_searches
 
 
 def _get_nested(mapping: dict, *keys: str):
@@ -438,7 +457,15 @@ class DesktopAgent:
         )
     
     def _build_system_prompt(self) -> str:
-        prompt = self.config.system_prompt
+        now = datetime.now().astimezone()
+        prompt = (
+            self.config.system_prompt
+            + "\n\n"
+            + "## 当前日期与时间\n"
+            + f"- 当前日期：{now.date().isoformat()}\n"
+            + f"- 当前时间：{now.strftime('%Y-%m-%d %H:%M:%S %Z%z')}\n"
+            + "- 遇到“今天/昨日/今年/最新/current/latest/recent”等相对时间时，必须以这里的日期为准。\n"
+        )
         skill_block = self.registry.generate_prompt_block()
         if skill_block:
             prompt += skill_block
@@ -753,6 +780,13 @@ class DesktopAgent:
                     if loop_reason:
                         loop_guard_triggered = True
                         final_buffer = _loop_guard_message(loop_reason, tool_call_history, run_config["recursion_limit"])
+                        yield _sse({"type": "error", "content": final_buffer})
+                        if pending_event and not pending_event.done():
+                            pending_event.cancel()
+                        break
+                    if _detect_search_overuse(tool_call_history):
+                        loop_guard_triggered = True
+                        final_buffer = _search_budget_message(tool_call_history, 6)
                         yield _sse({"type": "error", "content": final_buffer})
                         if pending_event and not pending_event.done():
                             pending_event.cancel()
