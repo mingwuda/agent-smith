@@ -857,7 +857,7 @@ async def run_agent_stream(req: RunRequest, request: Request):
                 yield sse_event
         except asyncio.CancelledError:
             await stream.aclose()
-            raise
+            return
         
         try:
             final_content = final_content or ""
