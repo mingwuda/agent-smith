@@ -24,6 +24,9 @@ HEADERS = {
 }
 REQUEST_TIMEOUT = (5, 25)
 RETRY_TOTAL = 3
+_TAVILY_SEARCH_ENABLED = False
+_TAVILY_API_KEY = ""
+_TAVILY_SEARCH_URL = "https://api.tavily.com/search"
 
 _RELATIVE_DATE_RE = re.compile(
     r"(今天|今日|昨天|昨日|今年|本年|最新|近期|最近|当前|现在|today|yesterday|latest|recent|current|this year|now)",
@@ -63,6 +66,17 @@ def _normalize_search_query(query: str, recency_days: int = 0) -> tuple[str, str
         notes.append(f"已追加近 {recency_days} 天约束 after:{since.isoformat()}")
 
     return normalized, "；".join(notes)
+
+
+def configure_search(
+    tavily_search_enabled: bool = False,
+    tavily_api_key: str = "",
+    tavily_search_url: str = "https://api.tavily.com/search",
+):
+    global _TAVILY_SEARCH_ENABLED, _TAVILY_API_KEY, _TAVILY_SEARCH_URL
+    _TAVILY_SEARCH_ENABLED = bool(tavily_search_enabled)
+    _TAVILY_API_KEY = str(tavily_api_key or "").strip()
+    _TAVILY_SEARCH_URL = str(tavily_search_url or "https://api.tavily.com/search").strip()
 
 
 class _SimpleResponse:
@@ -231,6 +245,41 @@ def _search_duckduckgo(query: str, max_results: int) -> list[dict]:
     return results
 
 
+def _search_tavily(query: str, max_results: int, recency_days: int = 0) -> list[dict]:
+    if not _TAVILY_API_KEY:
+        raise ValueError("Tavily API Key 未配置")
+
+    payload = {
+        "api_key": _TAVILY_API_KEY,
+        "query": query,
+        "max_results": max_results,
+        "search_depth": "basic",
+        "include_answer": False,
+        "include_raw_content": False,
+    }
+    if recency_days > 0:
+        payload["days"] = max(1, min(int(recency_days), 365))
+
+    resp = _SESSION.post(
+        _TAVILY_SEARCH_URL,
+        json=payload,
+        timeout=REQUEST_TIMEOUT,
+        headers={"Content-Type": "application/json", "User-Agent": HEADERS["User-Agent"]},
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    results = []
+    for item in data.get("results") or []:
+        title = str(item.get("title") or "").strip()
+        href = str(item.get("url") or "").strip()
+        body = str(item.get("content") or item.get("snippet") or "").strip()
+        if title and href:
+            results.append({"title": title, "href": href, "body": body})
+        if len(results) >= max_results:
+            break
+    return results
+
+
 def _format_results(query: str, results: list[dict], source: str, *, original_query: str = "", note: str = "") -> str:
     lines = [f"🔍 搜索「{query}」找到 {len(results)} 条结果（来源: {source}）："]
     lines.append(_current_date_context())
@@ -266,7 +315,12 @@ def web_search(query: str, max_results: int = 5, recency_days: int = 0) -> str:
     normalized_query, note = _normalize_search_query(query, recency_days)
     errors = []
 
-    for source, search_fn in (("Bing", _search_bing), ("DuckDuckGo", _search_duckduckgo)):
+    search_backends = []
+    if _TAVILY_SEARCH_ENABLED:
+        search_backends.append(("Tavily", lambda q, n: _search_tavily(q, n, recency_days)))
+    search_backends.extend((("Bing", _search_bing), ("DuckDuckGo", _search_duckduckgo)))
+
+    for source, search_fn in search_backends:
         try:
             results = search_fn(normalized_query, max_results)
             if results:

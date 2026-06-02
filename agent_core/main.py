@@ -197,6 +197,11 @@ def init_agent():
     # 初始化工作区
     file_tools.set_workspace(Path(config.workspace))
     git_tools.set_workspace(Path(config.workspace))
+    web_tools.configure_search(
+        tavily_search_enabled=config.tavily_search_enabled,
+        tavily_api_key=config.tavily_api_key,
+        tavily_search_url=config.tavily_search_url,
+    )
     
     # 注册所有工具
     all_tools = []
@@ -1127,6 +1132,9 @@ class SettingsRequest(BaseModel):
     api_timeout_seconds: float = 30.0
     api_host_ips: str = ""
     context_window_tokens: int = 0
+    tavily_search_enabled: bool = False
+    tavily_api_key: str = ""
+    tavily_search_url: str = "https://api.tavily.com/search"
 
 
 @app.get("/settings")
@@ -1155,6 +1163,10 @@ def save_settings(req: SettingsRequest, request: Request):
     cfg.api_timeout_seconds = max(1.0, float(req.api_timeout_seconds or 30.0))
     cfg.api_host_ips = req.api_host_ips or cfg.api_host_ips
     cfg.context_window_tokens = max(0, int(req.context_window_tokens or 0))
+    cfg.tavily_search_enabled = bool(req.tavily_search_enabled)
+    if req.tavily_api_key:
+        cfg.tavily_api_key = req.tavily_api_key
+    cfg.tavily_search_url = req.tavily_search_url or cfg.tavily_search_url or "https://api.tavily.com/search"
     
     # 持久化到文件（现在包含 API Key）
     cfg.save()
@@ -1175,6 +1187,13 @@ def save_settings(req: SettingsRequest, request: Request):
         os.environ["AGENT_CONTEXT_WINDOW_TOKENS"] = str(cfg.context_window_tokens)
     else:
         os.environ.pop("AGENT_CONTEXT_WINDOW_TOKENS", None)
+    os.environ["TAVILY_SEARCH_ENABLED"] = "1" if cfg.tavily_search_enabled else "0"
+    if cfg.tavily_api_key:
+        os.environ["TAVILY_API_KEY"] = cfg.tavily_api_key
+    else:
+        os.environ.pop("TAVILY_API_KEY", None)
+    if cfg.tavily_search_url:
+        os.environ["TAVILY_SEARCH_URL"] = cfg.tavily_search_url
     if cfg.base_url:
         os.environ["LLM_BASE_URL"] = cfg.base_url
     else:

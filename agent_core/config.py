@@ -20,6 +20,11 @@ def _bundled_samples_dir() -> Path:
 def _split_path_list(raw: str) -> list[Path]:
     return [Path(p).expanduser() for p in raw.split(os.pathsep) if p.strip()]
 
+
+def _env_bool(value: str) -> bool:
+    return str(value).strip().lower() in {"1", "true", "yes", "on", "y"}
+
+
 DEFAULT_PROVIDERS: dict[str, dict[str, Any]] = {
     "openai": {
         "name": "OpenAI",
@@ -84,6 +89,9 @@ class AgentConfig:
     api_timeout_seconds: float = 30.0
     api_host_ips: str = ""
     context_window_tokens: int = 0
+    tavily_search_enabled: bool = False
+    tavily_api_key: str = ""
+    tavily_search_url: str = "https://api.tavily.com/search"
     
     system_prompt: str = (
         "你是一个桌面 AI 智能体，可以自主完成用户交给你的任务。\n\n"
@@ -143,6 +151,9 @@ class AgentConfig:
             "AGENT_API_TIMEOUT_SECONDS": ("api_timeout_seconds", float),
             "AGENT_API_HOST_IPS": ("api_host_ips", str),
             "AGENT_CONTEXT_WINDOW_TOKENS": ("context_window_tokens", int),
+            "TAVILY_SEARCH_ENABLED": ("tavily_search_enabled", _env_bool),
+            "TAVILY_API_KEY": ("tavily_api_key", str),
+            "TAVILY_SEARCH_URL": ("tavily_search_url", str),
         }
         env_overrides = set()
         for env_key, (attr_name, cast_fn) in env_map.items():
@@ -268,6 +279,9 @@ class AgentConfig:
             "api_timeout_seconds": self.api_timeout_seconds,
             "api_host_ips": self.api_host_ips,
             "context_window_tokens": self.context_window_tokens,
+            "tavily_search_enabled": self.tavily_search_enabled,
+            "tavily_api_key": self.tavily_api_key,
+            "tavily_search_url": self.tavily_search_url,
         }
         CONFIG_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     
@@ -286,6 +300,7 @@ class AgentConfig:
                 "api_key_configured": bool(api_key),
                 "api_key_preview": api_key[:8] + "..." if len(api_key) > 8 else ("已设置" if api_key else "未设置"),
             }
+        tavily_key = str(self.tavily_api_key or "")
         return {
             "active_provider": self.active_provider,
             "provider_name": self.providers[self.active_provider].get("name", self.active_provider),
@@ -304,4 +319,8 @@ class AgentConfig:
             "api_timeout_seconds": self.api_timeout_seconds,
             "api_host_ips": self.api_host_ips,
             "context_window_tokens": self.context_window_tokens,
+            "tavily_search_enabled": bool(self.tavily_search_enabled),
+            "tavily_api_key_configured": bool(tavily_key),
+            "tavily_api_key_preview": tavily_key[:8] + "..." if len(tavily_key) > 8 else ("已设置" if tavily_key else "未设置"),
+            "tavily_search_url": self.tavily_search_url or "https://api.tavily.com/search",
         }

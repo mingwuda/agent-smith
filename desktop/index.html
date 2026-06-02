@@ -396,6 +396,23 @@
       <input id="s-recursion-limit" type="number" min="10" max="200" step="1" />
       <div class="hint" data-i18n="recursionLimitHint">复杂任务或多次工具调用可适当调大；过大时循环任务会运行更久。</div>
     </div>
+    <div class="form-group">
+      <label>
+        <input id="s-tavily-enabled" type="checkbox" style="width:auto;height:auto;margin-right:6px;" />
+        <span data-i18n="tavilyEnabledLabel">优先使用 Tavily Search</span>
+      </label>
+      <div class="hint" data-i18n="tavilyEnabledHint">开启后 web_search 会优先调用 Tavily API，失败时自动回退原来的 Bing/DuckDuckGo 搜索。</div>
+    </div>
+    <div class="form-group">
+      <label for="s-tavily-api-key">Tavily API Key</label>
+      <input id="s-tavily-api-key" type="password" placeholder="tvly-..." autocomplete="new-password" />
+      <div class="hint" id="s-tavily-api-key-hint" data-i18n="tavilyApiKeyHint">留空则保留当前已保存的 Tavily API Key。</div>
+    </div>
+    <div class="form-group">
+      <label for="s-tavily-search-url" data-i18n="tavilySearchUrlLabel">Tavily Search URL</label>
+      <input id="s-tavily-search-url" placeholder="https://api.tavily.com/search" />
+      <div class="hint" data-i18n="tavilySearchUrlHint">默认使用 Tavily 官方搜索接口。</div>
+    </div>
     <div class="save-feedback" id="save-feedback"></div>
     <div class="modal-actions">
       <button class="btn-secondary" onclick="closeSettings()" data-i18n="cancelButton">取消</button>
@@ -489,6 +506,13 @@ const I18N = {
     baseUrlHint: '自定义 API 地址，如 DeepSeek 填 https://api.deepseek.com',
     recursionLimitLabel: '最大推理步数',
     recursionLimitHint: '复杂任务或多次工具调用可适当调大；过大时循环任务会运行更久。',
+    tavilyEnabledLabel: '优先使用 Tavily Search',
+    tavilyEnabledHint: '开启后 web_search 会优先调用 Tavily API，失败时自动回退原来的 Bing/DuckDuckGo 搜索。',
+    tavilyApiKeyHint: '留空则保留当前已保存的 Tavily API Key。',
+    tavilyApiKeySaved: '已保存：{preview}。留空则继续使用已保存的 Tavily API Key。',
+    tavilyApiKeyNotSaved: '尚未保存 Tavily API Key。',
+    tavilySearchUrlLabel: 'Tavily Search URL',
+    tavilySearchUrlHint: '默认使用 Tavily 官方搜索接口。',
     cancelButton: '取消',
     saveRestartButton: '保存并重启',
     artifactPreviewTitle: '文件预览',
@@ -605,6 +629,13 @@ const I18N = {
     baseUrlHint: 'Custom API base URL, for example DeepSeek: https://api.deepseek.com',
     recursionLimitLabel: 'Max reasoning steps',
     recursionLimitHint: 'Increase this for complex tasks or many tool calls; very high values can make looping tasks run longer.',
+    tavilyEnabledLabel: 'Prefer Tavily Search',
+    tavilyEnabledHint: 'When enabled, web_search uses the Tavily API first and automatically falls back to Bing/DuckDuckGo if Tavily fails.',
+    tavilyApiKeyHint: 'Leave blank to keep the saved Tavily API key.',
+    tavilyApiKeySaved: 'Saved: {preview}. Leave blank to keep the saved Tavily API key.',
+    tavilyApiKeyNotSaved: 'No Tavily API key saved yet.',
+    tavilySearchUrlLabel: 'Tavily Search URL',
+    tavilySearchUrlHint: 'Uses the official Tavily search endpoint by default.',
     cancelButton: 'Cancel',
     saveRestartButton: 'Save and restart',
     artifactPreviewTitle: 'File preview',
@@ -1481,6 +1512,9 @@ function renderProviderFields(providerId) {
   document.getElementById('s-model').value = provider.model || '';
   document.getElementById('s-base-url').value = provider.base_url || '';
   document.getElementById('s-recursion-limit').value = settingsData.recursion_limit || 60;
+  document.getElementById('s-tavily-enabled').checked = !!settingsData.tavily_search_enabled;
+  document.getElementById('s-tavily-api-key').value = '';
+  document.getElementById('s-tavily-search-url').value = settingsData.tavily_search_url || 'https://api.tavily.com/search';
   document.getElementById('s-api-key').value = '';
   document.getElementById('s-provider-name').value = provider.name || '';
   document.getElementById('s-provider-name-group').classList.toggle('hidden', !isCustom);
@@ -1488,6 +1522,9 @@ function renderProviderFields(providerId) {
   document.getElementById('s-api-key-hint').textContent = provider.api_key_configured
     ? t('apiKeySaved', { preview: provider.api_key_preview })
     : t('apiKeyNotSaved');
+  document.getElementById('s-tavily-api-key-hint').textContent = settingsData.tavily_api_key_configured
+    ? t('tavilyApiKeySaved', { preview: settingsData.tavily_api_key_preview })
+    : t('tavilyApiKeyNotSaved');
 }
 
 function onProviderChange() {
@@ -1557,6 +1594,9 @@ async function saveSettings() {
         api_timeout_seconds: settingsData?.api_timeout_seconds ?? 30,
         api_host_ips: settingsData?.api_host_ips || '',
         context_window_tokens: settingsData?.context_window_tokens || 0,
+        tavily_search_enabled: document.getElementById('s-tavily-enabled').checked,
+        tavily_api_key: document.getElementById('s-tavily-api-key').value,
+        tavily_search_url: document.getElementById('s-tavily-search-url').value,
       }),
     });
     const data = await res.json();
@@ -1565,6 +1605,7 @@ async function saveSettings() {
       feedback.className = 'save-feedback ok';
       // 清空密码框
       document.getElementById('s-api-key').value = '';
+      document.getElementById('s-tavily-api-key').value = '';
       // 刷新状态
       setTimeout(async () => {
         closeSettings();
@@ -1607,6 +1648,9 @@ async function quickSwitchProvider() {
         api_timeout_seconds: settingsData.api_timeout_seconds ?? 30,
         api_host_ips: settingsData.api_host_ips || '',
         context_window_tokens: settingsData.context_window_tokens || 0,
+        tavily_search_enabled: !!settingsData.tavily_search_enabled,
+        tavily_api_key: '',
+        tavily_search_url: settingsData.tavily_search_url || 'https://api.tavily.com/search',
       }),
     });
     const data = await res.json();
