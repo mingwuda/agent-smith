@@ -365,7 +365,7 @@ button:disabled { opacity:.65; cursor:not-allowed; }
 <script>
 const I18N = {
   'zh-CN': {
-    title: 'Desktop Agent 登录',
+    title: '智能体助手登录',
     subtitle: '请登录后继续操作',
     username: '用户名',
     password: '密码',
