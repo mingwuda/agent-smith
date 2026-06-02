@@ -12,6 +12,7 @@
     logger.info("服务启动成功")
     logger.error("连接失败", exc_info=True)
 """
+from __future__ import annotations
 
 import logging
 import os
