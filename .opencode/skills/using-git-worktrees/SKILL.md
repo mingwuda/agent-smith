@@ -2,7 +2,7 @@
 name: using-git-worktrees
 description: Create isolated Git worktrees for safe parallel development on separate branches
 triggers: [worktree, isolate, branch, sandbox, git worktree]
-tools-required: [git_status, run_python, read_file, write_file]
+tools-required: [git_status, git_command, run_python, read_file, write_file]
 ---
 
 # Using Git Worktrees
@@ -17,6 +17,12 @@ tools-required: [git_status, run_python, read_file, write_file]
 
 ## Process
 
+### Step 0: Detect Worktree
+
+1. Check if already inside a worktree: `git rev-parse --is-inside-work-tree`  
+   (This is informational — proceed either way.)
+2. If inside a worktree and no new isolation is needed, skip the remaining steps.
+
 ### Step 1: Prepare
 
 1. Run `git_status` to confirm the current working tree is clean
@@ -25,13 +31,13 @@ tools-required: [git_status, run_python, read_file, write_file]
 
 ### Step 2: Create Worktree
 
-1. Use `run_python` or direct shell commands to create the worktree:
-   ```python
-   import subprocess, os
-   repo_root = "/path/to/repository"
-   branch = "feature/my-task"
-   worktree_path = os.path.join(os.path.dirname(repo_root), f"desktop-agent-{branch.replace('/', '-')}")
-   subprocess.run(["git", "worktree", "add", "-b", branch, worktree_path], cwd=repo_root, check=True)
+1. Use `git_command` to create the worktree:
+   ```
+   git_command: "worktree add ../desktop-agent-<branch-name> -b <branch-name>"
+   ```
+   Or with a specific path:
+   ```
+   git_command: "worktree add ../desktop-agent-feature-xyz feature/new-feature"
    ```
 2. Confirm the worktree was created successfully with `git_status` inside the worktree
 

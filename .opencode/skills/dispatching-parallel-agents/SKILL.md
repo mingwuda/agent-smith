@@ -2,7 +2,7 @@
 name: dispatching-parallel-agents
 description: Dispatch multiple independent subagents concurrently to speed up development
 triggers: [parallel, concurrent, speed up, run in parallel, independent tasks]
-tools-required: [delegate_task, git_status, git_diff, run_python]
+tools-required: [delegate_task, delegate_tasks_parallel, git_status, git_diff, run_python]
 ---
 
 # Dispatching Parallel Agents
@@ -31,15 +31,28 @@ tools-required: [delegate_task, git_status, git_diff, run_python]
 
 For each parallel group:
 
-1. Call `delegate_task` for every task in the group simultaneously (or in quick succession)
-2. Each subagent prompt must be fully self-contained
-3. Ensure no two subagents are modifying the same file at the same time
+1. Build a JSON array of task definitions:
+   ```json
+   [
+     {"task": "task1 description...", "agent_type": "coder", "context": "relevant context..."},
+     {"task": "task2 description...", "agent_type": "coder", "context": "relevant context..."}
+   ]
+   ```
+2. Call `delegate_tasks_parallel` with the JSON string — this dispatches all tasks in the group concurrently
+3. Each subagent prompt must be fully self-contained
+4. Ensure no two subagents are modifying the same file at the same time
 
 Example:
+```json
+[
+  {"task": "Refactor CSS in styles.css to use CSS variables", "agent_type": "coder", "context": "styles.css is at src/styles/"},
+  {"task": "Add /api/users endpoint", "agent_type": "coder", "context": "FastAPI app in app.py"},
+  {"task": "Write integration tests for /api/users", "agent_type": "coder", "context": "tests in tests/"}
+]
+→ Calls delegate_tasks_parallel(...)
 ```
-Parallel Group: [Refactor CSS, Add backend endpoint, Write integration tests]
-→ Dispatch 3 coder subagents concurrently (max 3-4 per group)
-```
+
+If `delegate_tasks_parallel` is not available, fall back to sequential `delegate_task` calls.
 
 ### Step 3: Collect and Verify
 

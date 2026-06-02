@@ -27,6 +27,16 @@ tools-required: [delegate_task, read_file, write_file, git_status, git_diff, run
 
 ## Process
 
+### Flow Overview
+
+```
+[Load Plan] → [Review Plan] → [Loop: for each task]
+                                  ├─ Dispatch coder subagent
+                                  ├─ Stage 1 Review (compliance)
+                                  ├─ Stage 2 Review (quality)
+                                  └─ [Next task] → [Verification] → [Report]
+```
+
 ### Step 1: Load and Review Plan
 
 1. Read the plan file using `read_file`
@@ -36,22 +46,67 @@ tools-required: [delegate_task, read_file, write_file, git_status, git_diff, run
 
 ### Step 2: Execute Tasks via Subagents
 
-For each task in the plan:
+For each task in the plan — **do not pause to ask the user "shall I continue?"** between tasks. The only reasons to stop are: a blocking issue that cannot be resolved, genuine ambiguity that prevents progress, or all tasks completed.
 
 1. Mark the task as in_progress
 2. Call `delegate_task` with `agent_type: "coder"` and a fully self-contained prompt containing:
    - The complete task description (every step, file path, code requirement)
    - Only the project context relevant to this task
    - Clear completion criteria
+
+   **Subagent prompt template (coder):**
+   ```
+   You are a coder subagent. Complete the following task:
+   
+   [task description and requirements]
+   
+   Project context:
+   [only the files and code relevant to this task]
+   
+   Completion criteria:
+   [what "done" looks like]
+   
+   Rules:
+   - Write production-quality code
+   - Include tests where applicable
+   - Report any blockers immediately
+   ```
+
 3. After the subagent finishes, inspect its output and the actual code changes
 4. Enter the two-stage review:
 
 **Stage One — Compliance Review**
 - Call `delegate_task` with `agent_type: "reviewer"` to verify the output matches the plan's specification for this task
+
+  **Reviewer prompt template (compliance):**
+  ```
+  Review the following changes for compliance with the plan:
+  
+  Plan requirement: [excerpt from plan]
+  Implementation: [file paths, key code sections]
+  
+  Check: Does the implementation fully meet the plan's specification?
+  Report any deviations, missing requirements, or incorrect behavior.
+  ```
+
 - If review fails: feed the issues to a new `coder` subagent for rework (max 3 retries)
 
 **Stage Two — Code Quality Review**
 - Call `delegate_task` with `agent_type: "reviewer"` to check code style, security, performance, unnecessary dependencies
+
+  **Reviewer prompt template (quality):**
+  ```
+  Review the following code for quality:
+  
+  Files changed: [list]
+  Changes: [diff or code sections]
+  
+  Check: code style consistency, security vulnerabilities,
+  performance issues, unnecessary dependencies, error handling.
+  
+  Rate each finding: 🔴 Critical / 🟡 Warning / 🟢 Suggestion
+  ```
+
 - If review fails: feed issues to a new `coder` subagent for fixes (max 3 retries)
 
 5. After both stages pass, mark the task as completed
@@ -71,6 +126,7 @@ When all tasks are done, provide a summary:
 
 ## Rules
 
+- **Continuous execution**: Do not pause between tasks to ask the user "shall I continue?". Execute all tasks in the plan without interruption. The only reasons to stop are: an unresolvable blocker, genuine ambiguity that prevents progress, or all tasks completed. "Do you want me to continue?" prompts waste the user's time.
 - Every subagent prompt must be **fully self-contained** — do not assume the subagent can see the main conversation history
 - Never write "based on your findings" in a subagent prompt — include concrete file paths, line numbers, and specific changes
 - If a task fails after 3 retries, pause and ask the user for guidance

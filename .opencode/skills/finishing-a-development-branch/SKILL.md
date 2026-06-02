@@ -2,7 +2,7 @@
 name: finishing-a-development-branch
 description: Final verification, branch fate decision, and cleanup after all development tasks are complete
 triggers: [finish branch, cleanup, merge, complete, wrap up, finalize]
-tools-required: [git_status, git_diff, git_log, run_python, delegate_task]
+tools-required: [git_status, git_diff, git_log, git_command, run_python, delegate_task]
 ---
 
 # Finishing a Development Branch
@@ -17,6 +17,12 @@ tools-required: [git_status, git_diff, git_log, run_python, delegate_task]
 
 ## Process
 
+### Step 0: Environment Detection
+
+1. Check if currently in a worktree or regular repo: `git worktree list`
+2. Check if HEAD is detached: `git branch --show-current` (empty output = detached HEAD)
+3. Identify the current branch name
+
 ### Step 1: Final Verification
 
 1. Run the full test suite — all tests must pass
@@ -24,7 +30,19 @@ tools-required: [git_status, git_diff, git_log, run_python, delegate_task]
 3. Run `git_status` to confirm no leftover uncommitted changes
 4. Run `git_log` to review commit history for clarity
 
-### Step 2: Present Options
+### Step 2: Detect Detached HEAD
+
+If `git branch --show-current` returns empty (detached HEAD), present options:
+
+| Option | Action | Use Case |
+|--------|--------|----------|
+| **A. Create branch** | `git checkout -b <name>` | Want to keep the work |
+| **B. Checkout existing** | `git checkout <existing-branch>` | Abandon detached changes |
+| **C. Keep detached** | No action | Temporary experimentation |
+
+After resolving detached HEAD, proceed to Step 3.
+
+### Step 3: Present Options
 
 Show the user four options in a table:
 
@@ -35,15 +53,21 @@ Show the user four options in a table:
 | **C. Keep branch** | No action | Not yet decided, will continue later |
 | **D. Discard branch** | Delete worktree + delete branch | Completely wrong direction, start over |
 
-### Step 3: Execute Choice
+### Step 4: Execute Choice
 
-Carry out the user's selected option.
+Carry out the user's selected option:
 
-### Step 4: Cleanup
+- **A. Merge to main**: `git_command: "checkout main"` then `git_command: "merge <branch>"`
+- **B. Create PR**: `git_command: "push origin <branch>"`  
+  (Creating the actual PR via `gh pr create` may require manual intervention — inform the user)
+- **C. Keep branch**: No action needed
+- **D. Discard branch**: `git_command: "branch -D <branch>"` then remove worktree
+
+### Step 5: Cleanup
 
 If merging or discarding:
-- Remove the worktree: `git worktree remove <worktree-path>`
-- Confirm removal with `ls` or `git worktree list`
+- `git_command: "worktree remove <worktree-path>"`
+- Confirm removal with `git_command: "worktree list"`
 
 If keeping the branch, leave the worktree in place.
 

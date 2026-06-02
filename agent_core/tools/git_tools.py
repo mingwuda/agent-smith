@@ -23,6 +23,9 @@ _ALLOWED_SUBCOMMANDS = {
     "ls-files",
     "push",
     "revert",
+    "worktree",
+    "merge",
+    "checkout",
 }
 _BLOCKED_ARGS = {"--output", "--output=", "-o", "--exec", "--ext-diff"}
 _MAX_OUTPUT_CHARS = 20000
@@ -107,9 +110,13 @@ def _validate_args(args: list[str]) -> Optional[str]:
         if any(arg not in allowed for arg in args):
             return "❌ git remote 仅允许查看 remote 或 remote -v"
     if subcommand == "branch":
-        allowed = {"branch", "-a", "--all", "-r", "--remotes", "-v", "-vv", "--verbose", "--show-current"}
-        if any(arg not in allowed for arg in args):
-            return "❌ git branch 仅允许查看分支列表或当前分支"
+        allowed_view = {"branch", "-a", "--all", "-r", "--remotes", "-v", "-vv", "--verbose", "--show-current"}
+        if all(arg in allowed_view for arg in args):
+            return None
+        # 允许删除分支: git branch -d/-D <name>
+        if len(args) == 3 and args[1] in ("-d", "-D") and _is_safe_git_ref(args[2]):
+            return None
+        return "❌ git branch 仅允许查看或删除分支 (git branch -d/-D <name>)"
     if subcommand == "add":
         allowed_options = {"-A", "--all", "--"}
         for arg in args[1:]:
@@ -137,6 +144,27 @@ def _validate_args(args: list[str]) -> Optional[str]:
         if len(args) == 3 and args[1] in {"--no-commit", "-n"} and _is_safe_single_revision(args[2]):
             return None
         return "❌ git revert 仅允许: git revert <revision> 或 git revert --no-commit <revision>"
+    if subcommand == "worktree":
+        if len(args) == 2 and args[1] == "list":
+            return None
+        if len(args) >= 4 and args[1] in ("add", "remove") and _is_safe_git_ref(args[2]):
+            return None
+        if len(args) == 3 and args[1] == "add" and _is_safe_git_ref(args[2]):
+            return None
+        return "❌ git worktree 仅允许: list / add <path> <branch> / remove <path>"
+    if subcommand == "merge":
+        if len(args) == 2 and _is_safe_git_ref(args[1]):
+            return None
+        if len(args) == 3 and args[1] in ("--no-ff", "--ff-only") and _is_safe_git_ref(args[2]):
+            return None
+        return "❌ git merge 仅允许: git merge <branch>"
+    if subcommand == "checkout":
+        if len(args) == 2 and _is_safe_git_ref(args[1]):
+            return None
+        # 允许 checkout -b <new-branch> 创建并切换
+        if len(args) == 3 and args[1] == "-b" and _is_safe_git_ref(args[2]):
+            return None
+        return "❌ git checkout 仅允许: git checkout <branch> 或 git checkout -b <branch>"
     return None
 
 

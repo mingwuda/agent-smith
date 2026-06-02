@@ -19,16 +19,33 @@ tools-required: [delegate_task, git_status, git_diff, git_log, git_show]
 
 ### Step 1: Gather Context
 
-1. Run `git_status` and `git_diff` to see all current changes
-2. Read the corresponding plan to understand what the changes were supposed to implement
-3. Prepare the review context: list of changed files, full diff content, and plan requirements
+1. Record the current `HEAD` as `BASE_SHA` using `git_log` or `git rev-parse HEAD`  
+   (`BASE_SHA = $(git rev-parse HEAD)`)
+2. (Development tasks execute here — modify files, make commits)
+3. After the task is complete, record the new `HEAD` as `HEAD_SHA`  
+   (`HEAD_SHA = $(git rev-parse HEAD)`)
+4. Run `git_diff` with the SHA range if commits were made:  
+   `git diff BASE_SHA..HEAD_SHA` — this ensures only the current task's changes are reviewed
+5. If no new commits were made (working tree is dirty), use `git_diff` without arguments
+6. Read the corresponding plan to understand what the changes were supposed to implement
+7. Prepare the review context: list of changed files, full diff content, and plan requirements
 
 ### Step 2: Dispatch Review Subagent
 
 Call `delegate_task` with `agent_type: "reviewer"` and provide:
-- The complete `git_diff` output
+- The complete diff (`BASE_SHA..HEAD_SHA` or working tree diff)
 - The plan's requirements for the changes
 - A review checklist covering these dimensions:
+
+**Reviewer prompt template:**
+```
+Review the following code changes for the project:
+
+Files changed: [list]
+Diff: [BASE_SHA..HEAD_SHA or working tree diff]
+Plan requirements: [what the changes should implement]
+
+Review dimensions:
 
 | Dimension | Focus |
 |-----------|-------|

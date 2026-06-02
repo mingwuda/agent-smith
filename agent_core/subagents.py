@@ -1,9 +1,11 @@
 """Subagent runtime with a synchronous MVP and task-state model for future parallel execution."""
 from __future__ import annotations
 import asyncio
+import json
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -155,4 +157,51 @@ def delegate_task(task: str, agent_type: str = "coder", context: str = "") -> st
     )
 
 
-TOOLS = [delegate_task]
+def _parallel_task_wrapper(task_def: dict) -> str:
+    """Run a single subagent task in a thread pool worker."""
+    item = _run_coro_in_thread(manager.run_sync(
+        task=task_def["task"],
+        agent_type=task_def.get("agent_type", "coder"),
+        context=task_def.get("context", ""),
+    ))
+    return (
+        f"任务 {item.id} [{item.agent_type}] 状态：{item.status}\n\n"
+        f"{item.result or item.error}"
+    )
+
+
+@tool
+def delegate_tasks_parallel(tasks_json: str) -> str:
+    """并行派发多个独立子任务。tasks_json 是一个 JSON 数组，每个元素包含 task/agent_type/context 字段。
+    适用于多个任务之间没有文件或数据依赖的场景。同一时间最多并行 4 个子代理。"""
+    try:
+        tasks = json.loads(tasks_json)
+    except (json.JSONDecodeError, TypeError) as e:
+        return f"❌ 参数解析失败: {e}，需要传入 JSON 数组字符串"
+
+    if not isinstance(tasks, list) or len(tasks) == 0:
+        return "❌ 需要至少一个任务"
+
+    max_workers = min(len(tasks), 4)
+    results = []
+    errors = []
+
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {pool.submit(_parallel_task_wrapper, t): i for i, t in enumerate(tasks)}
+        for future in as_completed(futures):
+            idx = futures[future]
+            try:
+                result = future.result()
+                results.append(result)
+            except Exception as e:
+                errors.append(f"任务 #{idx + 1} 失败: {type(e).__name__}: {e}")
+
+    parts = [f"✅ 并行子代理执行完成（{len(results)}/{len(tasks)} 成功）\n"]
+    if results:
+        parts.append("\n---\n".join(results))
+    if errors:
+        parts.append(f"\n\n❌ 失败任务：\n" + "\n".join(errors))
+    return "\n".join(parts)
+
+
+TOOLS = [delegate_task, delegate_tasks_parallel]
