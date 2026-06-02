@@ -19,8 +19,8 @@ AgentSmith 是一个本地/私有部署的桌面 AI 智能体。它基于 FastAP
 | 文件制品 | AI 生成工作区文件后自动追加下载链接；Markdown 文件支持弹窗预览 |
 | Python 执行 | 运行 Python 代码并返回输出；超大输出只返回摘要、开头和结尾 |
 | 网页能力 | `web_search` 搜索网页，`web_fetch` 抓取正文；带重试和兜底请求 |
-| Git 工具 | 查看状态、diff、日志、show；按明确指令 add/commit/push/revert |
-| 子代理 | `delegate_task` 委派 coder / reviewer / debugger，同步执行，状态结构已为并行预留 |
+| Git 工具 | 查看状态、diff、日志、show、worktree；按明确指令 add/commit/push/revert/merge/checkout |
+| 子代理 | `delegate_task` 串行 + `delegate_tasks_parallel` 并行委派 coder/reviewer/debugger |
 | Skills | 加载 `SKILL.md`，兼容 YAML frontmatter 和 oh-my-openagent / Superpowers 风格技能 |
 | 长期记忆 | 按用户隔离保存长期偏好、项目事实和常用环境信息 |
 | 多用户 | 登录保护、管理员用户管理、每个用户独立工作区、会话、用量和记忆 |
@@ -189,17 +189,25 @@ MiMo 系列模型有特殊处理：当本轮包含图片，且当前模型名包
 Git 工具包括：
 
 ```text
-git_status
-git_diff
-git_log
-git_show
-git_add
-git_commit
-git_commit_all
-git_push
-git_revert
-git_command
+git_status       git_diff       git_log        git_show
+git_add          git_commit     git_commit_all git_push
+git_revert       git_command
 ```
+
+`git_command` 安全白名单：
+
+| 子命令 | 允许操作 |
+|--------|---------|
+| `status` / `diff` / `log` / `show` | 查看 |
+| `add` | 暂存文件 |
+| `commit -m` | 提交 |
+| `push` / `push -u origin branch` | 推送 |
+| `revert <revision>` | 回退提交 |
+| `branch` / `branch -a` / `branch -d/-D <name>` | 查看/删除分支 |
+| `checkout <branch>` / `checkout -b <branch>` | 切换/创建分支 |
+| `merge <branch>` | 合并分支 |
+| `worktree list / add / remove / prune` | 工作树管理 |
+| `remote -v` | 查看远程仓库 |
 
 安全策略：
 
@@ -280,23 +288,30 @@ triggers: [debug, 排查, 根因]
 
 侧边栏会显示已加载技能，区域固定高度并支持滚动；鼠标悬停会展示描述和触发词。用户问“你有哪些技能”时，后端会直接返回真实 SkillRegistry 内容，避免模型误报。
 
-当前项目内置/随项目保留的技能包括：
+当前项目内置/随项目保留的技能包括 13 个：
 
-- `daily-report`
-- `frontend-ui-ux`
-- `brainstorming`
-- `writing-plans`
-- `executing-plans`
-- `test-driven-development`
-- `systematic-debugging`
-- `verification-before-completion`
-- `receiving-code-review`
+| 技能 | 来源 | 用途 |
+|------|------|------|
+| `daily-report` | 内置示例 | 日报生成 |
+| `brainstorming` | oh-my-openagent | 需求澄清、方案设计 |
+| `writing-plans` | oh-my-openagent | 生成实施计划 |
+| `executing-plans` | oh-my-openagent | 批量执行计划 |
+| `test-driven-development` | oh-my-openagent | TDD 红绿重构 |
+| `systematic-debugging` | oh-my-openagent | 四阶段系统化调试 |
+| `verification-before-completion` | oh-my-openagent | 完成前验证 |
+| `receiving-code-review` | oh-my-openagent | 接收代码审查反馈 |
+| `frontend-ui-ux` | oh-my-openagent | 前端 UI/UX 设计 |
+| `subagent-driven-development` | Superpowers | 子代理派发 + 两阶段审查（P0） |
+| `requesting-code-review` | Superpowers | 主动代码审查，严重等级评估（P0） |
+| `dispatching-parallel-agents` | Superpowers | 并行派发独立子代理（P1） |
+| `finishing-a-development-branch` | Superpowers | 开发分支收尾清理（P2） |
+| `using-git-worktrees` | Superpowers | Git Worktree 隔离开发环境（P1） |
 
 ---
 
 ## 子代理
 
-`delegate_task` 可以把独立任务委派给子代理：
+`delegate_task` 可以把独立任务委派给子代理同步执行，`delegate_tasks_parallel` 可以并行派发多个独立任务。
 
 | 子代理 | 用途 |
 | --- | --- |
@@ -304,9 +319,28 @@ triggers: [debug, 排查, 根因]
 | `reviewer` | 代码审查、风险和缺失测试检查 |
 | `debugger` | 系统化排障、根因定位 |
 
-当前版本是同步 MVP：主 Agent 会等待子代理完成再继续。内部保留了 `task_id`、`status`、`result`、`error`、时间戳等状态结构，后续可以在此基础上扩展并行执行。
+### 串行执行
 
-为了避免递归委派，子代理默认不能再调用 `delegate_task`。
+```python
+delegate_task(task="...", agent_type="coder", context="...")
+```
+主 Agent 等待子代理完成后继续。适用于有依赖关系的任务。
+
+### 并行执行
+
+```python
+delegate_tasks_parallel('''[
+  {"task": "任务1", "agent_type": "coder", "context": "..."},
+  {"task": "任务2", "agent_type": "coder", "context": "..."}
+]''')
+```
+基于 `ThreadPoolExecutor` 真正并行，同一时间最多 4 个子代理。适用于无文件/数据依赖的任务。
+
+### 安全策略
+
+- 子代理默认不能再调用 `delegate_task` 和 `delegate_tasks_parallel`，避免递归委派
+- 每个子代理的 prompt 必须完全自包含
+- 并行任务的同一文件同一时间只能被一个子代理修改
 
 ---
 
@@ -480,26 +514,28 @@ desktop-agent/
 │   ├── agent.py                # DesktopAgent、LangGraph、流式事件、上下文处理
 │   ├── config.py               # Provider、模型、环境变量和配置持久化
 │   ├── context_manager.py      # 上下文估算、阈值和压缩
-│   ├── subagents.py            # coder/reviewer/debugger 子代理
+│   ├── subagents.py            # coder/reviewer/debugger 子代理 + 并行支持
 │   ├── session_store.py        # SQLite 会话存储
 │   ├── user_manager.py         # 多用户数据目录
+│   ├── network_resolver.py     # DNS 兜底解析
 │   ├── memory/
 │   │   └── local_memory.py     # 长期记忆
 │   ├── monitoring/
 │   │   └── usage_tracker.py    # 用量统计
 │   ├── skills/
-│   │   ├── loader.py           # SKILL.md 解析
-│   │   └── registry.py         # SkillRegistry
+│   │   ├── loader.py           # SKILL.md 解析（支持 YAML frontmatter）
+│   │   └── registry.py         # SkillRegistry 技能注册表
+│   ├── samples/                # 示例技能
 │   └── tools/
 │       ├── file_tools.py       # 文件工具
 │       ├── code_tools.py       # Python 执行
-│       ├── git_tools.py        # Git 工具
+│       ├── git_tools.py        # Git 工具（含白名单安全验证）
 │       ├── web_tools.py        # 搜索和网页抓取
 │       ├── memory_tools.py     # 记忆工具
 │       └── system_tools.py     # 系统信息和 Skills 列表
 ├── desktop/
 │   └── index.html              # 单页前端
-├── .opencode/skills/           # 项目内 Skills
+├── .opencode/skills/           # 项目内 Skills（9 个 oh-my-openagent + 5 个 Superpowers）
 ├── packaging/windows/          # Windows 打包脚本
 ├── start.sh
 ├── start.cmd
