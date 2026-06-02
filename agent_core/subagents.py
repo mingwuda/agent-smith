@@ -61,7 +61,10 @@ class SubagentManager:
 
     def configure(self, config: AgentConfig, tools: list):
         self._config = config
-        self._tools = [item for item in tools if getattr(item, "name", "") != "delegate_task"]
+        self._tools = [
+            item for item in tools
+            if getattr(item, "name", "") not in {"delegate_task", "delegate_tasks_parallel"}
+        ]
 
     def list_agent_types(self) -> list[str]:
         return sorted(SUBAGENT_PROMPTS)

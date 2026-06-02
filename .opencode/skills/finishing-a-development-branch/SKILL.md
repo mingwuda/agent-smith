@@ -67,11 +67,12 @@ Carry out the user's selected option:
 
 If merging or discarding:
 - `git_command: "worktree remove <worktree-path>"`
+- `git_command: "worktree prune"` — clean up stale worktree registrations
 - Confirm removal with `git_command: "worktree list"`
 
 If keeping the branch, leave the worktree in place.
 
-### Step 5: Summary
+### Step 6: Summary
 
 Provide a final report:
 - List of completed tasks

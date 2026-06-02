@@ -147,11 +147,20 @@ def _validate_args(args: list[str]) -> Optional[str]:
     if subcommand == "worktree":
         if len(args) == 2 and args[1] == "list":
             return None
-        if len(args) >= 4 and args[1] in ("add", "remove") and _is_safe_git_ref(args[2]):
+        if len(args) == 2 and args[1] == "prune":
+            return None
+        # worktree add <path> -b <branch> 或 worktree add <path> <branch>
+        if len(args) >= 4 and args[1] == "add" and _is_safe_git_ref(args[2]):
+            return None
+        # worktree add -b <branch> <path>
+        if len(args) >= 5 and args[1] == "add" and args[2] == "-b" and _is_safe_git_ref(args[3]) and _is_safe_git_ref(args[4]):
             return None
         if len(args) == 3 and args[1] == "add" and _is_safe_git_ref(args[2]):
             return None
-        return "❌ git worktree 仅允许: list / add <path> <branch> / remove <path>"
+        # worktree remove <path>
+        if len(args) >= 3 and args[1] == "remove" and _is_safe_git_ref(args[2]):
+            return None
+        return "❌ git worktree 仅允许: list / add <path> [-b <branch>] / remove <path> / prune"
     if subcommand == "merge":
         if len(args) == 2 and _is_safe_git_ref(args[1]):
             return None
