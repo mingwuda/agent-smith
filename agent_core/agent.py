@@ -20,6 +20,9 @@ from context_manager import (
     estimate_messages_tokens,
     should_compact,
 )
+from logger import get_logger
+
+logger = get_logger(__name__)
 from memory.local_memory import set_current_user
 from monitoring.usage_tracker import get_tracker, UsageTracker
 from network_resolver import configure_host_resolution
@@ -85,16 +88,6 @@ def _loop_guard_message(reason: str, calls: list[dict], recursion_limit: int) ->
     )
 
 
-def _search_budget_message(calls: list[dict], max_searches: int) -> str:
-    searches = [item for item in calls if item.get("tool") == "web_search"]
-    recent = "\n".join(f"- {_tool_call_label(item)}" for item in searches[-max_searches:])
-    return (
-        f"本轮任务已经完成 {len(searches)} 次 web_search，已达到搜索预算上限，避免继续低效改写关键词。\n\n"
-        "建议基于已有搜索结果和已抓取页面先做综合判断；如果仍缺信息，请用更具体的问题重新发起。\n\n"
-        f"最近搜索：\n{recent}"
-    )
-
-
 def _detect_tool_loop(calls: list[dict], recursion_limit: int) -> str:
     latest = calls[-1]
     latest_sig = latest.get("signature", "")
@@ -134,14 +127,6 @@ def _detect_tool_loop(calls: list[dict], recursion_limit: int) -> str:
             return f"已接近最大推理步数，且最近工具类型仍高度重复：{', '.join(sorted(tail_unique))}"
 
     return ""
-
-
-def _detect_search_overuse(calls: list[dict], max_searches: int = 12) -> bool:
-    searches = [item for item in calls if item.get("tool") == "web_search"]
-    if len(searches) < max_searches:
-        return False
-    signatures = {item.get("signature", "") for item in searches if item.get("signature")}
-    return len(signatures) >= max_searches
 
 
 def _get_nested(mapping: dict, *keys: str):
@@ -515,11 +500,10 @@ class DesktopAgent:
         compacted = compact_messages(messages, self.config.model, self.config.context_window_tokens)
         await self._graph.aupdate_state(run_config, {"messages": checkpoint_replacement(compacted)})
         after = estimate_messages_tokens(compacted)
-        print(
-            "🧹 上下文已压缩: "
-            f"{len(messages)} -> {len(compacted)} messages, "
-            f"~{before} -> ~{after} tokens, "
-            f"threshold={compaction_threshold_tokens(self.config.model, self.config.context_window_tokens)}"
+        logger.info(
+            "🧹 上下文已压缩: %d -> %d messages, ~%d -> ~%d tokens, threshold=%d",
+            len(messages), len(compacted), before, after,
+            compaction_threshold_tokens(self.config.model, self.config.context_window_tokens),
         )
 
     async def _repair_checkpoint_tool_history(self, run_config: dict, graph=None):
@@ -653,9 +637,7 @@ class DesktopAgent:
         step_count = 0
         in_tool_call = False        # 当前是否正在产生工具调用
         usage_recorded = False
-        active_tool = ""
-        active_step = 0
-        active_tool_started_at = 0.0
+        running_tools: dict[str, dict] = {}   # run_id -> {name, step, started_at}
         last_progress_at = 0.0
         pending_event = None
         cancelled = False
@@ -671,16 +653,18 @@ class DesktopAgent:
                     event = await asyncio.wait_for(asyncio.shield(pending_event), timeout=2.0)
                 except asyncio.TimeoutError:
                     now = time.time()
-                    if active_tool and now - last_progress_at >= 1.5:
-                        elapsed = int(now - active_tool_started_at)
-                        label = "子代理仍在执行" if active_tool == "delegate_task" else "工具仍在执行"
+                    # 发送所有正在运行的工具进度
+                    for rid, tinfo in list(running_tools.items()):
+                        elapsed = int(now - tinfo["started_at"])
+                        label = "子代理仍在执行" if tinfo["name"] == "delegate_task" else "工具仍在执行"
                         yield _sse({
                             "type": "progress",
-                            "tool": active_tool,
-                            "step": active_step,
+                            "tool": tinfo["name"],
+                            "step": tinfo["step"],
                             "elapsed": elapsed,
                             "message": f"{label}，已耗时 {elapsed}s",
                         })
+                    if running_tools:
                         last_progress_at = now
                     continue
                 except StopAsyncIteration:
@@ -716,10 +700,14 @@ class DesktopAgent:
                 elif kind == "on_tool_start":
                     step_count += 1
                     tool_name = event.get("name", "")
-                    active_tool = tool_name
-                    active_step = step_count
-                    active_tool_started_at = time.time()
-                    last_progress_at = active_tool_started_at
+                    run_id = event.get("run_id", "")
+                    started_at = time.time()
+                    running_tools[run_id] = {
+                        "name": tool_name,
+                        "step": step_count,
+                        "started_at": started_at,
+                    }
+                    last_progress_at = started_at
                     
                     # 取出推理文本
                     thought = thinking_buffer.strip()
@@ -761,20 +749,26 @@ class DesktopAgent:
                     output = event.get("data", {}).get("output", "")
                     output_str = str(output)[:500]
                     tool_name = event.get("name", "")
+                    run_id = event.get("run_id", "")
+                    tinfo = running_tools.pop(run_id, None)
+                    step_for_tool = tinfo["step"] if tinfo else 0
+                    is_error = bool(output_str.strip().startswith("❌"))
                     
                     self._record_tool_call(tool_name)
                     
                     yield _sse({
                         "type": "tool_result",
                         "tool": tool_name,
+                        "step": step_for_tool,
                         "result": _truncate(output_str, 400),
+                        "error": is_error,
                     })
                     
-                    # 重置状态，准备接收下一轮推理
+                    # 重置推理上下文（但保留其他并行工具的进度状态）
                     in_tool_call = False
-                    active_tool = ""
-                    active_step = 0
-                    active_tool_started_at = 0.0
+                    if not running_tools:
+                        # 没有剩余工具时，也重置最后进度时间，避免 stale 进度事件
+                        last_progress_at = 0.0
 
                     loop_reason = _detect_tool_loop(tool_call_history, run_config["recursion_limit"])
                     if loop_reason:
@@ -784,14 +778,6 @@ class DesktopAgent:
                         if pending_event and not pending_event.done():
                             pending_event.cancel()
                         break
-                    if _detect_search_overuse(tool_call_history):
-                        loop_guard_triggered = True
-                        final_buffer = _search_budget_message(tool_call_history, 12)
-                        yield _sse({"type": "error", "content": final_buffer})
-                        if pending_event and not pending_event.done():
-                            pending_event.cancel()
-                        break
-
                 elif kind == "on_chat_model_end" and node == "agent":
                     output = event.get("data", {}).get("output")
                     input_tok, output_tok, cached_tok = _extract_usage_tokens(output)

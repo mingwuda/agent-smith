@@ -29,6 +29,10 @@ def _app_base_dir() -> Path:
         return Path(sys._MEIPASS)
     return Path(__file__).parent.parent
 
+from logger import setup_logging, get_logger
+
+logger = get_logger(__name__)
+
 from config import AgentConfig
 from agent import DesktopAgent
 from tools import file_tools, code_tools, system_tools, web_tools, memory_tools, git_tools
@@ -143,7 +147,8 @@ from contextlib import asynccontextmanager
 
 @asynccontextmanager
 async def lifespan(app):
-    print("🔄 服务启动中...（Agent 将在首次请求时初始化）")
+    setup_logging()
+    logger.info("🔄 服务启动中...（Agent 将在首次请求时初始化）")
     _init_default_users()
     yield
 
@@ -182,7 +187,7 @@ if UI_DIR.exists():
     ui_index = UI_DIR / "index.html"
     if ui_index.exists():
         _html_content = ui_index.read_text(encoding="utf-8")
-        print(f"📁 桌面 UI: {UI_DIR / 'index.html'}")
+        logger.info("📁 桌面 UI: %s", UI_DIR / "index.html")
 
 # ---------- Agent 实例 ----------
 
@@ -228,11 +233,11 @@ def init_agent():
     agent = DesktopAgent(config)
     agent.set_tools(all_tools)
     
-    print(f"✅ Agent 初始化完成")
-    print(f"  模型: {config.model}")
-    print(f"  工作区: {config.workspace}")
-    print(f"  Skills 目录: {', '.join(str(p) for p in skills_dirs)}")
-    print(f"  已加载技能: {skills_count} 个")
+    logger.info("✅ Agent 初始化完成")
+    logger.info("  模型: %s", config.model)
+    logger.info("  工作区: %s", config.workspace)
+    logger.info("  Skills 目录: %s", ", ".join(str(p) for p in skills_dirs))
+    logger.info("  已加载技能: %d 个", skills_count)
 
 # ---------- API 模型 ----------
 
@@ -750,6 +755,7 @@ async def run_agent(req: RunRequest, request: Request):
     if not agent:
         init_agent()
     if not agent:
+        logger.error("Agent 初始化失败，请检查 API Key 设置")
         raise HTTPException(503, "Agent 初始化失败，请检查 API Key 设置")
     
     uid = _resolve_user(request)
@@ -885,6 +891,7 @@ async def run_agent_stream(req: RunRequest, request: Request):
                 yield f"data: {json.dumps({'type': 'done', 'content': fallback}, ensure_ascii=False)}\n\n"
                 _save_assistant_result(uid, session_id, req.message, fallback)
         except Exception as e:
+            logger.exception("SSE 流处理异常")
             err_msg = f"服务内部错误: {e}"
             yield f"data: {json.dumps({'type': 'done', 'content': err_msg}, ensure_ascii=False)}\n\n"
         yield "data: [DONE]\n\n"
@@ -1206,6 +1213,7 @@ def save_settings(req: SettingsRequest, request: Request):
         init_agent()
         return {"status": "ok", "message": "设置已保存，Agent 已重新初始化"}
     except Exception as e:
+        logger.exception("保存设置后 Agent 重新初始化失败")
         return {"status": "error", "message": f"设置已保存，但 Agent 初始化失败: {str(e)}"}
 
 
@@ -1271,7 +1279,7 @@ def _init_default_users():
     for uid in users:
         if not user_manager.get_user(uid):
             user_manager.create_user(uid, uid)
-            print(f"  👤 创建用户: {uid}")
+            logger.info("  👤 创建用户: %s", uid)
 
 
 @app.get("/health")
@@ -1312,11 +1320,10 @@ if __name__ == "__main__":
     host = os.getenv("AGENT_HOST", "127.0.0.1")
     port = int(os.getenv("AGENT_PORT", "8899"))
     
-    print(f"🚀 启动桌面 AI 智能体服务...")
-    print(f"  🔗 地址: http://{host}:{port}")
-    print(f"  📖 API 文档: http://{host}:{port}/docs")
-    print(f"  🖥 桌面 UI: http://{host}:{port}/")
-    print()
+    logger.info("🚀 启动桌面 AI 智能体服务...")
+    logger.info("  🔗 地址: http://%s:%s", host, port)
+    logger.info("  📖 API 文档: http://%s:%s/docs", host, port)
+    logger.info("  🖥 桌面 UI: http://%s:%s/", host, port)
 
     if os.getenv("AGENT_OPEN_BROWSER", "0") == "1":
         def _open_browser():
@@ -1325,4 +1332,16 @@ if __name__ == "__main__":
 
         threading.Thread(target=_open_browser, daemon=True).start()
     
-    uvicorn.run(app, host=host, port=port, log_level="info")
+    uvicorn.run(
+        app,
+        host=host,
+        port=port,
+        log_config={
+            "version": 1,
+            "disable_existing_loggers": False,
+            "formatters": {},
+            "handlers": {},
+            "loggers": {},
+        },
+        log_level="info",
+    )

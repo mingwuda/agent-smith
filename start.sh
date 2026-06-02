@@ -72,7 +72,8 @@ if [[ "$ACTION" == "status" ]]; then
     OLD_PID=$(cat "$PIDFILE")
     if kill -0 "$OLD_PID" 2>/dev/null; then
       echo "✅ Agent 正在运行 (PID: $OLD_PID)"
-      echo "   http://127.0.0.1:$AGENT_PORT"
+      echo "   地址: http://127.0.0.1:$AGENT_PORT"
+      echo "   日志: $HOME/.desktop_agent/logs/agent.log"
     else
       echo "❌ PID 文件存在但进程已不存在"
       rm -f "$PIDFILE"
@@ -120,6 +121,7 @@ if [[ "$ACTION" == "restart" ]]; then
   nohup "$PYTHON" main.py > "$SCRIPT_DIR/agent.log" 2>&1 &
   echo $! > "$PIDFILE"
   echo "✅ Agent 已重启 (PID: $(cat $PIDFILE))"
+  echo "   结构化日志: $HOME/.desktop_agent/logs/agent.log (7天滚动)"
   exit 0
 fi
 
@@ -155,12 +157,14 @@ fi
 
 cd "$SCRIPT_DIR/agent_core"
 echo "🚀 Agent 启动中... http://$AGENT_HOST:$AGENT_PORT"
+echo "   日志目录: $HOME/.desktop_agent/logs/ (7天自动滚动)"
 
 if [[ "$DAEMON" -eq 1 ]]; then
   nohup "$PYTHON" main.py > "$SCRIPT_DIR/agent.log" 2>&1 &
   echo $! > "$PIDFILE"
   echo "✅ Agent 已在后台启动 (PID: $(cat $PIDFILE))"
-  echo "   日志: $SCRIPT_DIR/agent.log"
+  echo "   日志: $SCRIPT_DIR/agent.log (shell 输出)"
+  echo "   结构化日志: $HOME/.desktop_agent/logs/agent.log (7天滚动)"
   echo "   地址: http://$AGENT_HOST:$AGENT_PORT"
   echo ""
   echo "   管理命令:"

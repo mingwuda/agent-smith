@@ -118,6 +118,7 @@
   .step-status { display:inline-flex; align-items:center; gap:5px; color:#999; font-size:11px; margin-left:auto; white-space:nowrap; }
   .step-status.running { color:#007aff; }
   .step-status.done { color:#2e7d32; }
+  .step-status.error { color:#d70015; }
   .mini-spin { width:10px; height:10px; border:2px solid currentColor; border-top-color:transparent; border-radius:50%; animation:spin .7s linear infinite; }
   .step-details { display:none; padding:8px 12px; background:#f8f8fa; border:1px solid #e0e0e3; border-top:none; border-radius:0 0 8px 8px; font-size:13px; }
   .step-details.open { display:block; }
@@ -127,6 +128,7 @@
   .step-details .thought code { background:#d4d4d9; padding:1px 4px; border-radius:3px; font-size:12px; }
   .step-details .args { background:#1c1c1e; color:#e8e8ed; padding:8px; border-radius:6px; font-size:12px; font-family:"SF Mono",Menlo,monospace; overflow-x:auto; margin-bottom:6px; }
   .step-details .result { background:#e8f5e9; color:#2e7d32; padding:8px; border-radius:6px; font-size:12px; white-space:pre-wrap; word-break:break-word; }
+  .step-details .result-error { background:#fbe9e7; color:#b71c1c; }
 
   /* 步骤进度标签 */
   .step-progress { display:flex; align-items:center; gap:8px; padding:6px 12px; margin-bottom:6px; font-size:12px; color:#8e8e93; background:#f8f8fa; border-radius:8px; }
@@ -551,7 +553,11 @@ const I18N = {
     stepLabel: '第 {step} 步',
     keepAnalyzing: '🤔 继续分析',
     running: '执行中...',
+    runningFallback: '执行中...',
+    analyzeResult: '🤔 分析结果，准备下一步...',
+    stopped: '已终止',
     done: '✅ 完成',
+    failed: '❌ 失败',
     analyzeResult: '🤔 分析结果',
     runningFallback: '执行中...',
     liveProgressPrefix: '⏳ ',
@@ -676,6 +682,7 @@ const I18N = {
     keepAnalyzing: '🤔 Continuing analysis',
     running: 'Running...',
     done: '✅ Done',
+    failed: '❌ Failed',
     analyzeResult: '🤔 Analyzing result',
     runningFallback: 'Running...',
     liveProgressPrefix: '⏳ ',
@@ -1190,21 +1197,22 @@ function handleStreamEvent(data) {
       break;
     
     case 'tool_result':
-      // 更新工具状态为完成
+      // 更新工具状态为完成/失败
       if (currentStepsEl) {
         const lastToggle = findStepToggle(data.step);
         if (lastToggle) {
           const statusSpan = lastToggle.querySelector('.step-status');
+          const isError = data.error === true;
           if (statusSpan) {
-            statusSpan.className = 'step-status done';
-            statusSpan.textContent = t('done');
+            statusSpan.className = 'step-status ' + (isError ? 'error' : 'done');
+            statusSpan.textContent = isError ? t('failed') : t('done');
           }
           
           const details = lastToggle.nextElementSibling;
           if (details && data.result) {
             const resultDiv = document.createElement('div');
-            resultDiv.className = 'result';
-            resultDiv.textContent = '✅ ' + data.result;
+            resultDiv.className = 'result' + (isError ? ' result-error' : '');
+            resultDiv.textContent = data.result;
             details.appendChild(resultDiv);
           }
         }
