@@ -569,7 +569,11 @@ def _workspace_for_user(uid: str) -> Path:
 
 def _resolve_artifact_path(uid: str, path: str) -> Path:
     workspace = _workspace_for_user(uid)
-    raw = Path(path or "").expanduser()
+    try:
+        raw = Path(path or "").expanduser()
+    except (RuntimeError, OSError):
+        # expanduser 可能因 HOME 未设置而失败，此时按绝对路径处理
+        raw = Path(path or "")
     target = raw if raw.is_absolute() else workspace / raw
     target = target.resolve(strict=False)
     try:
@@ -614,7 +618,7 @@ def _append_artifact_links(content: str, uid: str, paths: Optional[list[str]] = 
     for candidate in (paths or []) + _artifact_candidates(cleaned_content):
         try:
             rel = _relative_artifact_path(uid, candidate)
-        except HTTPException:
+        except Exception:
             continue
         if rel not in seen:
             seen.add(rel)
