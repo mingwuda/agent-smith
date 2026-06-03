@@ -873,6 +873,11 @@ async def run_agent_stream(req: RunRequest, request: Request):
         except asyncio.CancelledError:
             await stream.aclose()
             return
+        except Exception as e:
+            logger.exception("SSE 流异常: async for 循环内未捕获的异常")
+            await stream.aclose()
+            yield f"data: {json.dumps({'type': 'error', 'content': f'服务内部错误: {e}'}, ensure_ascii=False)}\n\n"
+            return
         
         try:
             final_content = final_content or ""

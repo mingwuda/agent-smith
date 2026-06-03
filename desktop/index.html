@@ -1050,6 +1050,13 @@ async function send() {
         currentBotMsgEl.classList.remove('streaming-final');
       }
     } else if (streamingActive) {
+      // 清理所有运行中的工具步骤
+      if (currentStepsEl) {
+        currentStepsEl.querySelectorAll('.step-status.running').forEach(statusSpan => {
+          statusSpan.className = 'step-status done';
+          statusSpan.textContent = t('stopped');
+        });
+      }
       addMessage(t('connectionInterrupted'), 'system');
     }
   } finally {
