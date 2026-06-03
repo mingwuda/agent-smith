@@ -260,7 +260,7 @@ AgentSmith 会加载以下目录中的 `SKILL.md`：
 ```text
 agent_core/samples/
 AGENT_SKILLS_DIR 指定目录
-项目内 .opencode/skills/
+项目内 skills/
 项目内 .claude/skills/
 项目内 .agents/skills/
 ```
@@ -535,7 +535,7 @@ desktop-agent/
 │       └── system_tools.py     # 系统信息和 Skills 列表
 ├── desktop/
 │   └── index.html              # 单页前端
-├── .opencode/skills/           # 项目内 Skills（9 个 oh-my-openagent + 5 个 Superpowers）
+├── skills/                     # 项目内 Skills（9 个 oh-my-openagent + 5 个 Superpowers）
 ├── packaging/windows/          # Windows 打包脚本
 ├── start.sh
 ├── start.cmd

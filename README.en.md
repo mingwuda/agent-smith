@@ -240,7 +240,7 @@ AgentSmith loads `SKILL.md` from:
 ```text
 agent_core/samples/
 AGENT_SKILLS_DIR
-project .opencode/skills/
+project skills/
 project .claude/skills/
 project .agents/skills/
 ```
@@ -426,7 +426,7 @@ desktop-agent/
 │       └── system_tools.py     # System info and Skills list
 ├── desktop/
 │   └── index.html              # Single-page frontend with built-in i18n
-├── .opencode/skills/           # 14 built-in skills (9 oh-my-openagent + 5 Superpowers)
+├── skills/                     # 14 built-in skills (9 oh-my-openagent + 5 Superpowers)
 ├── start.sh
 ├── start.cmd
 ├── generate_login_url.py

@@ -223,7 +223,7 @@ def init_agent():
     app_base = _app_base_dir()
     skills_dirs = [
         Path(config.skills_dir),
-        app_base / ".opencode" / "skills",
+        app_base / "skills",
         app_base / ".claude" / "skills",
         app_base / ".agents" / "skills",
     ]
@@ -922,7 +922,7 @@ def list_skills():
         app_base = _app_base_dir()
         registry.load_from([
             Path(AgentConfig.load().skills_dir),
-            app_base / ".opencode" / "skills",
+            app_base / "skills",
             app_base / ".claude" / "skills",
             app_base / ".agents" / "skills",
         ])
