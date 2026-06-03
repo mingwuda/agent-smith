@@ -261,6 +261,7 @@ AgentSmith 会加载以下目录中的 `SKILL.md`：
 ```text
 agent_core/samples/
 AGENT_SKILLS_DIR 指定目录
+项目内 .opencode/skills/
 项目内 skills/
 项目内 .claude/skills/
 项目内 .agents/skills/

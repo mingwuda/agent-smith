@@ -240,6 +240,7 @@ AgentSmith loads `SKILL.md` from:
 ```text
 agent_core/samples/
 AGENT_SKILLS_DIR
+project .opencode/skills/
 project skills/
 project .claude/skills/
 project .agents/skills/
