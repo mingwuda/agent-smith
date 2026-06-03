@@ -802,6 +802,23 @@ class DesktopAgent:
             else:
                 final_buffer = _connection_diagnostic(e, self.config)
                 yield _sse({"type": "error", "content": final_buffer})
+            
+            # 清理因异常中断而残留的运行中工具——发送合成的失败事件
+            if running_tools:
+                logger.warning(
+                    "流异常中断，清理 %d 个未完成工具: %s",
+                    len(running_tools),
+                    ", ".join(t["name"] for t in running_tools.values()),
+                )
+            for rid, tinfo in list(running_tools.items()):
+                yield _sse({
+                    "type": "tool_result",
+                    "tool": tinfo["name"],
+                    "step": tinfo["step"],
+                    "result": "❌ 连接中断，工具未完成",
+                    "error": True,
+                })
+                running_tools.pop(rid, None)
         
         finally:
             if pending_event and not pending_event.done():

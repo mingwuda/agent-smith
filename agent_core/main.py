@@ -675,8 +675,10 @@ async def _ensure_session(uid: str, session_id: str) -> dict:
 
 
 def _is_skill_inventory_query(message: str) -> bool:
+    """判断是否为「查询已加载 Skills」的简短提问，避免长文本误匹配。"""
     text = (message or "").strip().lower()
-    if not text:
+    # 只匹配真正简短的提问（最多 60 个字符 / 约 30 个汉字）
+    if not text or len(text) > 60:
         return False
     skill_terms = ("技能", "skills", "skill", "插件", "能力")
     inventory_terms = ("哪些", "有什么", "有哪些", "列表", "已加载", "加载了", "会什么", "能做什么")
