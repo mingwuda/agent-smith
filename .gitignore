@@ -11,6 +11,9 @@ build/
 *.venv/
 .venv-windows-build/
 
+# 本地开发
+.workbuddy/
+
 # 系统
 .DS_Store
 Thumbs.db
