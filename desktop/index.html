@@ -1049,15 +1049,23 @@ async function send() {
       if (currentBotMsgEl && currentFinalContent) {
         currentBotMsgEl.classList.remove('streaming-final');
       }
-    } else if (streamingActive) {
-      // 清理所有运行中的工具步骤
+    } else if (streamingActive && !gotTerminalEvent) {
+      // 连接中断：只在未收到终端事件时才提示，避免 done 已到达后的假报警
       if (currentStepsEl) {
         currentStepsEl.querySelectorAll('.step-status.running').forEach(statusSpan => {
-          statusSpan.className = 'step-status done';
-          statusSpan.textContent = t('stopped');
+          statusSpan.className = 'step-status error';
+          statusSpan.textContent = t('failed');
         });
       }
       addMessage(t('connectionInterrupted'), 'system');
+    } else {
+      // 已收到完整回复但连接异常关闭：只清理残留工具状态，不弹中断提示
+      if (currentStepsEl) {
+        currentStepsEl.querySelectorAll('.step-status.running').forEach(statusSpan => {
+          statusSpan.className = 'step-status error';
+          statusSpan.textContent = t('failed');
+        });
+      }
     }
   } finally {
     stopStreamIdleWatch();
@@ -1075,6 +1083,15 @@ async function send() {
 
 function handleStreamEvent(data) {
   const container = document.getElementById('messages');
+
+  // 智能滚动：仅当用户在底部附近时才自动滚到最新
+  function smartScroll() {
+    const threshold = 80; // 距离底部 80px 以内视为「在底部」
+    const atBottom = container.scrollHeight - container.scrollTop - container.clientHeight <= threshold;
+    if (atBottom) {
+      container.scrollTop = container.scrollHeight;
+    }
+  }
 
   function ensureStepsContainer() {
     if (currentStepsEl) return currentStepsEl;
@@ -1123,7 +1140,7 @@ function handleStreamEvent(data) {
     hint.className = 'thinking-step';
     hint.innerHTML = `<span>${text}</span><span class="dots"><span></span><span></span><span></span></span>`;
     currentStepsEl.appendChild(hint);
-    container.scrollTop = container.scrollHeight;
+    smartScroll();
   }
 
   function findStepToggle(step) {
@@ -1159,9 +1176,9 @@ function handleStreamEvent(data) {
         </div>`;
       currentStepsEl.appendChild(thoughtDiv);
       showThinkingHint(t('keepAnalyzing'));
-      container.scrollTop = container.scrollHeight;
+      smartScroll();
       break;
-    
+
     case 'tool_start':
       hideTyping();
       removeThinkingHint();
@@ -1197,9 +1214,9 @@ function handleStreamEvent(data) {
           ${argsHtml}
         </div>`;
       currentStepsEl.appendChild(stepDiv);
-      container.scrollTop = container.scrollHeight;
+      smartScroll();
       break;
-    
+
     case 'tool_result':
       // 更新工具状态为完成/失败
       if (currentStepsEl) {
@@ -1223,7 +1240,7 @@ function handleStreamEvent(data) {
       }
       // 显示"分析中，准备下一步..."
       showThinkingHint(t('analyzeResult'));
-      container.scrollTop = container.scrollHeight;
+      smartScroll();
       break;
 
     case 'progress':
@@ -1251,7 +1268,7 @@ function handleStreamEvent(data) {
         }
       }
       showGeneratingBadge(data.message || t('stillProcessing'));
-      container.scrollTop = container.scrollHeight;
+      smartScroll();
       break;
 
     case 'model_switch':
@@ -1274,9 +1291,9 @@ function handleStreamEvent(data) {
       currentFinalContent += data.content;
       currentBotMsgEl.innerHTML = renderMarkdown(currentFinalContent);
       if (hasToolCalls) showGeneratingBadge(t('continueProcessing'));
-      container.scrollTop = container.scrollHeight;
+      smartScroll();
       break;
-    
+
     case 'error':
       hideTyping();
       removeThinkingHint();
@@ -1329,7 +1346,7 @@ function handleStreamEvent(data) {
         currentBotMsgEl.innerHTML = renderMarkdown(data.content);
         currentFinalContent = data.content;
       }
-      container.scrollTop = container.scrollHeight;
+      smartScroll();
       break;
   }
 }

@@ -56,11 +56,20 @@ def _sse(data: dict) -> str:
     return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
+import hashlib
+
+
 def _tool_signature(tool_name: str, args: object) -> str:
     if isinstance(args, dict):
-        normalized = {k: str(v)[:300] for k, v in sorted(args.items()) if not k.startswith("_")}
+        normalized = {}
+        for k, v in sorted(args.items()):
+            if k.startswith("_"):
+                continue
+            raw = str(v)
+            # 值超过 300 字符时用 md5 代替截断，避免不同内容因截断而碰撞
+            normalized[k] = hashlib.md5(raw.encode()).hexdigest() if len(raw) > 300 else raw
     else:
-        normalized = str(args)[:300]
+        normalized = hashlib.md5(str(args).encode()).hexdigest() if len(str(args)) > 300 else str(args)[:300]
     return f"{tool_name}:{json.dumps(normalized, ensure_ascii=False, sort_keys=True)}"
 
 
