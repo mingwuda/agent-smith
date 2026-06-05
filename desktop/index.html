@@ -106,6 +106,30 @@
   .typing-indicator span:nth-child(3) { animation-delay:0.4s; }
   @keyframes bounce { 0%,80%,100% { transform:translateY(0); } 40% { transform:translateY(-6px); } }
 
+  /* 子代理胶囊 */
+  .subagent-row { display:flex; flex-wrap:wrap; gap:8px; margin:8px 0; clear:both; max-width:85%; }
+  .subagent-capsule { display:inline-flex; align-items:center; gap:8px; padding:6px 14px 6px 8px; background:#f0f0f2; border:1px solid #e0e0e3; border-radius:20px; font-size:12px; cursor:pointer; transition:all .15s; max-width:320px; }
+  .subagent-capsule:hover { background:#e5e5ea; border-color:#ccc; }
+  .subagent-capsule .sa-icon { width:24px; height:24px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:700; color:#fff; flex-shrink:0; }
+  .subagent-capsule .sa-icon.searcher { background:#7c5ce7; }
+  .subagent-capsule .sa-icon.coder { background:#007aff; }
+  .subagent-capsule .sa-icon.reviewer { background:#f5a623; }
+  .subagent-capsule .sa-icon.debugger { background:#ff6b6b; }
+  .subagent-capsule .sa-task { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#333; }
+  .subagent-capsule .sa-status { flex-shrink:0; font-size:13px; }
+  .subagent-capsule .sa-status.running { color:#007aff; animation:spin .8s linear infinite; display:inline-block; width:14px; height:14px; border:2px solid #007aff; border-top-color:transparent; border-radius:50%; }
+  .subagent-capsule .sa-status.done { color:#30d158; }
+  .subagent-capsule .sa-status.error { color:#ff453a; }
+
+  /* 子代理胶囊详情弹窗 */
+  .capsule-detail-overlay { display:none; position:fixed; z-index:250; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,.3); }
+  .capsule-detail-overlay.show { display:flex; align-items:center; justify-content:center; }
+  .capsule-detail-card { width:min(480px,90vw); max-height:70vh; background:#fff; border-radius:12px; box-shadow:0 12px 40px rgba(0,0,0,.15); display:flex; flex-direction:column; }
+  .capsule-detail-header { display:flex; align-items:center; justify-content:space-between; padding:16px 20px; border-bottom:1px solid #eee; }
+  .capsule-detail-header h3 { margin:0; font-size:15px; }
+  .capsule-detail-close { background:none; border:none; font-size:18px; cursor:pointer; color:#999; padding:4px; }
+  .capsule-detail-body { padding:16px 20px; overflow-y:auto; font-size:13px; line-height:1.6; color:#333; white-space:pre-wrap; word-break:break-word; }
+
   /* 工具调用/思考步骤 */
   .steps-container { clear:both; margin:8px 0; max-width:85%; }
   .steps-container + .msg.bot { margin-top:12px; }
@@ -344,7 +368,7 @@
   <div id="input-area">
     <div id="composer">
       <div id="attachment-preview"></div>
-      <textarea id="input" placeholder="说点什么...（Enter 换行，⌘/Ctrl+Enter 发送，可直接粘贴图片）" data-i18n-placeholder="composerPlaceholder" autocomplete="off" rows="1"></textarea>
+      <textarea id="input" placeholder="说点什么...（Enter 发送，⌘/Ctrl+Enter 换行，可直接粘贴图片）" data-i18n-placeholder="composerPlaceholder" autocomplete="off" rows="1"></textarea>
     </div>
     <button id="send" data-i18n="sendButton">发送</button>
   </div>
@@ -496,7 +520,7 @@ const I18N = {
     memoryButton: '🧠 记忆',
     settingsButton: '⚙️ 设置',
     logoutButton: '🚪 登出',
-    composerPlaceholder: '说点什么...（Enter 换行，⌘/Ctrl+Enter 发送，可直接粘贴图片）',
+    composerPlaceholder: '说点什么...（Enter 发送，⌘/Ctrl+Enter 换行，可直接粘贴图片）',
     sendButton: '发送',
     stopButton: '停止',
     stoppingButton: '停止中...',
@@ -621,7 +645,7 @@ const I18N = {
     memoryButton: '🧠 Memory',
     settingsButton: '⚙️ Settings',
     logoutButton: '🚪 Log out',
-    composerPlaceholder: 'Say something... (Enter for newline, Cmd/Ctrl+Enter to send, paste images directly)',
+    composerPlaceholder: 'Say something... (Enter to send, Cmd/Ctrl+Enter for newline, paste images directly)',
     sendButton: 'Send',
     stopButton: 'Stop',
     stoppingButton: 'Stopping...',
@@ -783,6 +807,14 @@ messages.addEventListener('click', (event) => {
 
 // ---------- 工具函数 ----------
 
+function smartScroll(el) {
+  const threshold = 2; // 距底部 ≤2px 才滚动，避免用户翻看时被打断
+  const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight <= threshold;
+  if (atBottom) {
+    el.scrollTop = el.scrollHeight;
+  }
+}
+
 function addMessage(text, role) {
   const div = document.createElement('div');
   div.className = `msg ${role}`;
@@ -793,7 +825,7 @@ function addMessage(text, role) {
     div.textContent = text;
   }
   messages.appendChild(div);
-  messages.scrollTop = messages.scrollHeight;
+  smartScroll(messages);
   return div;
 }
 
@@ -870,7 +902,7 @@ function showTyping() {
   const label = bar.querySelector('.label');
   if (label) label.textContent = t('thinking');
   bar.classList.add('show');
-  messages.scrollTop = messages.scrollHeight;
+  smartScroll(messages);
 }
 
 function hideTyping() {
@@ -903,7 +935,7 @@ function showGeneratingBadge(text = t('generating')) {
   } else {
     messages.appendChild(generatingBadgeEl);
   }
-  messages.scrollTop = messages.scrollHeight;
+  smartScroll(messages);
 }
 
 function removeGeneratingBadge() {
@@ -1084,15 +1116,6 @@ async function send() {
 function handleStreamEvent(data) {
   const container = document.getElementById('messages');
 
-  // 智能滚动：仅当用户在底部附近时才自动滚到最新
-  function smartScroll() {
-    const threshold = 80; // 距离底部 80px 以内视为「在底部」
-    const atBottom = container.scrollHeight - container.scrollTop - container.clientHeight <= threshold;
-    if (atBottom) {
-      container.scrollTop = container.scrollHeight;
-    }
-  }
-
   function ensureStepsContainer() {
     if (currentStepsEl) return currentStepsEl;
     currentStepsEl = document.createElement('div');
@@ -1132,6 +1155,77 @@ function handleStreamEvent(data) {
     }
   }
 
+  // 子代理胶囊渲染
+  function renderSubagentCapsules(capsules, forcedStatus) {
+    if (!capsules) return;
+    let row = container.querySelector('.subagent-row');
+    if (!row) {
+      row = document.createElement('div');
+      row.className = 'subagent-row';
+      if (currentStepsEl) {
+        currentStepsEl.insertAdjacentElement('afterend', row);
+      } else {
+        container.appendChild(row);
+      }
+    }
+    row.innerHTML = '';
+    const iconMap = { searcher: '🔍', coder: '<>', reviewer: '👁', debugger: '🐛' };
+    capsules.forEach(cap => {
+      const div = document.createElement('div');
+      div.className = 'subagent-capsule';
+      div.title = cap.task || '';
+      const status = forcedStatus || cap.status || 'running';
+      const icon = iconMap[cap.agent_type] || '⚙';
+      const initial = (cap.agent_type || '?')[0].toUpperCase();
+      const statusHtml = status === 'running'
+        ? '<span class="sa-status running"></span>'
+        : status === 'done'
+        ? '<span class="sa-status done">✓</span>'
+        : '<span class="sa-status error">✗</span>';
+      div.innerHTML = `
+        <span class="sa-icon ${escapeHtml(cap.agent_type || '')}">${initial}</span>
+        <span class="sa-task">${escapeHtml(cap.task || cap.agent_type)}</span>
+        ${statusHtml}
+        <span class="sa-badge">${icon} ${escapeHtml(cap.agent_type || '')} #${cap.id}</span>
+      `;
+      div.onclick = () => showCapsuleDetail(cap);
+      row.appendChild(div);
+    });
+    smartScroll(container);
+  }
+
+  // 子代理胶囊详情弹窗
+  function showCapsuleDetail(cap) {
+    let overlay = document.getElementById('capsule-detail-overlay');
+    if (!overlay) {
+      overlay = document.createElement('div');
+      overlay.id = 'capsule-detail-overlay';
+      overlay.className = 'capsule-detail-overlay';
+      overlay.innerHTML = `
+        <div class="capsule-detail-card">
+          <div class="capsule-detail-header">
+            <h3 id="capsule-detail-title"></h3>
+            <button class="capsule-detail-close" onclick="document.getElementById('capsule-detail-overlay').classList.remove('show')">✕</button>
+          </div>
+          <div class="capsule-detail-body" id="capsule-detail-body"></div>
+        </div>`;
+      overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) overlay.classList.remove('show');
+      });
+      document.body.appendChild(overlay);
+    }
+    const iconMap = { searcher: '🔍', coder: '<>', reviewer: '👁', debugger: '🐛' };
+    document.getElementById('capsule-detail-title').textContent =
+      `${iconMap[cap.agent_type] || ''} ${cap.agent_type} #${cap.id}: ${cap.task || ''}`;
+    const statusLabel = cap.status === 'running' ? '执行中...' : cap.status === 'done' ? '✅ 完成' : '❌ 失败';
+    document.getElementById('capsule-detail-body').innerHTML =
+      `<p>类型: ${escapeHtml(cap.agent_type)} #${cap.id}</p>
+       <p>任务: ${escapeHtml(cap.task)}</p>
+       <p>状态: ${statusLabel}</p>
+       ${cap.result ? '<hr><p><strong>结果:</strong></p><pre>' + escapeHtml(String(cap.result).slice(0, 2000)) + '</pre>' : ''}`;
+    overlay.classList.add('show');
+  }
+
   // 工具函数：添加分析中提示
   function showThinkingHint(text) {
     removeThinkingHint();
@@ -1140,7 +1234,7 @@ function handleStreamEvent(data) {
     hint.className = 'thinking-step';
     hint.innerHTML = `<span>${text}</span><span class="dots"><span></span><span></span><span></span></span>`;
     currentStepsEl.appendChild(hint);
-    smartScroll();
+    smartScroll(container);
   }
 
   function findStepToggle(step) {
@@ -1154,6 +1248,16 @@ function handleStreamEvent(data) {
   }
 
   switch (data.type) {
+    case 'subagent_start':
+      hideTyping();
+      hasToolCalls = true;
+      renderSubagentCapsules(data.capsules, 'running');
+      break;
+
+    case 'subagent_end':
+      renderSubagentCapsules(data.capsules, 'done');
+      break;
+
     case 'thought':
       hideTyping();
       removeThinkingHint();
@@ -1176,7 +1280,7 @@ function handleStreamEvent(data) {
         </div>`;
       currentStepsEl.appendChild(thoughtDiv);
       showThinkingHint(t('keepAnalyzing'));
-      smartScroll();
+      smartScroll(container);
       break;
 
     case 'tool_start':
@@ -1214,7 +1318,7 @@ function handleStreamEvent(data) {
           ${argsHtml}
         </div>`;
       currentStepsEl.appendChild(stepDiv);
-      smartScroll();
+      smartScroll(container);
       break;
 
     case 'tool_result':
@@ -1240,7 +1344,7 @@ function handleStreamEvent(data) {
       }
       // 显示"分析中，准备下一步..."
       showThinkingHint(t('analyzeResult'));
-      smartScroll();
+      smartScroll(container);
       break;
 
     case 'progress':
@@ -1268,7 +1372,7 @@ function handleStreamEvent(data) {
         }
       }
       showGeneratingBadge(data.message || t('stillProcessing'));
-      smartScroll();
+      smartScroll(container);
       break;
 
     case 'model_switch':
@@ -1291,7 +1395,7 @@ function handleStreamEvent(data) {
       currentFinalContent += data.content;
       currentBotMsgEl.innerHTML = renderMarkdown(currentFinalContent);
       if (hasToolCalls) showGeneratingBadge(t('continueProcessing'));
-      smartScroll();
+      smartScroll(container);
       break;
 
     case 'error':
@@ -1346,7 +1450,7 @@ function handleStreamEvent(data) {
         currentBotMsgEl.innerHTML = renderMarkdown(data.content);
         currentFinalContent = data.content;
       }
-      smartScroll();
+      smartScroll(container);
       break;
   }
 }
@@ -2023,9 +2127,17 @@ input.addEventListener('keydown', (e) => {
   if (inputComposing || e.isComposing || e.keyCode === 229 || justEndedComposition) {
     return;
   }
-  if (!e.metaKey && !e.ctrlKey) {
+  // Enter 单独按 → 发送；⌘/Ctrl+Enter → 换行；屏蔽 Shift+Enter
+  if (e.metaKey || e.ctrlKey) {
+    // 插入换行
+    const start = input.selectionStart, end = input.selectionEnd;
+    input.value = input.value.slice(0, start) + '\n' + input.value.slice(end);
+    input.selectionStart = input.selectionEnd = start + 1;
+    resizeComposer();
+    e.preventDefault();
     return;
   }
+  if (e.shiftKey) return;
   e.preventDefault();
   send();
 });

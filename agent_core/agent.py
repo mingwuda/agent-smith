@@ -652,6 +652,7 @@ class DesktopAgent:
         cancelled = False
         loop_guard_triggered = False
         tool_call_history: list[dict] = []
+        subagent_capsules: list[dict] = []  # 并行子代理任务胶囊数据
         
         try:
             await self._compact_checkpoint_if_needed(run_config)
@@ -753,6 +754,34 @@ class DesktopAgent:
                         "step": step_count,
                     })
 
+                    # 并行子代理：解析任务列表，发送子代理启动事件
+                    if tool_name in {"delegate_tasks_parallel", "delegate_task"} and isinstance(inp, dict):
+                        try:
+                            if tool_name == "delegate_tasks_parallel":
+                                raw_tasks = inp.get("tasks_json", "")
+                                sub_tasks = json.loads(raw_tasks) if isinstance(raw_tasks, str) else raw_tasks
+                            else:
+                                sub_tasks = [{"task": str(inp.get("task", "")), "agent_type": str(inp.get("agent_type", "coder"))}]
+                            if isinstance(sub_tasks, list):
+                                capsules = []
+                                for i, t in enumerate(sub_tasks):
+                                    atype = t.get("agent_type", "coder") if isinstance(t, dict) else "coder"
+                                    ttask = t.get("task", "") if isinstance(t, dict) else str(t)
+                                    capsules.append({
+                                        "id": i + 1,
+                                        "agent_type": atype,
+                                        "task": (ttask[:60] + "...") if len(ttask) > 60 else ttask,
+                                        "status": "running",
+                                    })
+                                if capsules:
+                                    subagent_capsules = capsules
+                                    yield _sse({
+                                        "type": "subagent_start",
+                                        "capsules": capsules,
+                                    })
+                        except Exception:
+                            pass
+
                 # ── 工具结束 ──
                 elif kind == "on_tool_end":
                     output = event.get("data", {}).get("output", "")
@@ -772,6 +801,33 @@ class DesktopAgent:
                         "result": _truncate(output_str, 400),
                         "error": is_error,
                     })
+                    
+                    # 并行子代理完成：发送每个子任务的状态更新
+                    if tool_name in {"delegate_tasks_parallel", "delegate_task"} and subagent_capsules:
+                        try:
+                            full_output = str(output)
+                            updated = []
+                            for cap in subagent_capsules:
+                                upd = dict(cap)
+                                upd["status"] = "done"
+                                # 尝试从输出中提取该任务的执行结果
+                                cap_id_str = f"#{cap['id']}"
+                                idx_in_output = full_output.find(cap_id_str)
+                                if idx_in_output >= 0:
+                                    end_idx = min(idx_in_output + 600, len(full_output))
+                                    upd["result"] = full_output[idx_in_output:end_idx]
+                                updated.append(upd)
+                            yield _sse({
+                                "type": "subagent_end",
+                                "capsules": updated,
+                            })
+                        except Exception:
+                            # 简化降级：只标记状态
+                            yield _sse({
+                                "type": "subagent_end",
+                                "capsules": [dict(cap, status="done") for cap in subagent_capsules],
+                            })
+                        subagent_capsules = []
                     
                     # 重置推理上下文（但保留其他并行工具的进度状态）
                     in_tool_call = False
@@ -828,6 +884,14 @@ class DesktopAgent:
                     "error": True,
                 })
                 running_tools.pop(rid, None)
+            
+            # 清理未完成的子代理胶囊
+            if subagent_capsules:
+                yield _sse({
+                    "type": "subagent_end",
+                    "capsules": [dict(cap, status="error") for cap in subagent_capsules],
+                })
+                subagent_capsules = []
         
         finally:
             if pending_event and not pending_event.done():
