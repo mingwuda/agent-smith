@@ -793,6 +793,16 @@ class DesktopAgent:
                     is_error = bool(output_str.strip().startswith("❌"))
                     
                     self._record_tool_call(tool_name)
+
+                    # 提取内嵌的 diff 数据（file_tools 通过 __DIFF__ 标记返回值）
+                    diff_data = None
+                    if "__DIFF__:" in output_str:
+                        parts = output_str.split("\n__DIFF__:", 1)
+                        output_str = parts[0]
+                        try:
+                            diff_data = json.loads(parts[1])
+                        except (json.JSONDecodeError, ValueError):
+                            pass
                     
                     yield _sse({
                         "type": "tool_result",
@@ -800,6 +810,7 @@ class DesktopAgent:
                         "step": step_for_tool,
                         "result": _truncate(output_str, 400),
                         "error": is_error,
+                        "diff": diff_data,
                     })
                     
                     # 并行子代理完成：发送每个子任务的状态更新

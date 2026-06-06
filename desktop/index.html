@@ -154,6 +154,23 @@
   .step-details .result { background:#e8f5e9; color:#2e7d32; padding:8px; border-radius:6px; font-size:12px; white-space:pre-wrap; word-break:break-word; }
   .step-details .result-error { background:#fbe9e7; color:#b71c1c; }
 
+  /* Diff 视图 */
+  .diff-view { margin-top:8px; }
+  .diff-toggle { display:flex; align-items:center; gap:6px; padding:6px 10px; background:#f5f5f7; border:1px solid #e0e0e3; border-radius:6px; font-size:12px; cursor:pointer; }
+  .diff-toggle:hover { background:#ebebf0; }
+  .diff-toggle .diff-arrow { font-size:10px; transition:transform .2s; display:inline-block; }
+  .diff-toggle.open .diff-arrow { transform:rotate(90deg); }
+  .diff-summary { color:#555; }
+  .diff-added-count { color:#2e7d32; font-weight:600; }
+  .diff-removed-count { color:#c62828; font-weight:600; }
+  .diff-body { margin-top:4px; border:1px solid #e0e0e3; border-radius:6px; overflow:hidden; font-family:"SF Mono",Menlo,monospace; font-size:12px; line-height:1.55; max-height:400px; overflow-y:auto; }
+  .diff-line { padding:1px 10px; white-space:pre; overflow-x:auto; }
+  .diff-line.diff-add { background:#e8f5e9; color:#2e7d32; }
+  .diff-line.diff-remove { background:#ffebee; color:#c62828; }
+  .diff-line.diff-keep { background:#fff; color:#666; }
+  .diff-line.diff-more { background:#fff3e0; color:#e65100; font-style:italic; }
+  .diff-line:hover { filter:brightness(0.97); }
+
   /* 步骤进度标签 */
   .step-progress { display:flex; align-items:center; gap:8px; padding:6px 12px; margin-bottom:6px; font-size:12px; color:#8e8e93; background:#f8f8fa; border-radius:8px; }
   .step-progress .progress-bar { flex:1; height:4px; background:#e0e0e3; border-radius:2px; overflow:hidden; }
@@ -1339,6 +1356,38 @@ function handleStreamEvent(data) {
             resultDiv.className = 'result' + (isError ? ' result-error' : '');
             resultDiv.textContent = data.result;
             details.appendChild(resultDiv);
+          }
+          // Diff 视图
+          if (details && data.diff && data.diff.diff && data.diff.diff.length > 0) {
+            const added = data.diff.added || 0;
+            const removed = data.diff.removed || 0;
+            const diffWrap = document.createElement('div');
+            diffWrap.className = 'diff-view';
+            const diffToggle = document.createElement('div');
+            diffToggle.className = 'diff-toggle';
+            diffToggle.innerHTML = `
+              <span class="diff-arrow">▶</span>
+              <span class="diff-summary">📝 变更: <span class="diff-added-count">+${added}</span> / <span class="diff-removed-count">-${removed}</span> 行</span>
+            `;
+            const diffBody = document.createElement('div');
+            diffBody.className = 'diff-body';
+            diffBody.style.display = 'none';
+            const lines = data.diff.diff;
+            for (let i = 0; i < Math.min(lines.length, 300); i++) {
+              const item = lines[i];
+              const lineDiv = document.createElement('div');
+              lineDiv.className = 'diff-line diff-' + (item.t === '+' ? 'add' : item.t === '-' ? 'remove' : item.t === '…' ? 'more' : 'keep');
+              lineDiv.textContent = (item.t === '+' ? '＋ ' : item.t === '-' ? '－ ' : item.t === '…' ? '' : '　 ') + (item.c || '');
+              diffBody.appendChild(lineDiv);
+            }
+            diffToggle.onclick = () => {
+              const open = diffBody.style.display === 'block';
+              diffBody.style.display = open ? 'none' : 'block';
+              diffToggle.classList.toggle('open', !open);
+            };
+            diffWrap.appendChild(diffToggle);
+            diffWrap.appendChild(diffBody);
+            details.appendChild(diffWrap);
           }
         }
       }

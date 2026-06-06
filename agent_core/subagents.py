@@ -48,6 +48,21 @@ SUBAGENT_PROMPTS = {
     "debugger": (
         "你是 debugger 子代理，负责系统化排查问题。先列假设，再给验证步骤和最可能根因。"
     ),
+    "searcher": (
+        "你是 searcher 子代理，专精互联网搜索。你的唯一任务是：\n"
+        "1. 调用 web_search 搜索指定关键词，获取结果摘要\n"
+        "2. 从搜索结果中选择 2-4 个最相关的链接，调用 web_fetch 抓取正文\n"
+        "3. 基于抓取内容整理出结构化的事实、数据、观点，标注来源\n"
+        "4. 如果搜索无果或结果不相关，换关键词或换语言重试\n\n"
+        "不要写文件、不要执行代码、不要调用其他工具。只做搜索和整理。"
+        "输出格式：每条信息标注来源标题和链接。涉及时间信息时明确标注日期。"
+    ),
+}
+
+
+# 各子代理类型可用的工具（None 表示全部可用，除了委托工具）
+SUBAGENT_TOOL_WHITELIST: dict[str, list[str] | None] = {
+    "searcher": ["web_search", "web_fetch"],
 }
 
 
@@ -61,10 +76,21 @@ class SubagentManager:
 
     def configure(self, config: AgentConfig, tools: list):
         self._config = config
-        self._tools = [
+        all_tools = [
             item for item in tools
             if getattr(item, "name", "") not in {"delegate_task", "delegate_tasks_parallel"}
         ]
+        self._tools = all_tools
+        # 为各子代理类型预过滤工具
+        self._tools_by_type: dict[str, list] = {}
+        for agent_type in SUBAGENT_PROMPTS:
+            whitelist = SUBAGENT_TOOL_WHITELIST.get(agent_type)
+            if whitelist is None:
+                self._tools_by_type[agent_type] = all_tools
+            else:
+                self._tools_by_type[agent_type] = [
+                    t for t in all_tools if getattr(t, "name", "") in whitelist
+                ]
 
     def list_agent_types(self) -> list[str]:
         return sorted(SUBAGENT_PROMPTS)
@@ -116,7 +142,8 @@ class SubagentManager:
             "保持聚焦，不要假装可以调用不存在的并行/团队工具。"
             "如果需要修改文件，说明建议和风险；如果已调用工具完成修改，列出验证结果。\n"
         )
-        graph = create_react_agent(llm, self._tools, prompt=prompt)
+        agent_tools = self._tools_by_type.get(item.agent_type, self._tools)
+        graph = create_react_agent(llm, agent_tools, prompt=prompt)
         message = item.task
         if item.context:
             message = f"上下文：\n{item.context}\n\n任务：\n{item.task}"
@@ -152,7 +179,7 @@ def _run_coro_in_thread(coro):
 
 @tool
 def delegate_task(task: str, agent_type: str = "coder", context: str = "") -> str:
-    """把一个子任务委派给子代理执行并同步等待结果。agent_type 可选 coder、reviewer、debugger。"""
+    """把一个子任务委派给子代理执行并同步等待结果。agent_type 可选 coder、reviewer、debugger、searcher。"""
     item = _run_coro_in_thread(manager.run_sync(task=task, agent_type=agent_type, context=context))
     return (
         f"子代理任务 {item.id} [{item.agent_type}] 状态：{item.status}\n\n"

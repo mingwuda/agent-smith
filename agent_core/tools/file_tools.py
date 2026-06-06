@@ -1,4 +1,6 @@
 """文件操作工具"""
+import difflib
+import json
 from pathlib import Path
 from typing import Optional
 from langchain_core.tools import tool
@@ -9,10 +11,56 @@ MAX_FILE_RETURN_CHARS = 20000
 FILE_HEAD_CHARS = 8000
 FILE_TAIL_CHARS = 8000
 
+DIFF_MARKER = "__DIFF__:"
+DIFF_MAX_LINES = 500  # 最多保留 500 行 diff，避免 SSE 事件过大
+
 def set_workspace(path: Path):
     global _workspace
     _workspace = path.expanduser().resolve()
     _workspace.mkdir(parents=True, exist_ok=True)
+
+
+def _generate_diff(file_path: Path, new_content: str, old_content_override: str | None = None) -> str:
+    """生成行级 diff JSON，通过 __DIFF__ 标记嵌入返回值尾。"""
+    old_content = old_content_override
+    if old_content is None and file_path.exists() and file_path.is_file():
+        try:
+            old_content = file_path.read_text(encoding="utf-8")
+        except Exception:
+            pass
+
+    if old_content is None:
+        new_lines = new_content.splitlines()
+        added = len(new_lines)
+        diff = [{"t": "+", "c": l} for l in new_lines[:DIFF_MAX_LINES]]
+    else:
+        old_lines = old_content.splitlines()
+        new_lines = new_content.splitlines()
+        differ = difflib.Differ()
+        diff_gen = differ.compare(old_lines, new_lines)
+        diff = []
+        added = 0
+        removed = 0
+        for line in diff_gen:
+            if len(diff) >= DIFF_MAX_LINES:
+                diff.append({"t": "…", "c": f"... 还有更多变更（仅展示了前 {DIFF_MAX_LINES} 行）"})
+                break
+            if line.startswith("  "):
+                diff.append({"t": " ", "c": line[2:]})
+            elif line.startswith("+ "):
+                diff.append({"t": "+", "c": line[2:]})
+                added += 1
+            elif line.startswith("- "):
+                diff.append({"t": "-", "c": line[2:]})
+                removed += 1
+            elif line.startswith("? "):
+                continue  # 跳过差异提示行
+
+    payload = json.dumps(
+        {"added": added, "removed": removed, "diff": diff},
+        ensure_ascii=False,
+    )
+    return f"\n{DIFF_MARKER}{payload}"
 
 def _resolve(path: str, allow_outside: bool = False) -> Path:
     workspace = (_workspace or Path.home() / "agent_workspace").expanduser().resolve()
@@ -65,9 +113,17 @@ def write_file(path: str, content: str) -> str:
     except ValueError as exc:
         return _path_error(exc)
     full.parent.mkdir(parents=True, exist_ok=True)
+    # 写入前保存旧内容用于 diff
+    old_for_diff = None
+    if full.exists() and full.is_file():
+        try:
+            old_for_diff = full.read_text(encoding="utf-8")
+        except Exception:
+            pass
     full.write_text(content, encoding="utf-8")
     size = len(content)
-    return f"✅ 已写入 {path}（{size} 字符，{full.stat().st_size} 字节）"
+    diff = _generate_diff(full, content, old_content_override=old_for_diff)
+    return f"✅ 已写入 {path}（{size} 字符，{full.stat().st_size} 字节）{diff}"
 
 @tool
 def append_to_file(path: str, content: str) -> str:
@@ -77,9 +133,16 @@ def append_to_file(path: str, content: str) -> str:
     except ValueError as exc:
         return _path_error(exc)
     full.parent.mkdir(parents=True, exist_ok=True)
+    old = ""
+    if full.exists() and full.is_file():
+        try:
+            old = full.read_text(encoding="utf-8")
+        except Exception:
+            pass
     with open(full, "a", encoding="utf-8") as f:
         f.write(content)
-    return f"✅ 已追加到 {path}（{len(content)} 字符）"
+    diff = _generate_diff(full, old + content, old_content_override=old)
+    return f"✅ 已追加到 {path}（{len(content)} 字符）{diff}"
 
 @tool
 def list_files(path: str = "") -> str:
