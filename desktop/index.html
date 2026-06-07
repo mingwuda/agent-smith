@@ -1094,6 +1094,7 @@ async function send() {
     }
     
   } catch (e) {
+    console.error('[SSE] stream error:', e.name, e.message, 'streamingActive:', streamingActive, 'gotTerminalEvent:', gotTerminalEvent);
     if (e.name === 'AbortError' || userStoppedCurrentRun) {
       if (currentBotMsgEl && currentFinalContent) {
         currentBotMsgEl.classList.remove('streaming-final');
@@ -1119,7 +1120,13 @@ async function send() {
   } finally {
     stopStreamIdleWatch();
     hideTyping();
+    removeThinkingHint();
     removeGeneratingBadge();
+    // 兜底：清理页面上所有残留的"执行中"步骤状态
+    document.querySelectorAll('.step-status.running').forEach(s => {
+      s.className = 'step-status done';
+      s.textContent = t('done');
+    });
     streamingActive = false;
     isLoading = false;
     currentAbortController = null;
@@ -1597,17 +1604,49 @@ async function loadSessionMessages(sessionId) {
         addMessage(t('emptySession'), 'system');
       }
     }
-  } catch {}
+  } catch (e) {
+    console.error('[loadSession] failed:', e);
+  }
 }
 
 // 恢复带步骤卡片的助手消息（从历史加载时使用）
 function addBotMessageWithSteps(content, steps) {
-  // 重置状态，确保每个历史消息的步骤独立
+  // 重置状态，模拟新一轮流式输出的初始条件
   currentBotMsgEl = null;
   currentStepsEl = null;
+  currentFinalContent = '';
+  totalSteps = 0;
+  hasToolCalls = false;
+  generatingBadgeEl = null;
+
   steps.forEach(data => {
     handleStreamEvent(data);
   });
+
+  // 清理回放步骤后残留的"执行中/分析中"状态
+  if (currentStepsEl) {
+    currentStepsEl.querySelectorAll('.step-status.running').forEach(s => {
+      s.className = 'step-status done';
+      s.textContent = t('done');
+    });
+    currentStepsEl.querySelectorAll('.thinking-step').forEach(el => el.remove());
+    // 更新进度条为 100%
+    const prog = currentStepsEl.querySelector('.step-progress');
+    if (prog) {
+      const fill = prog.querySelector('.fill');
+      const text = prog.querySelector('.progress-text');
+      if (fill) fill.style.width = '100%';
+      if (text) text.textContent = t('completeText');
+    }
+    // 折叠所有步骤卡片
+    currentStepsEl.querySelectorAll('.step-toggle').forEach(t => {
+      t.classList.remove('open');
+      const details = t.nextElementSibling;
+      if (details) details.classList.remove('open');
+    });
+  }
+  removeGeneratingBadge();
+
   if (content) {
     addMessage(content, 'bot');
   }
