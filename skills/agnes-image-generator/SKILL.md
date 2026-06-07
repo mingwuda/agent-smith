@@ -11,7 +11,7 @@
 - **Endpoint**: `https://apihub.agnes-ai.com/v1/images/generations`
 - **Method**: POST
 - **Model**: `agnes-image-2.1-flash`
-- **API Key**: `sk-kdlFTHAbe1mGxJeqRoyWnW4by1qdCIbD337M1L6Uul1Hfj5b`
+- **API Key**: ⚠️ **从长期记忆中查找** `agnes-image-api-key`。如未找到，告知用户需要先保存 Key（说"请记住我的 Agnes 图片 API Key 是 sk-xxx"）
 
 ## 请求参数
 
@@ -42,12 +42,11 @@
 
 ### 文生图
 ```python
-import requests
-import json
-
+import requests, json
+# API Key 从 recall_memory("agnes-image-api-key") 获取
 url = "https://apihub.agnes-ai.com/v1/images/generations"
 headers = {
-    "Authorization": "Bearer sk-kdlFTHAbe1mGxJeqRoyWnW4by1qdCIbD337M1L6Uul1Hfj5b",
+    "Authorization": "Bearer <api_key_from_memory>",
     "Content-Type": "application/json"
 }
 payload = {
@@ -58,7 +57,6 @@ payload = {
         "response_format": "url"
     }
 }
-
 response = requests.post(url, headers=headers, json=payload)
 result = response.json()
 image_url = result["data"][0]["url"]
@@ -80,7 +78,8 @@ payload = {
 
 ## 注意事项
 
-- API Key 已内置，无需用户提供
+- API Key 需从长期记忆中读取（`recall_memory("agnes-image-api-key")`），不硬编码在技能中
+- 首次使用前，用户需说"请记住我的 Agnes 图片 API Key 是 sk-xxx"
 - 图片以 URL 形式返回，可直接展示
 - 默认价格为 $0.003/张（当前免费）
 - 复杂图像建议使用更详细的 prompt
