@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.venv/
+.venv-windows-build/
+
+# IDE
+.vscode/
+.idea/
+
+# 系统
+.DS_Store
+Thumbs.db
+
+# 本地数据（不要打包到镜像）
+*.log
+.workbuddy/
+*.pid
+
+# Git
+.git/
+.gitignore

@@ -1,0 +1,42 @@
+services:
+  agent:
+    build: .
+    container_name: desktop-agent
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      # ── 必需配置 ──
+      - LLM_API_KEY=${LLM_API_KEY:-}
+      - LLM_MODEL=${LLM_MODEL:-gpt-4o}
+      - LLM_BASE_URL=${LLM_BASE_URL:-}
+      - LLM_PROVIDER=${LLM_PROVIDER:-openai}
+
+      # ── 可选配置 ──
+      - AGENT_CONTEXT_WINDOW=${AGENT_CONTEXT_WINDOW:-}
+      - AGENT_RECURSION_LIMIT=${AGENT_RECURSION_LIMIT:-}
+
+      # ── 用户管理（多人模式） ──
+      - AGENT_USERS=${AGENT_USERS:-}
+      - AGENT_SHARED_TOKEN=${AGENT_SHARED_TOKEN:-}
+
+    volumes:
+      # 工作区文件持久化
+      - agent_workspace:/root/agent_workspace
+      # 配置和会话数据持久化
+      - agent_data:/root/.desktop_agent
+      # 可选：挂载自定义 skills 目录
+      # - ./custom_skills:/app/skills
+
+    # 日志限制
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  agent_workspace:
+    driver: local
+  agent_data:
+    driver: local
