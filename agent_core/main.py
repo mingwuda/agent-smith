@@ -82,11 +82,23 @@ def _load_auth_config() -> dict:
     # 环境变量 AGENT_USERS 格式: "user1:pass1;user2:pass2"（优先级最高）
     env_users = os.getenv("AGENT_USERS", "").strip()
     if env_users:
+        logger.info("检测到 AGENT_USERS 环境变量，正在合并用户配置")
         for pair in env_users.split(";"):
             pair = pair.strip()
             if ":" in pair:
                 u, p = pair.split(":", 1)
                 users[u.strip()] = p.strip()
+        logger.info("当前已加载用户: %s", list(users.keys()))
+        # 写回 auth.json 使环境变量配置持久化
+        try:
+            AUTH_FILE.parent.mkdir(parents=True, exist_ok=True)
+            AUTH_FILE.write_text(
+                json.dumps({"users": users, "secret": secret or file_data.get("secret", "")}, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            AUTH_FILE.chmod(0o600)
+        except OSError:
+            pass
 
     secret = secret or file_data.get("secret") or ""
 
