@@ -10,12 +10,16 @@ WORKDIR /app
 RUN sed -i 's/deb.debian.org/mirrors.tuna.tsinghua.edu.cn/g' /etc/apt/sources.list.d/debian.sources \
     && sed -i 's/security.debian.org/mirrors.tuna.tsinghua.edu.cn/g' /etc/apt/sources.list.d/debian.sources
 
-# 安装系统依赖（lxml 需要 libxml2/libxslt；curl 用于 web 搜索 fallback；ca-certificates 避免 TLS 证书缺失）
+# 安装系统依赖
+#   - libxml2/libxslt1.1: lxml 解析 HTML
+#   - curl + ca-certificates: web_search 的 fallback HTTP 客户端
+#   - git: git_tools 版本控制
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libxml2 \
     libxslt1.1 \
     curl \
     ca-certificates \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
 # 先复制依赖文件，利用 Docker 缓存层
