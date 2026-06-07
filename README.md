@@ -47,6 +47,8 @@ pip install -r requirements.txt
 ./start.sh
 ```
 
+或使用 Docker 一键部署（见下方 [远程部署 → Docker](#docker推荐)）。
+
 启动后打开：
 
 ```text
@@ -81,6 +83,10 @@ start.cmd
 可通过环境变量初始化登录配置：
 
 ```bash
+# 多用户（推荐，Docker / systemd 环境）
+export AGENT_USERS='admin:your-password;guest:guest123'
+
+# 或单用户（DEPRECATED）
 export DESKTOP_AGENT_AUTH_USER=admin
 export DESKTOP_AGENT_AUTH_PASSWORD='your-strong-password'
 export DESKTOP_AGENT_AUTH_SECRET='replace-with-a-random-secret'
@@ -148,6 +154,8 @@ python generate_login_url.py --host 127.0.0.1 --port 8899 --expires 300 --user a
 | `AGENT_API_TIMEOUT_SECONDS` | 模型请求超时秒数 | `30` |
 | `AGENT_CONTEXT_WINDOW_TOKENS` | 手动指定模型上下文窗口 | 自动识别 |
 | `AGENT_API_HOST_IPS` | 自定义模型网关 DNS 兜底 IP 列表 | 空 |
+| `AGENT_USERS` | 多用户列表 `user1:pass1;user2:pass2` | 空 |
+| `AGENT_SHARED_TOKEN` | 共享 API Token | 空 |
 | `DESKTOP_AGENT_AUTH_COOKIE_SECURE` | Cookie 是否仅 HTTPS 发送 | `0` |
 
 `AGENT_API_HOST_IPS` 只用于 DNS/网络排障，服务不会内置任何厂商 IP。多个 IP 用英文逗号分隔。
@@ -413,6 +421,56 @@ http://127.0.0.1:8899/docs
 ---
 
 ## 远程部署
+
+### Docker（推荐）
+
+```bash
+git clone https://gitee.com/mingwuda/desktop-agent.git
+cd desktop-agent
+
+# 配置环境变量
+cp .env.example .env
+# 编辑 .env 填入 API Key 和用户密码
+vim .env
+```
+
+`.env` 示例：
+
+```bash
+# 模型配置
+LLM_API_KEY=sk-your-api-key-here
+LLM_MODEL=gpt-4o
+LLM_BASE_URL=
+LLM_PROVIDER=openai
+
+# 用户管理（多个用户用 ; 分隔，格式 user:password;user2:password2）
+AGENT_USERS=admin:your-strong-password;guest:guest123
+
+# 可选
+# AGENT_CONTEXT_WINDOW=128000
+# AGENT_RECURSION_LIMIT=60
+```
+
+启动：
+
+```bash
+docker compose up -d --build
+```
+
+访问 `http://<服务器IP>:8080`，首次启动自动创建默认用户。配置、会话数据和工作区文件保存在 Docker volumes 中，重启不丢失。
+
+```bash
+# 查看日志
+docker compose logs -f agent
+
+# 停止
+docker compose down
+
+# 数据备份
+docker run --rm -v desktop-agent_agent_data:/data -v $(pwd):/backup alpine cp -r /data /backup/agent_data_backup
+```
+
+### systemd 部署
 
 示例部署到 `/opt/desktop-agent`，监听 `8080`：
 
