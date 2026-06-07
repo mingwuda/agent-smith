@@ -215,6 +215,36 @@ def _search_bing(query: str, max_results: int) -> list[dict]:
     return results
 
 
+def _search_sogou(query: str, max_results: int) -> list[dict]:
+    """通过搜狗搜索，作为国内可用的备用源。"""
+    from bs4 import BeautifulSoup
+
+    encoded = urllib.parse.quote(query)
+    url = f"https://www.sogou.com/web?query={encoded}&num={max_results}"
+
+    resp = _http_get(url)
+    resp.raise_for_status()
+    resp.encoding = resp.apparent_encoding or "utf-8"
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    results = []
+    
+    for item in soup.select(".vrwrap, .rb"):
+        title_el = item.select_one(".vr-title a, .vr-title, h3 a, h3")
+        snippet_el = item.select_one(".star-wiki, .str-text, .str_info_div, .space-txt")
+        if not title_el:
+            continue
+        title = title_el.get_text(strip=True)
+        href = title_el.get("href", "")
+        snippet = snippet_el.get_text(strip=True) if snippet_el else ""
+        if title and href:
+            results.append({"title": title, "href": href, "body": snippet})
+        if len(results) >= max_results:
+            break
+
+    return results
+
+
 def _search_duckduckgo(query: str, max_results: int) -> list[dict]:
     """通过 DuckDuckGo HTML 结果页搜索，作为 Bing 失败时的备用源。"""
     from bs4 import BeautifulSoup
@@ -318,7 +348,7 @@ def web_search(query: str, max_results: int = 5, recency_days: int = 0) -> str:
     search_backends = []
     if _TAVILY_SEARCH_ENABLED:
         search_backends.append(("Tavily", lambda q, n: _search_tavily(q, n, recency_days)))
-    search_backends.extend((("Bing", _search_bing), ("DuckDuckGo", _search_duckduckgo)))
+    search_backends.extend((("Bing", _search_bing), ("搜狗", _search_sogou), ("DuckDuckGo", _search_duckduckgo)))
 
     for source, search_fn in search_backends:
         try:
@@ -336,7 +366,7 @@ def web_search(query: str, max_results: int = 5, recency_days: int = 0) -> str:
             errors.append(f"{source}: {type(e).__name__}: {e}")
 
     return (
-        f"❌ 未能获取「{normalized_query}」的搜索结果。已尝试 Bing 和 DuckDuckGo。\n"
+        f"❌ 未能获取「{normalized_query}」的搜索结果。已尝试 Bing、搜狗和 DuckDuckGo。\n"
         + _current_date_context()
         + (f"\n搜索提示: {note}" if note else "")
         + "\n"
