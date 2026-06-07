@@ -100,9 +100,11 @@ def _loop_guard_message(reason: str, calls: list[dict], recursion_limit: int) ->
 def _detect_tool_loop(calls: list[dict], recursion_limit: int) -> str:
     latest = calls[-1]
     latest_sig = latest.get("signature", "")
-    exact_repeat_count = sum(1 for item in calls[-8:] if item.get("signature") == latest_sig)
-    if latest_sig and exact_repeat_count >= 3:
-        return f"最近 8 次工具调用中，同一工具和参数重复了 {exact_repeat_count} 次"
+    # web_search/web_fetch 高频调用不同关键词是正常行为，不计入重复检测
+    if latest.get("tool") not in {"web_search", "web_fetch"}:
+        exact_repeat_count = sum(1 for item in calls[-8:] if item.get("signature") == latest_sig)
+        if latest_sig and exact_repeat_count >= 3:
+            return f"最近 8 次工具调用中，同一工具和参数重复了 {exact_repeat_count} 次"
 
     if len(calls) < 6:
         return ""
