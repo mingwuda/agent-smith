@@ -1583,13 +1583,36 @@ async function loadSessionMessages(sessionId) {
       container.innerHTML = '';
       if (data.messages && data.messages.length > 0) {
         data.messages.forEach(msg => {
-          addMessage(msg.content, msg.role === 'user' ? 'user' : 'bot');
+          const role = msg.role === 'user' ? 'user' : 'bot';
+          const content = msg.content || '';
+          if (role === 'user' && msg.images && msg.images.length) {
+            addUserMessage(content, msg.images.map(u => ({data_url: u})));
+          } else if (role === 'bot' && msg.steps && msg.steps.length) {
+            addBotMessageWithSteps(content, msg.steps);
+          } else {
+            addMessage(content, role);
+          }
         });
       } else {
         addMessage(t('emptySession'), 'system');
       }
     }
   } catch {}
+}
+
+// 恢复带步骤卡片的助手消息（从历史加载时使用）
+function addBotMessageWithSteps(content, steps) {
+  // 重置状态，确保每个历史消息的步骤独立
+  currentBotMsgEl = null;
+  currentStepsEl = null;
+  steps.forEach(data => {
+    handleStreamEvent(data);
+  });
+  if (content) {
+    addMessage(content, 'bot');
+  }
+  currentBotMsgEl = null;
+  currentStepsEl = null;
 }
 
 async function switchSession(sessionId, forceLoad = false) {

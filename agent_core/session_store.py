@@ -1,4 +1,5 @@
 """会话存储 —— 按用户隔离的 SQLite 数据库"""
+import base64
 import json
 import sqlite3
 import uuid
@@ -6,6 +7,41 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+
+
+def _decode_message_content(content: str) -> dict:
+    """解析存储的消息内容。可能为纯文本或 JSON（含图片/步骤）。"""
+    try:
+        payload = json.loads(content)
+        if isinstance(payload, dict):
+            result: dict = {}
+            # 文本内容：优先 text 字段，其次 content 字段
+            if "text" in payload:
+                result["content"] = payload["text"]
+            elif "content" in payload:
+                result["content"] = payload["content"]
+            # 图片（用户消息）
+            images = payload.get("images", [])
+            if images:
+                data_urls = []
+                for img_path in images:
+                    try:
+                        raw = Path(img_path).read_bytes()
+                        ext = Path(img_path).suffix.lstrip(".") or "png"
+                        b64 = base64.b64encode(raw).decode()
+                        data_urls.append(f"data:image/{ext};base64,{b64}")
+                    except Exception:
+                        pass
+                if data_urls:
+                    result["images"] = data_urls
+            # 步骤卡片（助手消息）
+            if "steps" in payload:
+                result["steps"] = payload["steps"]
+            if result:
+                return result
+    except (json.JSONDecodeError, ValueError):
+        pass
+    return {"content": content}
 
 import user_manager
 
@@ -162,7 +198,8 @@ def get_session(user_id: str, session_id: str) -> Optional[dict]:
             (session_id,),
         ).fetchall()
         messages = [
-            {"role": r["role"], "content": r["content"], "timestamp": r["timestamp"]}
+            _decode_message_content(r["content"])
+            | {"role": r["role"], "timestamp": r["timestamp"]}
             for r in msg_rows
         ]
         return _row_to_session(row, include_messages=True, messages=messages)

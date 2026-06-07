@@ -1,5 +1,6 @@
 """桌面 AI 智能体 —— FastAPI 服务器入口"""
 import asyncio
+import base64
 import hashlib
 import hmac
 import json
@@ -702,11 +703,36 @@ def _safe_attachments(attachments: list[AttachmentRequest]) -> list[dict]:
     return safe
 
 
-def _display_user_message(message: str, attachments: list[dict]) -> str:
+def _display_user_message(uid: str, message: str, attachments: list[dict]) -> str:
+    """生成用户消息的存储文本。有图片时保存到磁盘，存入 JSON 结构。"""
     if not attachments:
         return message
-    suffix = f"\n\n[已附加 {len(attachments)} 张图片，仅用于本轮模型分析，图片原文不写入历史记录。]"
-    return (message or "请分析这些图片。") + suffix
+    image_paths: list[str] = []
+    img_dir = Path.home() / ".desktop_agent" / "user_images" / uid
+    img_dir.mkdir(parents=True, exist_ok=True)
+    for item in attachments:
+        data_url = item.get("data_url", "")
+        mime_type = item.get("mime_type", "image/png")
+        prefix = f"data:{mime_type};base64,"
+        if not data_url.startswith(prefix):
+            continue
+        try:
+            raw = base64.b64decode(data_url[len(prefix):])
+        except Exception:
+            continue
+        ext = mime_type.split("/")[-1] or "png"
+        h = hashlib.sha1(raw).hexdigest()[:16]
+        fname = f"{item.get('name', 'img')}_{h}.{ext}"
+        fpath = img_dir / fname
+        fpath.write_bytes(raw)
+        image_paths.append(str(fpath))
+    if not image_paths:
+        return message or "请分析这些图片。"
+    payload = {
+        "text": message or "请分析这些图片。",
+        "images": image_paths,
+    }
+    return json.dumps(payload, ensure_ascii=False)
 
 
 def _image_model_override(attachments: list[dict]) -> str:
@@ -740,8 +766,11 @@ def _format_loaded_skills() -> str:
     return "\n".join(lines)
 
 
-def _save_assistant_result(uid: str, session_id: str, user_message: str, result: str):
-    session_store.add_message(uid, session_id, "assistant", result)
+def _save_assistant_result(uid: str, session_id: str, user_message: str, result: str, steps: list[dict] | None = None):
+    content = result
+    if steps:
+        content = json.dumps({"text": result, "steps": steps}, ensure_ascii=False)
+    session_store.add_message(uid, session_id, "assistant", content)
     title = user_message[:30] + ("..." if len(user_message) > 30 else "")
     session_store.rename_session(uid, session_id, title or f"会话 {session_id[:8]}")
 
@@ -770,7 +799,7 @@ async def run_agent(req: RunRequest, request: Request):
     history_messages = session.get("messages", [])
 
     attachments = _safe_attachments(req.attachments)
-    session_store.add_message(uid, session_id, "user", _display_user_message(req.message, attachments))
+    session_store.add_message(uid, session_id, "user", _display_user_message(uid, req.message, attachments))
     model_override = _image_model_override(attachments)
     if _is_skill_inventory_query(req.message):
         result = _format_loaded_skills()
@@ -812,7 +841,7 @@ async def run_agent_stream(req: RunRequest, request: Request):
     history_messages = session.get("messages", [])
 
     attachments = _safe_attachments(req.attachments)
-    session_store.add_message(uid, session_id, "user", _display_user_message(req.message, attachments))
+    session_store.add_message(uid, session_id, "user", _display_user_message(uid, req.message, attachments))
     model_override = _image_model_override(attachments)
     if _is_skill_inventory_query(req.message):
         result = _format_loaded_skills()
@@ -830,6 +859,7 @@ async def run_agent_stream(req: RunRequest, request: Request):
 
     agent.switch_thread(session_id)
     artifact_paths: list[str] = []
+    collected_steps: list[dict] = []  # 收集步骤卡片数据，将存入历史
     
     async def event_stream():
         final_content = ""
@@ -858,6 +888,28 @@ async def run_agent_stream(req: RunRequest, request: Request):
                             args = data.get("args") or {}
                             if data.get("tool") in {"write_file", "append_to_file"} and args.get("path"):
                                 artifact_paths.append(str(args["path"]))
+                            collected_steps.append(data)  # 收集步骤
+                    except Exception:
+                        pass
+                elif '"type": "tool_result"' in sse_event:
+                    try:
+                        m = re.search(r'data: ({.*})', sse_event)
+                        if m:
+                            collected_steps.append(json.loads(m.group(1)))
+                    except Exception:
+                        pass
+                elif '"type": "thought"' in sse_event:
+                    try:
+                        m = re.search(r'data: ({.*})', sse_event)
+                        if m:
+                            collected_steps.append(json.loads(m.group(1)))
+                    except Exception:
+                        pass
+                elif '"type": "subagent_start"' in sse_event or '"type": "subagent_end"' in sse_event:
+                    try:
+                        m = re.search(r'data: ({.*})', sse_event)
+                        if m:
+                            collected_steps.append(json.loads(m.group(1)))
                     except Exception:
                         pass
                 if '"type": "done"' in sse_event:
@@ -886,13 +938,13 @@ async def run_agent_stream(req: RunRequest, request: Request):
             if final_content:
                 final_content = _append_artifact_links(final_content, uid, artifact_paths)
                 yield f"data: {json.dumps({'type': 'done', 'content': final_content}, ensure_ascii=False)}\n\n"
-                _save_assistant_result(uid, session_id, req.message, final_content)
+                _save_assistant_result(uid, session_id, req.message, final_content, collected_steps)
             elif error_content:
-                _save_assistant_result(uid, session_id, req.message, "❌ " + error_content)
+                _save_assistant_result(uid, session_id, req.message, "❌ " + error_content, collected_steps)
             elif artifact_paths:
                 summary = _append_artifact_links("任务已完成，文件已保存。", uid, artifact_paths)
                 yield f"data: {json.dumps({'type': 'done', 'content': summary}, ensure_ascii=False)}\n\n"
-                _save_assistant_result(uid, session_id, req.message, summary)
+                _save_assistant_result(uid, session_id, req.message, summary, collected_steps)
             elif not forwarded_terminal_event:
                 fallback = (
                     "任务已结束，但模型没有生成最终回答。"
@@ -900,7 +952,7 @@ async def run_agent_stream(req: RunRequest, request: Request):
                     f"当前最大推理步数为 {agent.config.recursion_limit}，可以提高该值，或把任务拆小后重试。"
                 )
                 yield f"data: {json.dumps({'type': 'done', 'content': fallback}, ensure_ascii=False)}\n\n"
-                _save_assistant_result(uid, session_id, req.message, fallback)
+                _save_assistant_result(uid, session_id, req.message, fallback, collected_steps)
         except Exception as e:
             logger.exception("SSE 流处理异常")
             err_msg = f"服务内部错误: {e}"
