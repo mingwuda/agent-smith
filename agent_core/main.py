@@ -79,6 +79,15 @@ def _load_auth_config() -> dict:
     if isinstance(file_users, dict):
         users.update(file_users)
 
+    # 环境变量 AGENT_USERS 格式: "user1:pass1;user2:pass2"（优先级最高）
+    env_users = os.getenv("AGENT_USERS", "").strip()
+    if env_users:
+        for pair in env_users.split(";"):
+            pair = pair.strip()
+            if ":" in pair:
+                u, p = pair.split(":", 1)
+                users[u.strip()] = p.strip()
+
     secret = secret or file_data.get("secret") or ""
 
     if not users or not secret:
