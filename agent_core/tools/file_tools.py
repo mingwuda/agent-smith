@@ -20,6 +20,11 @@ def set_workspace(path: Path):
     _workspace.mkdir(parents=True, exist_ok=True)
 
 
+def resolve_workspace() -> Path:
+    """返回当前真实工作区路径（供其他模块引用）"""
+    return _workspace or Path.home() / "agent_workspace"
+
+
 def _generate_diff(file_path: Path, new_content: str, old_content_override: str | None = None) -> str:
     """生成行级 diff JSON，通过 __DIFF__ 标记嵌入返回值尾。"""
     old_content = old_content_override

@@ -112,7 +112,7 @@ def _detect_tool_loop(calls: list[dict], recursion_limit: int) -> str:
     signatures = [item.get("signature", "") for item in recent12 if item.get("signature")]
     unique_signatures = set(signatures)
     unique_tools = set(tool_names)
-    exploratory_tools = {"search_files", "read_file", "list_files", "web_search", "web_fetch"}
+    exploratory_tools = {"search_files", "read_file", "list_files"}
     low_argument_diversity = len(unique_signatures) <= max(3, len(signatures) // 4)
     if (
         len(recent12) >= 10
@@ -785,7 +785,8 @@ class DesktopAgent:
                 # ── 工具结束 ──
                 elif kind == "on_tool_end":
                     output = event.get("data", {}).get("output", "")
-                    output_str = str(output)[:500]
+                    full_output = str(output)
+                    output_str = full_output[:500]  # 先截断用于显示
                     tool_name = event.get("name", "")
                     run_id = event.get("run_id", "")
                     tinfo = running_tools.pop(run_id, None)
@@ -794,13 +795,15 @@ class DesktopAgent:
                     
                     self._record_tool_call(tool_name)
 
-                    # 提取内嵌的 diff 数据（file_tools 通过 __DIFF__ 标记返回值）
+                    # 提取内嵌的 diff 数据（从完整输出中查找，不受截断影响）
                     diff_data = None
-                    if "__DIFF__:" in output_str:
-                        parts = output_str.split("\n__DIFF__:", 1)
-                        output_str = parts[0]
+                    marker = "\n__DIFF__:"
+                    if marker in full_output:
+                        idx = full_output.index(marker)
+                        output_str = full_output[:idx].strip()[:500]  # 重新截断不含 diff 的部分
+                        is_error = bool(output_str.strip().startswith("❌"))
                         try:
-                            diff_data = json.loads(parts[1])
+                            diff_data = json.loads(full_output[idx + len(marker):])
                         except (json.JSONDecodeError, ValueError):
                             pass
                     
