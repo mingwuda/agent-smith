@@ -1008,6 +1008,7 @@ function resetBlockingOverlays() {
 }
 
 function setSendButtonRunning(running) {
+  console.log('[sendBtn] setRunning:', running);
   sendBtn.disabled = false;
   sendBtn.classList.toggle('stop', running);
   sendBtn.title = running ? t('stopTitle') : '';
@@ -1060,6 +1061,9 @@ async function send() {
   generatingBadgeEl = null;
   startStreamIdleWatch();
   
+  let streamDone = false;
+  let gotTerminalEvent = false;
+  
   try {
     const res = await fetch(`/run/stream`, {
       method: 'POST',
@@ -1072,8 +1076,8 @@ async function send() {
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
-    let streamDone = false;
-    let gotTerminalEvent = false;
+    streamDone = false;
+    gotTerminalEvent = false;
     
     while (true) {
       const { done, value } = await reader.read();
@@ -1143,7 +1147,7 @@ async function send() {
   } finally {
     stopStreamIdleWatch();
     hideTyping();
-    removeThinkingHint();
+    document.querySelectorAll('.thinking-step').forEach(el => el.remove());
     removeGeneratingBadge();
     // 兜底：清理页面上所有残留的"执行中"步骤状态
     document.querySelectorAll('.step-status.running').forEach(s => {
