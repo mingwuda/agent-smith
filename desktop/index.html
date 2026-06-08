@@ -156,6 +156,8 @@
   .step-details .thought p { margin:2px 0; }
   .python-progress { margin-top:6px; }
   .python-output { max-height:300px; overflow-y:auto; background:#1e1e1e; color:#d4d4d4; padding:10px 12px; border-radius:6px; font-size:12px; line-height:1.5; white-space:pre-wrap; word-break:break-word; margin:0; font-family:'SF Mono',Monaco,Menlo,Consolas,monospace; }
+  .subagent-log { margin:10px 0; }
+  .subagent-log pre { max-height:250px; overflow-y:auto; background:#f8f8fa; padding:8px 10px; border-radius:6px; font-size:12px; line-height:1.5; white-space:pre-wrap; word-break:break-word; margin:0; font-family:'SF Mono',Monaco,Menlo,Consolas,monospace; color:#333; border:1px solid #e0e0e3; }
   .step-details .thought code { background:#d4d4d9; padding:1px 4px; border-radius:3px; font-size:12px; }
   .step-details .args { background:#1c1c1e; color:#e8e8ed; padding:8px; border-radius:6px; font-size:12px; font-family:"SF Mono",Menlo,monospace; overflow-x:auto; margin-bottom:6px; }
   .step-details .result { background:#e8f5e9; color:#2e7d32; padding:8px; border-radius:6px; font-size:12px; white-space:pre-wrap; word-break:break-word; }
@@ -1284,8 +1286,26 @@ function handleStreamEvent(data) {
       `<p>类型: ${escapeHtml(cap.agent_type)} #${cap.id}</p>
        <p>任务: ${escapeHtml(cap.task)}</p>
        <p>状态: ${statusLabel}</p>
+       <div id="sa-log-${cap.id}" class="subagent-log"><pre></pre></div>
        ${cap.result ? '<hr><p><strong>结果:</strong></p><pre>' + escapeHtml(String(cap.result).slice(0, 2000)) + '</pre>' : ''}`;
     overlay.classList.add('show');
+
+    // 打开子代理实时日志流
+    if (cap.status === 'running') {
+      const logPre = document.querySelector(`#sa-log-${cap.id} pre`);
+      const es = new EventSource(`/subagent-progress/${cap.id}`);
+      es.onmessage = (e) => {
+        try {
+          const d = JSON.parse(e.data || '{}');
+          const prefix = d.cat === 'tool' ? '🔧 ' : d.cat === 'ai' ? '💭 ' : d.cat === 'error' ? '❌ ' : d.cat === 'done' ? '✅ ' : '';
+          if (logPre) logPre.textContent += `[${d.cat}] ${prefix}${d.text}\n`;
+        } catch {}
+      };
+      es.onerror = () => { es.close(); };
+      // 关闭弹窗时断开 EventSource
+      const origClose = () => { es.close(); overlay.classList.remove('show'); overlay.removeEventListener('_close_', origClose); };
+      overlay.addEventListener('_close_', origClose);
+    }
   }
 
   // 工具函数：添加分析中提示

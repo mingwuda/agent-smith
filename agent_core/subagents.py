@@ -34,6 +34,17 @@ class SubagentTask:
     created_at: float = field(default_factory=time.time)
     started_at: float = 0
     finished_at: float = 0
+    # 实时日志（线程安全，前端 SSE 轮询用）
+    _log_lines: list[dict] = field(default_factory=list)
+    _log_lock: threading.Lock = field(default_factory=threading.Lock)
+
+    def append_log(self, text: str, cat: str = "info") -> None:
+        with self._log_lock:
+            self._log_lines.append({"ts": time.time(), "cat": cat, "text": text})
+
+    def get_logs_since(self, index: int) -> tuple[list[dict], int]:
+        with self._log_lock:
+            return list(self._log_lines[index:]), len(self._log_lines)
 
 
 SUBAGENT_PROMPTS = {
@@ -73,6 +84,8 @@ class SubagentManager:
         self._tasks: dict[str, SubagentTask] = {}
         self._config: AgentConfig | None = None
         self._tools: list = []
+        # 当前批次任务列表（按 capsule_id 索引），供前端 SSE 轮询用
+        self._current_batch: list[SubagentTask] = []
 
     def configure(self, config: AgentConfig, tools: list):
         self._config = config
@@ -97,6 +110,22 @@ class SubagentManager:
 
     def get_task(self, task_id: str) -> SubagentTask | None:
         return self._tasks.get(task_id)
+
+    def get_progress_logs(self, capsule_id: int) -> tuple[list[dict], int, bool]:
+        """获取指定 capsule 的增量日志。返回 (新日志行, 总行数, 是否已完成)。"""
+        idx = capsule_id - 1  # capsule_id 从 1 开始
+        if 0 <= idx < len(self._current_batch):
+            task = self._current_batch[idx]
+            lines, total = task.get_logs_since(0)
+            done = task.status in ("done", "error")
+            return lines, total, done
+        return [], 0, True
+
+    def start_batch(self, tasks: list[SubagentTask]) -> None:
+        self._current_batch = tasks
+
+    def clear_batch(self) -> None:
+        self._current_batch = []
 
     async def run_sync(self, task: str, agent_type: str = "coder", context: str = "") -> SubagentTask:
         if not self._config:
@@ -147,14 +176,47 @@ class SubagentManager:
         message = item.task
         if item.context:
             message = f"上下文：\n{item.context}\n\n任务：\n{item.task}"
-        result = await graph.ainvoke(
-            {"messages": [HumanMessage(content=message)]},
-            {"recursion_limit": max(1, int(self._config.recursion_limit or 60))},
-        )
-        for msg in reversed(result.get("messages", [])):
-            if getattr(msg, "type", "") == "ai" and getattr(msg, "content", ""):
-                return msg.content
-        return "（子代理未产生输出）"
+        item.append_log(f"开始执行 {item.agent_type} 子代理任务...")
+        item.append_log(f"任务: {message[:200]}")
+
+        final_text = ""
+        try:
+            async for chunk in graph.astream(
+                {"messages": [HumanMessage(content=message)]},
+                {"recursion_limit": max(1, int(self._config.recursion_limit or 60))},
+                stream_mode="values",
+            ):
+                msgs = chunk.get("messages", [])
+                if not msgs:
+                    continue
+                last = msgs[-1]
+                msg_type = getattr(last, "type", "")
+                if msg_type == "tool":
+                    tool_name = getattr(last, "name", "unknown")
+                    item.append_log(f"🔧 调用工具: {tool_name}", "tool")
+                elif msg_type == "ai":
+                    content = getattr(last, "content", "")
+                    if content:
+                        item.append_log(f"💭 {content[:300]}", "ai")
+                elif msg_type == "tool_calls":
+                    pass
+            # 提取最后一轮 AI 消息的完整内容
+            result = await graph.ainvoke(
+                {"messages": [HumanMessage(content=message)]},
+                {"recursion_limit": max(1, int(self._config.recursion_limit or 60))},
+            )
+            for msg in reversed(result.get("messages", [])):
+                if getattr(msg, "type", "") == "ai" and getattr(msg, "content", ""):
+                    final_text = msg.content
+                    break
+        except Exception as exc:
+            item.append_log(f"❌ 执行出错: {exc}", "error")
+            raise
+        finally:
+            if not final_text:
+                final_text = "（子代理未产生输出）"
+            item.append_log(f"✅ {item.agent_type} 完成", "done")
+        return final_text
 
 
 manager = SubagentManager()
@@ -212,12 +274,47 @@ def delegate_tasks_parallel(tasks_json: str) -> str:
     if not isinstance(tasks, list) or len(tasks) == 0:
         return "❌ 需要至少一个任务"
 
-    max_workers = min(len(tasks), 4)
+    # 预创建所有任务，注册到 manager 供前端 SSE 轮询
+    items = []
+    for i, t in enumerate(tasks[:4]):
+        agent_type = t.get("agent_type", "coder") if isinstance(t, dict) else "coder"
+        if agent_type not in SUBAGENT_PROMPTS:
+            agent_type = "coder"
+        item = SubagentTask(
+            id=f"subagent-{uuid.uuid4().hex[:12]}",
+            agent_type=agent_type,
+            task=t.get("task", "") if isinstance(t, dict) else str(t),
+            context=t.get("context", "") if isinstance(t, dict) else "",
+        )
+        item.append_log(f"队列中，等待执行...")
+        items.append(item)
+        manager._tasks[item.id] = item
+
+    manager.start_batch(items)
+
+    def run_one(item: SubagentTask) -> str:
+        try:
+            item.status = "running"
+            item.started_at = time.time()
+            _run_coro_in_thread(manager._run_agent(item))
+            item.status = "done"
+        except Exception as exc:
+            item.status = "error"
+            item.error = f"{type(exc).__name__}: {exc}"
+            item.result = f"❌ 子代理执行失败：{item.error}"
+        finally:
+            item.finished_at = time.time()
+        return (
+            f"任务 {item.id} [{item.agent_type}] 状态：{item.status}\n\n"
+            f"{item.result or item.error}"
+        )
+
+    max_workers = min(len(items), 4)
     results = []
     errors = []
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = {pool.submit(_parallel_task_wrapper, t): i for i, t in enumerate(tasks)}
+        futures = {pool.submit(run_one, item): i for i, item in enumerate(items)}
         for future in as_completed(futures):
             idx = futures[future]
             try:
@@ -226,6 +323,7 @@ def delegate_tasks_parallel(tasks_json: str) -> str:
             except Exception as e:
                 errors.append(f"任务 #{idx + 1} 失败: {type(e).__name__}: {e}")
 
+    manager.clear_batch()
     parts = [f"✅ 并行子代理执行完成（{len(results)}/{len(tasks)} 成功）\n"]
     if results:
         parts.append("\n---\n".join(results))

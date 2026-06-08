@@ -1427,6 +1427,32 @@ async def tool_progress_stream(request: Request):
     )
 
 
+# ── 子代理实时日志流 ──
+@app.get("/subagent-progress/{capsule_id}")
+async def subagent_progress_stream(capsule_id: int, request: Request):
+    """子代理执行时实时输出 SSE 流。capsule_id 对应前端胶囊索引（从 1 开始）。"""
+    from subagents import manager as _sm
+
+    async def generator():
+        seen = 0
+        while True:
+            if await request.is_disconnected():
+                break
+            lines, total, done = _sm.get_progress_logs(capsule_id)
+            for line in lines[seen:]:
+                yield f"data: {json.dumps(line, ensure_ascii=False)}\n\n"
+            seen = total
+            if done:
+                break
+            await asyncio.sleep(0.5)
+
+    return StreamingResponse(
+        generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+    )
+
+
 # ---------- 启动 ----------
 
 if __name__ == "__main__":
