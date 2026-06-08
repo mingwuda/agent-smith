@@ -138,12 +138,33 @@
   /* 工具调用/思考步骤 */
   .steps-container { clear:both; margin:8px 0; max-width:85%; }
   .steps-container + .msg.bot { margin-top:12px; }
-  .step-toggle { display:flex; align-items:center; gap:6px; width:100%; padding:6px 12px; background:#f0f0f2; border:1px solid #e0e0e3; border-radius:8px; font-size:12px; cursor:pointer; color:#555; transition:background .15s; }
-  .step-toggle:hover { background:#e5e5ea; }
+  .step-toggle { display:none; }
   .step-toggle .arrow { transition:transform .2s; font-size:10px; }
   .step-toggle.open .arrow { transform:rotate(90deg); }
   .step-toggle .tool-icon { font-size:14px; }
   .step-toggle .tool-name { font-weight:500; color:#333; }
+
+  /* ── 新工具卡片 ── */
+  .tool-card { border-left:3px solid #10b981; background:#f9fafb; border-radius:0 6px 6px 0; margin-bottom:8px; overflow:hidden; }
+  .tool-card.error { border-left-color:#ef4444; }
+  .tool-card-header { display:flex; align-items:center; gap:8px; padding:8px 12px; cursor:pointer; user-select:none; }
+  .tool-card-header:hover { background:#f0fdf4; }
+  .tool-card.error .tool-card-header:hover { background:#fef2f2; }
+  .tool-card-header .tool-icon { font-size:15px; flex-shrink:0; }
+  .tool-card-header .tool-label { font-size:13px; color:#666; }
+  .tool-card-header .tool-name-inline { font-size:13px; font-weight:600; color:#1e293b; }
+  .tool-card-header .tool-duration { font-size:11px; color:#999; margin-left:auto; flex-shrink:0; }
+  .tool-card-header .tool-status-dot { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
+  .tool-card-header .tool-status-dot.running { background:#f59e0b; animation:pulse 1s infinite; }
+  .tool-card-header .tool-status-dot.done { background:#10b981; }
+  .tool-card-header .tool-status-dot.error { background:#ef4444; }
+  .tool-card-header .arrow { font-size:9px; color:#999; transition:transform .2s; flex-shrink:0; }
+  .tool-card.open .tool-card-header .arrow { transform:rotate(90deg); }
+  .tool-card-body { display:none; padding:0 12px 12px; }
+  .tool-card.open .tool-card-body { display:block; }
+  .tool-section-label { font-size:11px; font-weight:600; color:#888; text-transform:uppercase; margin:8px 0 4px; letter-spacing:.5px; }
+  .tool-section-label:first-child { margin-top:0; }
+  .tool-code-block { background:#1e1e1e; color:#d4d4d4; padding:10px 12px; border-radius:6px; font-size:12px; line-height:1.5; white-space:pre-wrap; word-break:break-word; max-height:300px; overflow-y:auto; font-family:'SF Mono',Monaco,Menlo,Consolas,monospace; margin:0; }
   .step-status { display:inline-flex; align-items:center; gap:5px; color:#999; font-size:11px; margin-left:auto; white-space:nowrap; }
   .step-status.running { color:#007aff; }
   .step-status.done { color:#2e7d32; }
@@ -522,6 +543,7 @@ const languageSelect = document.getElementById('language-select');
 let threadId = 'default';
 let isLoading = false;
 let _pythonProgressSource = null;
+let _toolTimers = {};  // { step: timestamp } 用于计算工具耗时
 let sessionsCache = [];
 let currentSessionId = null;
 let settingsData = null;
@@ -1140,21 +1162,15 @@ async function send() {
       }
     } else if (streamingActive && !gotTerminalEvent) {
       // 连接中断：只在未收到终端事件时才提示，避免 done 已到达后的假报警
-      if (currentStepsEl) {
-        currentStepsEl.querySelectorAll('.step-status.running').forEach(statusSpan => {
-          statusSpan.className = 'step-status error';
-          statusSpan.textContent = t('failed');
-        });
-      }
+      document.querySelectorAll('.tool-status-dot.running').forEach(d => {
+        d.className = 'tool-status-dot error';
+      });
       addMessage(t('connectionInterrupted'), 'system');
     } else {
       // 已收到完整回复但连接异常关闭：只清理残留工具状态，不弹中断提示
-      if (currentStepsEl) {
-        currentStepsEl.querySelectorAll('.step-status.running').forEach(statusSpan => {
-          statusSpan.className = 'step-status error';
-          statusSpan.textContent = t('failed');
-        });
-      }
+      document.querySelectorAll('.tool-status-dot.running').forEach(d => {
+        d.className = 'tool-status-dot error';
+      });
     }
   } finally {
     stopStreamIdleWatch();
@@ -1163,9 +1179,8 @@ async function send() {
     document.querySelectorAll('.thinking-step').forEach(el => el.remove());
     removeGeneratingBadge();
     // 兜底：清理页面上所有残留的"执行中"步骤状态
-    document.querySelectorAll('.step-status.running').forEach(s => {
-      s.className = 'step-status done';
-      s.textContent = t('done');
+    document.querySelectorAll('.tool-status-dot.running').forEach(d => {
+      d.className = 'tool-status-dot done';
     });
     streamingActive = false;
     isLoading = false;
@@ -1355,7 +1370,7 @@ function handleStreamEvent(data) {
           <span class="arrow">▶</span>
           <span class="tool-icon">🤔</span>
           <span class="tool-name">${escapeHtml(t('thought'))}</span>
-          <span class="step-status">${escapeHtml(t('stepLabel', { step: data.step || '?' }))}</span>
+          <span class="step-status">第 ${data.step || '?'} 步</span>
         </div>
         <div class="step-details open">
           <div class="thought">${renderMarkdown(thoughtText)}</div>
@@ -1371,58 +1386,49 @@ function handleStreamEvent(data) {
       removeGeneratingBadge();
       hasToolCalls = true;
       totalSteps = data.step || totalSteps + 1;
+      const curStep = data.step || (totalSteps - 1);
+      _toolTimers[curStep] = Date.now();
       ensureStepsContainer();
       updateProgress();
-      
-      // 折叠之前所有步骤卡片，只展开当前新卡片
-      if (currentStepsEl) {
-        currentStepsEl.querySelectorAll('.step-toggle.open').forEach(el => {
-          el.classList.remove('open');
-          const d = el.nextElementSibling;
-          if (d) d.classList.remove('open');
-        });
-      }
-      
+
       const toolIcon = getToolIcon(data.tool);
-      const argsHtml = data.args ? `<div class="args">${escapeHtml(JSON.stringify(data.args, null, 2))}</div>` : '';
-      
-      const stepDiv = document.createElement('div');
-      stepDiv.style.marginBottom = '4px';
-      stepDiv.dataset.step = data.step || '0';
-      stepDiv.innerHTML = `
-        <div class="step-toggle open" onclick="toggleStep(this)">
+      const argsStr = data.args ? JSON.stringify(data.args, null, 2) : '（无参数）';
+      const toolName = data.tool || 'unknown';
+
+      const cardDiv = document.createElement('div');
+      cardDiv.className = 'tool-card open';
+      cardDiv.dataset.step = String(curStep);
+      cardDiv.innerHTML = `
+        <div class="tool-card-header" onclick="toggleToolCard(this)">
           <span class="arrow">▶</span>
           <span class="tool-icon">${toolIcon}</span>
-          <span class="tool-name">${escapeHtml(data.tool)}</span>
-          <span class="step-status running"><span class="mini-spin"></span>${escapeHtml(t('running'))}</span>
+          <span class="tool-label">调用工具:</span>
+          <span class="tool-name-inline">${escapeHtml(toolName)}</span>
+          <span class="tool-duration" id="tool-dur-${curStep}"></span>
+          <span class="tool-status-dot running" id="tool-status-${curStep}"></span>
         </div>
-        <div class="step-details open">
-          ${argsHtml}
+        <div class="tool-card-body">
+          <div class="tool-section-label">参数</div>
+          <pre class="tool-code-block">${escapeHtml(argsStr)}</pre>
+          <div id="tool-output-${curStep}"></div>
         </div>`;
-      currentStepsEl.appendChild(stepDiv);
+      currentStepsEl.appendChild(cardDiv);
       smartScroll(container);
 
       // ── Python 实时输出流 ──
       if (data.tool === 'run_python') {
         closePythonProgress();
-        const stepContainer = stepDiv;
-        const pyDetails = stepContainer.querySelector('.step-details');
-        if (pyDetails) {
-          const pyBox = document.createElement('div');
-          pyBox.className = 'python-progress';
-          pyBox.id = 'python-progress-' + (data.step || '0');
-          pyBox.innerHTML = '<pre class="python-output" id="python-out-' + (data.step || '0') + '"></pre>';
-          pyDetails.appendChild(pyBox);
-        }
+        const pyBox = document.createElement('div');
+        pyBox.className = 'python-progress';
+        pyBox.style.marginTop = '8px';
+        pyBox.innerHTML = '<pre class="python-output" id="python-out-' + curStep + '"></pre>';
+        cardDiv.querySelector('.tool-card-body').appendChild(pyBox);
         _pythonProgressSource = new EventSource('/tool-progress');
-        const outEl = document.getElementById('python-out-' + (data.step || '0'));
+        const outEl = document.getElementById('python-out-' + curStep);
         _pythonProgressSource.onmessage = (e) => {
           try {
             const d = JSON.parse(e.data || '{}');
-            if (d.text && outEl) {
-              outEl.textContent += d.text + '\n';
-              smartScroll(container);
-            }
+            if (d.text && outEl) { outEl.textContent += d.text + '\n'; }
           } catch {}
         };
         _pythonProgressSource.onerror = () => { closePythonProgress(); };
@@ -1430,33 +1436,49 @@ function handleStreamEvent(data) {
       break;
 
     case 'tool_result':
-      // 关闭 Python 实时输出流
       closePythonProgress();
-      // 更新工具状态为完成/失败
-      if (currentStepsEl) {
-        const lastToggle = findStepToggle(data.step);
-        if (lastToggle) {
-          const statusSpan = lastToggle.querySelector('.step-status');
-          const isError = data.error === true;
-          if (statusSpan) {
-            statusSpan.className = 'step-status ' + (isError ? 'error' : 'done');
-            statusSpan.textContent = isError ? t('failed') : t('done');
-          }
-          
-          const details = lastToggle.nextElementSibling;
-          if (details && data.result) {
-            const resultDiv = document.createElement('div');
-            resultDiv.className = 'result' + (isError ? ' result-error' : '');
-            resultDiv.textContent = data.result;
-            details.appendChild(resultDiv);
-          }
-          // Diff 视图
-          if (details && data.diff && data.diff.diff && data.diff.diff.length > 0) {
-            const added = data.diff.added || 0;
-            const removed = data.diff.removed || 0;
+      const trStep = data.step !== undefined ? data.step : 0;
+      const startedAt = _toolTimers[trStep];
+      const elapsed = startedAt ? Date.now() - startedAt : 0;
+      const durText = elapsed > 1000 ? `${(elapsed/1000).toFixed(1)}s` : `${elapsed}ms`;
+      delete _toolTimers[trStep];
+
+      // 更新卡片状态
+      const card = currentStepsEl.querySelector(`.tool-card[data-step="${trStep}"]`);
+      if (card) {
+        const isError = data.error === true;
+        const dot = card.querySelector('.tool-status-dot');
+        if (dot) { dot.className = 'tool-status-dot ' + (isError ? 'error' : 'done'); }
+        const dur = card.querySelector('.tool-duration');
+        if (dur) dur.textContent = durText;
+        if (isError) card.classList.add('error');
+
+        // 添加结果
+        const outArea = card.querySelector(`#tool-output-${trStep}`);
+        if (outArea && data.result) {
+          outArea.innerHTML = '<div class="tool-section-label">结果</div>' +
+            `<pre class="tool-code-block" style="${isError ? 'color:#fca5a5;' : ''}">${escapeHtml(String(data.result))}</pre>`;
+        }
+
+        // Diff 视图
+        if (data.diff && data.diff.diff) {
+          const diffArea = card.querySelector('.tool-card-body');
+          if (diffArea) {
             const diffWrap = document.createElement('div');
-            diffWrap.className = 'diff-view';
-            const diffToggle = document.createElement('div');
+            diffWrap.style.marginTop = '8px';
+            diffWrap.innerHTML = '<div class="tool-section-label">文件变更 <span style="font-weight:400">(+' + (data.diff.added||0) + '/-' + (data.diff.removed||0) + ')</span></div>';
+            const diffCode = document.createElement('pre');
+            diffCode.className = 'tool-code-block';
+            diffCode.style.maxHeight = '200px';
+            diffCode.innerHTML = data.diff.diff.map(d =>
+              `<span style="${d.t==='+'?'color:#4ade80':d.t==='-'?'color:#f87171':'color:#888'}">${escapeHtml(d.t + d.c)}</span>`
+            ).join('\n');
+            diffWrap.appendChild(diffCode);
+            diffArea.appendChild(diffWrap);
+          }
+        }
+      }
+      break;
             diffToggle.className = 'diff-toggle';
             diffToggle.innerHTML = `
               <span class="diff-arrow">▶</span>
@@ -1495,23 +1517,10 @@ function handleStreamEvent(data) {
       hasToolCalls = true;
       ensureStepsContainer();
       updateProgress();
-      const progressToggle = findStepToggle(data.step);
-      if (progressToggle) {
-        const statusSpan = progressToggle.querySelector('.step-status');
-        if (statusSpan) {
-          statusSpan.className = 'step-status running';
-          statusSpan.innerHTML = `<span class="mini-spin"></span>${escapeHtml(data.message || t('runningFallback'))}`;
-        }
-        const details = progressToggle.nextElementSibling;
-        if (details) {
-          let live = details.querySelector('.live-progress');
-          if (!live) {
-            live = document.createElement('div');
-            live.className = 'result live-progress';
-            details.appendChild(live);
-          }
-          live.textContent = `${t('liveProgressPrefix')}${data.message || t('stillProcessing')}`;
-        }
+      if (data.step !== undefined && _toolTimers[data.step]) {
+        const elapsed = Date.now() - _toolTimers[data.step];
+        const durEl = document.getElementById('tool-dur-' + data.step);
+        if (durEl) durEl.textContent = elapsed > 1000 ? `${(elapsed/1000).toFixed(0)}s` : `${elapsed}ms`;
       }
       showGeneratingBadge(data.message || t('stillProcessing'));
       smartScroll(container);
@@ -1544,12 +1553,9 @@ function handleStreamEvent(data) {
       hideTyping();
       removeThinkingHint();
       removeGeneratingBadge();
-      if (currentStepsEl) {
-        currentStepsEl.querySelectorAll('.step-status.running').forEach(statusSpan => {
-          statusSpan.className = 'step-status done';
-          statusSpan.textContent = t('stopped');
-        });
-      }
+      document.querySelectorAll('.tool-status-dot.running').forEach(d => {
+        d.className = 'tool-status-dot error';
+      });
       addMessage('❌ ' + data.content, 'system');
       break;
     
@@ -1557,27 +1563,20 @@ function handleStreamEvent(data) {
       hideTyping();
       removeThinkingHint();
       removeGeneratingBadge();
-      // 折叠所有步骤卡片
-      if (currentStepsEl) {
-        const toggles = currentStepsEl.querySelectorAll('.step-toggle');
-        toggles.forEach(t => {
-          const statusSpan = t.querySelector('.step-status.running');
-          if (statusSpan) {
-            statusSpan.className = 'step-status done';
-            statusSpan.textContent = t('done');
-          }
-          t.classList.remove('open');
-          const details = t.nextElementSibling;
-          if (details) details.classList.remove('open');
-        });
-        // 更新进度为 100%
-        const prog = currentStepsEl.querySelector('.step-progress');
-        if (prog) {
-          const fill = prog.querySelector('.fill');
-          const text = prog.querySelector('.progress-text');
-          if (fill) fill.style.width = '100%';
-          if (text) text.textContent = t('completeText');
-        }
+      // 折叠所有工具卡片，标记 running 为 done
+      document.querySelectorAll('.tool-card .tool-status-dot.running').forEach(dot => {
+        dot.className = 'tool-status-dot done';
+      });
+      document.querySelectorAll('.tool-card.open').forEach(card => {
+        card.classList.remove('open');
+      });
+      // 更新进度为 100%
+      const prog = currentStepsEl ? currentStepsEl.querySelector('.step-progress') : null;
+      if (prog) {
+        const fill = prog.querySelector('.fill');
+        const text = prog.querySelector('.progress-text');
+        if (fill) fill.style.width = '100%';
+        if (text) text.textContent = t('completeText');
       }
       if (data.content && !currentBotMsgEl) {
         currentBotMsgEl = document.createElement('div');
@@ -1618,6 +1617,11 @@ function toggleStep(el) {
   el.classList.toggle('open');
   const details = el.nextElementSibling;
   if (details) details.classList.toggle('open');
+}
+
+function toggleToolCard(header) {
+  const card = header.closest('.tool-card');
+  if (card) card.classList.toggle('open');
 }
 
 // ---------- 会话管理 ----------
@@ -1710,27 +1714,22 @@ function addBotMessageWithSteps(content, steps) {
   });
 
   // 清理回放步骤后残留的"执行中/分析中"状态
-  if (currentStepsEl) {
-    currentStepsEl.querySelectorAll('.step-status.running').forEach(s => {
-      s.className = 'step-status done';
-      s.textContent = t('done');
-    });
-    currentStepsEl.querySelectorAll('.thinking-step').forEach(el => el.remove());
-    // 更新进度条为 100%
-    const prog = currentStepsEl.querySelector('.step-progress');
-    if (prog) {
-      const fill = prog.querySelector('.fill');
-      const text = prog.querySelector('.progress-text');
-      if (fill) fill.style.width = '100%';
-      if (text) text.textContent = t('completeText');
-    }
-    // 折叠所有步骤卡片
-    currentStepsEl.querySelectorAll('.step-toggle').forEach(t => {
-      t.classList.remove('open');
-      const details = t.nextElementSibling;
-      if (details) details.classList.remove('open');
-    });
+  document.querySelectorAll('.tool-status-dot.running').forEach(d => {
+    d.className = 'tool-status-dot done';
+  });
+  document.querySelectorAll('.thinking-step').forEach(el => el.remove());
+  // 更新进度条为 100%
+  const prog = currentStepsEl ? currentStepsEl.querySelector('.step-progress') : null;
+  if (prog) {
+    const fill = prog.querySelector('.fill');
+    const text = prog.querySelector('.progress-text');
+    if (fill) fill.style.width = '100%';
+    if (text) text.textContent = t('completeText');
   }
+  // 折叠所有工具卡片
+  document.querySelectorAll('.tool-card.open').forEach(card => {
+    card.classList.remove('open');
+  });
   removeGeneratingBadge();
 
   if (content) {
