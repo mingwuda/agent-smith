@@ -154,6 +154,8 @@
   .step-details .thought { color:#666; font-style:italic; margin-bottom:6px; white-space:pre-wrap; word-break:break-word; }
   .step-details .thought h1,.step-details .thought h2,.step-details .thought h3 { font-size:inherit; font-weight:600; }
   .step-details .thought p { margin:2px 0; }
+  .python-progress { margin-top:6px; }
+  .python-output { max-height:300px; overflow-y:auto; background:#1e1e1e; color:#d4d4d4; padding:10px 12px; border-radius:6px; font-size:12px; line-height:1.5; white-space:pre-wrap; word-break:break-word; margin:0; font-family:'SF Mono',Monaco,Menlo,Consolas,monospace; }
   .step-details .thought code { background:#d4d4d9; padding:1px 4px; border-radius:3px; font-size:12px; }
   .step-details .args { background:#1c1c1e; color:#e8e8ed; padding:8px; border-radius:6px; font-size:12px; font-family:"SF Mono",Menlo,monospace; overflow-x:auto; margin-bottom:6px; }
   .step-details .result { background:#e8f5e9; color:#2e7d32; padding:8px; border-radius:6px; font-size:12px; white-space:pre-wrap; word-break:break-word; }
@@ -517,6 +519,7 @@ const languageSelect = document.getElementById('language-select');
 
 let threadId = 'default';
 let isLoading = false;
+let _pythonProgressSource = null;
 let sessionsCache = [];
 let currentSessionId = null;
 let settingsData = null;
@@ -1001,6 +1004,13 @@ function stopStreamIdleWatch() {
   }
 }
 
+function closePythonProgress() {
+  if (_pythonProgressSource) {
+    _pythonProgressSource.close();
+    _pythonProgressSource = null;
+  }
+}
+
 function resetBlockingOverlays() {
   document.querySelectorAll('.modal-overlay.active').forEach(el => el.classList.remove('active'));
   document.getElementById('sidebar-overlay').classList.remove('show');
@@ -1146,6 +1156,7 @@ async function send() {
     }
   } finally {
     stopStreamIdleWatch();
+    closePythonProgress();
     hideTyping();
     document.querySelectorAll('.thinking-step').forEach(el => el.remove());
     removeGeneratingBadge();
@@ -1370,9 +1381,37 @@ function handleStreamEvent(data) {
         </div>`;
       currentStepsEl.appendChild(stepDiv);
       smartScroll(container);
+
+      // ── Python 实时输出流 ──
+      if (data.tool === 'run_python') {
+        closePythonProgress();
+        const stepContainer = stepDiv;
+        const pyDetails = stepContainer.querySelector('.step-details');
+        if (pyDetails) {
+          const pyBox = document.createElement('div');
+          pyBox.className = 'python-progress';
+          pyBox.id = 'python-progress-' + (data.step || '0');
+          pyBox.innerHTML = '<pre class="python-output" id="python-out-' + (data.step || '0') + '"></pre>';
+          pyDetails.appendChild(pyBox);
+        }
+        _pythonProgressSource = new EventSource('/tool-progress');
+        const outEl = document.getElementById('python-out-' + (data.step || '0'));
+        _pythonProgressSource.onmessage = (e) => {
+          try {
+            const d = JSON.parse(e.data || '{}');
+            if (d.text && outEl) {
+              outEl.textContent += d.text + '\n';
+              smartScroll(container);
+            }
+          } catch {}
+        };
+        _pythonProgressSource.onerror = () => { closePythonProgress(); };
+      }
       break;
 
     case 'tool_result':
+      // 关闭 Python 实时输出流
+      closePythonProgress();
       // 更新工具状态为完成/失败
       if (currentStepsEl) {
         const lastToggle = findStepToggle(data.step);

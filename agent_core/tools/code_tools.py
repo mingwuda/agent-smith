@@ -3,6 +3,7 @@ import difflib
 import json
 import os
 import sys
+import threading
 from io import StringIO
 from pathlib import Path
 
@@ -16,6 +17,31 @@ PYTHON_OUTPUT_TAIL_CHARS = 8000
 
 DIFF_MARKER = "__DIFF__:"
 DIFF_MAX_LINES = 500
+
+# ── 实时输出流 ──
+_progress_lock = threading.Lock()
+_progress_lines: list[str] = []
+_progress_running = False
+
+
+def get_progress_since(index: int) -> tuple[list[str], int]:
+    """获取 index 之后的新增行，返回 (新行列表, 当前总行数)。供 SSE 端点调用。"""
+    with _progress_lock:
+        return list(_progress_lines[index:]), len(_progress_lines)
+
+
+def is_progress_running() -> bool:
+    return _progress_running
+
+
+class _ProgressIO(StringIO):
+    """写日志的同时推送到全局进度列表"""
+    def write(self, s: str) -> int:
+        n = super().write(s)
+        if s:
+            with _progress_lock:
+                _progress_lines.append(s)
+        return n
 
 
 def _gen_diff_lines(old_content: str, new_content: str) -> list[dict] | None:
@@ -93,19 +119,28 @@ def _snapshot_files(workspace: Path) -> dict[str, str]:
 @tool
 def run_python(code: str) -> str:
     """执行 Python 代码并返回 stdout 输出。对于计算、数据分析、脚本测试非常有用。"""
+    global _progress_running, _progress_lines
+
+    # ── 重置进度记录 ──
+    with _progress_lock:
+        _progress_lines = []
+        _progress_running = True
+
     # ── 执行前文件内容快照 ──
     workspace = resolve_workspace()
     before_snapshot = _snapshot_files(workspace)
 
-    # ── 执行代码 ──
+    # ── 执行代码（使用 _ProgressIO 实时推送到全局进度）──
     old_stdout = sys.stdout
-    sys.stdout = captured = StringIO()
+    captured = _ProgressIO()
+    sys.stdout = captured
     try:
         exec(code, {"__builtins__": __builtins__})
     except Exception as e:
         return f"❌ 执行出错: {type(e).__name__}: {e}"
     finally:
         sys.stdout = old_stdout
+        _progress_running = False
     output = captured.getvalue()
 
     # ── 执行后检测文件内容变化 ──

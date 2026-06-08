@@ -1398,6 +1398,35 @@ def health():
     return result
 
 
+# ── Python 实时输出流 ──
+@app.get("/tool-progress")
+async def tool_progress_stream(request: Request):
+    """Python 执行时实时输出 SSE 流"""
+    from tools import code_tools as _ct
+
+    async def generator():
+        index = 0
+        while True:
+            if await request.is_disconnected():
+                break
+            lines, idx = _ct.get_progress_since(index)
+            for line in lines:
+                # 滤掉纯空白/进度条类输出，避免大量碎片
+                stripped = line.rstrip()
+                if stripped:
+                    yield f"data: {json.dumps({'text': stripped}, ensure_ascii=False)}\n\n"
+            index = idx
+            if not _ct.is_progress_running() and index >= len(lines):
+                break
+            await asyncio.sleep(0.3)
+
+    return StreamingResponse(
+        generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+    )
+
+
 # ---------- 启动 ----------
 
 if __name__ == "__main__":
