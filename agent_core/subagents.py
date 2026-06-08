@@ -198,14 +198,10 @@ class SubagentManager:
                     content = getattr(last, "content", "")
                     if content:
                         item.append_log(f"💭 {content[:300]}", "ai")
-                elif msg_type == "tool_calls":
-                    pass
-            # 提取最后一轮 AI 消息的完整内容
-            result = await graph.ainvoke(
-                {"messages": [HumanMessage(content=message)]},
-                {"recursion_limit": max(1, int(self._config.recursion_limit or 60))},
-            )
-            for msg in reversed(result.get("messages", [])):
+                        final_text = content  # 实时记录最后一条 AI 回复
+            # 流结束后从最后一条 AI 消息取完整输出（可能比 stream 逐条更长）
+            msgs_final = chunk.get("messages", [])
+            for msg in reversed(msgs_final):
                 if getattr(msg, "type", "") == "ai" and getattr(msg, "content", ""):
                     final_text = msg.content
                     break
