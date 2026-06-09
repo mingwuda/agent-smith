@@ -176,7 +176,7 @@ class AgentConfig:
         config._normalize_providers(apply_legacy=apply_legacy)
         config.recursion_limit = max(1, int(config.recursion_limit or 60))
         config.api_max_retries = max(0, int(config.api_max_retries or 0))
-        config.api_timeout_seconds = max(1.0, float(config.api_timeout_seconds or 60.0))
+        config.api_timeout_seconds = max(60.0, float(config.api_timeout_seconds or 60.0))
         config.context_window_tokens = max(0, int(config.context_window_tokens or 0))
         
         # 3. 填充默认值

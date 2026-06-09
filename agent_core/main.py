@@ -1366,7 +1366,7 @@ def save_settings(req: SettingsRequest, request: Request):
     )
     cfg.recursion_limit = max(1, int(req.recursion_limit or 60))
     cfg.api_max_retries = max(0, int(req.api_max_retries or 0))
-    cfg.api_timeout_seconds = max(1.0, float(req.api_timeout_seconds or 60.0))
+    cfg.api_timeout_seconds = max(60.0, float(req.api_timeout_seconds or 60.0))
     cfg.api_host_ips = req.api_host_ips or cfg.api_host_ips
     cfg.context_window_tokens = max(0, int(req.context_window_tokens or 0))
     cfg.tavily_search_enabled = bool(req.tavily_search_enabled)
