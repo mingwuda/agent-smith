@@ -74,11 +74,36 @@ def _resolve(path: str, allow_outside: bool = False) -> Path:
     target = target.resolve(strict=False)
     if allow_outside:
         return target
+    # 检查是否在工作区内
     try:
         target.relative_to(workspace)
-    except ValueError as exc:
-        raise ValueError(f"路径超出工作区: {path}。当前工作区: {workspace}") from exc
-    return target
+    except ValueError:
+        pass
+    else:
+        return target
+    # 检查是否在允许写入的白名单路径中
+    # 用于 skills/ 等项目目录在 Docker 等环境下也能被写入
+    allowed_prefixes = []
+    if _workspace:
+        # 项目根目录（workspace 的父级或邻近目录）
+        project_root = _workspace.parent
+        if (project_root / "skills").is_dir():
+            allowed_prefixes.append(project_root / "skills")
+        if (project_root / "agent_core" / "samples").is_dir():
+            allowed_prefixes.append(project_root / "agent_core" / "samples")
+        # Docker 环境下的 /app/skills/
+        if Path("/app/skills").is_dir():
+            allowed_prefixes.append(Path("/app/skills"))
+        if Path("/app/agent_core/samples").is_dir():
+            allowed_prefixes.append(Path("/app/agent_core/samples"))
+    for prefix in allowed_prefixes:
+        try:
+            target.relative_to(prefix)
+        except ValueError:
+            continue
+        else:
+            return target
+    raise ValueError(f"路径超出工作区: {path}。当前工作区: {workspace}")
 
 def _path_error(exc: ValueError) -> str:
     return f"❌ {exc}"
