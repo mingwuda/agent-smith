@@ -1335,7 +1335,7 @@ class SettingsRequest(BaseModel):
     base_url: str = ""
     recursion_limit: int = 60
     api_max_retries: int = 3
-    api_timeout_seconds: float = 30.0
+    api_timeout_seconds: float = 60.0
     api_host_ips: str = ""
     context_window_tokens: int = 0
     tavily_search_enabled: bool = False
@@ -1366,7 +1366,7 @@ def save_settings(req: SettingsRequest, request: Request):
     )
     cfg.recursion_limit = max(1, int(req.recursion_limit or 60))
     cfg.api_max_retries = max(0, int(req.api_max_retries or 0))
-    cfg.api_timeout_seconds = max(1.0, float(req.api_timeout_seconds or 30.0))
+    cfg.api_timeout_seconds = max(1.0, float(req.api_timeout_seconds or 60.0))
     cfg.api_host_ips = req.api_host_ips or cfg.api_host_ips
     cfg.context_window_tokens = max(0, int(req.context_window_tokens or 0))
     cfg.tavily_search_enabled = bool(req.tavily_search_enabled)
