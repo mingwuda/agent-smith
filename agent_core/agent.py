@@ -98,36 +98,41 @@ def _loop_guard_message(reason: str, calls: list[dict], recursion_limit: int) ->
 
 
 def _detect_tool_loop(calls: list[dict], recursion_limit: int) -> str:
-    latest = calls[-1]
-    latest_sig = latest.get("signature", "")
-    # web_search/web_fetch 高频调用不同关键词是正常行为，不计入重复检测
-    if latest.get("tool") not in {"web_search", "web_fetch"}:
-        exact_repeat_count = sum(1 for item in calls[-8:] if item.get("signature") == latest_sig)
-        if latest_sig and exact_repeat_count >= 3:
-            return f"最近 8 次工具调用中，同一工具和参数重复了 {exact_repeat_count} 次"
-
-    if len(calls) < 6:
+    if len(calls) < 4:
         return ""
 
-    recent12 = calls[-12:]
-    tool_names = [item.get("tool", "") for item in recent12]
-    signatures = [item.get("signature", "") for item in recent12 if item.get("signature")]
-    unique_signatures = set(signatures)
-    unique_tools = set(tool_names)
-    exploratory_tools = {"search_files", "read_file", "list_files"}
-    low_argument_diversity = len(unique_signatures) <= max(3, len(signatures) // 4)
-    if (
-        len(recent12) >= 10
-        and unique_tools
-        and unique_tools.issubset(exploratory_tools)
-        and len(unique_tools) <= 2
-        and low_argument_diversity
-    ):
-        dominant = max(unique_tools, key=tool_names.count)
-        return (
-            f"最近 {len(recent12)} 次调用集中在 {', '.join(sorted(unique_tools))}，"
-            f"但不同参数签名只有 {len(unique_signatures)} 个，{dominant} 出现 {tool_names.count(dominant)} 次"
-        )
+    # ── 检测1：同一工具+同一参数严格重复 ≥3 次（单步循环）──
+    latest = calls[-1]
+    latest_sig = latest.get("signature", "")
+    if latest_sig and latest.get("tool") not in {"web_search", "web_fetch"}:
+        last6_sigs = [item.get("signature", "") for item in calls[-6:] if item.get("signature")]
+        count = last6_sigs.count(latest_sig)
+        if count >= 3:
+            return f"最近 6 次工具调用中，同一工具和参数严格重复了 {count} 次"
+
+    # ── 检测2：参数循环（A→B→A→B 模式）──
+    if len(calls) >= 6:
+        recent8 = calls[-8:]
+        sigs = [c.get("signature", "") for c in recent8 if c.get("signature")]
+        if len(sigs) >= 6:
+            # 检查最近 2 或 3 个签名是否与之前形成循环
+            # 例如: [A, B, A, B] → last2 pairs match
+            # 或者: [A, A, B, A, A, B] → last3 pairs match
+            for window in (2, 3):
+                if len(sigs) >= window * 2 and sigs[-window:] == sigs[-window*2:-window]:
+                    return (
+                        f"工具调用出现循环模式：最近 {window*2} 次的形式为 "
+                        + " → ".join(sigs[-window*2:])
+                    )
+            # 更松散的循环：最后两对连续工具名相同
+            pairs = [(recent8[i].get("tool", ""), recent8[i+1].get("tool", ""))
+                     for i in range(0, len(recent8)-1, 2)]
+            if len(pairs) >= 3:
+                last_pair = pairs[-1]
+                if pairs.count(last_pair) >= 2:
+                    return (
+                        f"工具调用出现循环模式：连续调用 ({last_pair[0]} → {last_pair[1]}) 重复了 {pairs.count(last_pair)} 次"
+                    )
 
     estimated_graph_steps = len(calls) * 2 + 1
     if estimated_graph_steps >= max(6, recursion_limit - 3):
