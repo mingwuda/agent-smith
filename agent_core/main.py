@@ -910,8 +910,19 @@ async def run_agent(req: RunRequest, request: Request):
     history_messages = session.get("messages", [])
 
     attachments = _safe_attachments(req.attachments)
-    session_store.add_message(uid, session_id, "user", _display_user_message(uid, req.message, attachments))
+    display_text = _display_user_message(uid, req.message, attachments)
+    session_store.add_message(uid, session_id, "user", display_text)
     model_override = _image_model_override(attachments)
+    # ── 解析 ZIP 清单，追加到 LLM 消息中 ──
+    agent_message = req.message
+    if attachments and any(a.get("mime_type") == "application/zip" for a in attachments):
+        try:
+            parsed = json.loads(display_text)
+            manifest = parsed.get("zip_manifest", "")
+            if manifest:
+                agent_message = req.message + "\n\n" + manifest
+        except (json.JSONDecodeError, TypeError):
+            pass
     if _is_skill_inventory_query(req.message):
         result = _format_loaded_skills()
         _save_assistant_result(uid, session_id, req.message, result)
@@ -919,7 +930,7 @@ async def run_agent(req: RunRequest, request: Request):
 
     agent.switch_thread(session_id)
     result, steps = await agent.run(
-        req.message,
+        agent_message,
         history=history_messages,
         attachments=attachments,
         model_override=model_override,
@@ -952,8 +963,20 @@ async def run_agent_stream(req: RunRequest, request: Request):
     history_messages = session.get("messages", [])
 
     attachments = _safe_attachments(req.attachments)
-    session_store.add_message(uid, session_id, "user", _display_user_message(uid, req.message, attachments))
+    display_text = _display_user_message(uid, req.message, attachments)
+    session_store.add_message(uid, session_id, "user", display_text)
     model_override = _image_model_override(attachments)
+
+    # ── 解析 ZIP 清单，追加到 LLM 消息中 ──
+    agent_message = req.message
+    if attachments and any(a.get("mime_type") == "application/zip" for a in attachments):
+        try:
+            parsed = json.loads(display_text)
+            manifest = parsed.get("zip_manifest", "")
+            if manifest:
+                agent_message = req.message + "\n\n" + manifest
+        except (json.JSONDecodeError, TypeError):
+            pass
     if _is_skill_inventory_query(req.message):
         result = _format_loaded_skills()
         _save_assistant_result(uid, session_id, req.message, result)
@@ -979,7 +1002,7 @@ async def run_agent_stream(req: RunRequest, request: Request):
         if model_override:
             yield f"data: {json.dumps({'type': 'model_switch', 'model': model_override, 'reason': '图片输入'}, ensure_ascii=False)}\n\n"
         stream = agent.stream_run(
-            req.message,
+            agent_message,
             history=history_messages,
             attachments=attachments,
             model_override=model_override,
