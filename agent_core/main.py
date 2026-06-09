@@ -7,10 +7,13 @@ import json
 import os
 import re
 import secrets
+import shutil
 import sys
 import threading
 import time
 import webbrowser
+import zipfile
+from io import BytesIO
 from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import quote
@@ -711,24 +714,110 @@ def _is_skill_inventory_query(message: str) -> bool:
 def _safe_attachments(attachments: list[AttachmentRequest]) -> list[dict]:
     safe: list[dict] = []
     for item in attachments[:4]:
-        mime_type = (item.mime_type or "").strip().lower()
+        mime = (item.mime_type or "").strip().lower()
         data_url = (item.data_url or "").strip()
-        if not mime_type.startswith("image/") or not data_url.startswith(f"data:{mime_type};base64,"):
-            continue
-        if len(data_url) > 8 * 1024 * 1024:
-            continue
-        safe.append({
-            "name": item.name or "pasted-image.png",
-            "mime_type": mime_type,
-            "data_url": data_url,
-        })
+        is_zip = mime in ("application/zip", "application/x-zip-compressed") or item.name.endswith(".zip")
+        prefix = "data:application/zip;base64," if is_zip else f"data:{mime};base64,"
+
+        if not data_url.startswith(prefix):
+            if not is_zip:
+                continue  # 非 ZIP 非图片，跳过
+            # ZIP 用更宽松的 base64 检测
+            if not data_url.startswith("data:") or ";base64," not in data_url:
+                continue
+            # 取实际 base64 数据
+            base64_data = data_url.split(";base64,", 1)[-1]
+            try:
+                raw = base64.b64decode(base64_data)
+            except Exception:
+                continue
+        else:
+            base64_data = data_url[len(prefix):]
+            try:
+                raw = base64.b64decode(base64_data)
+            except Exception:
+                continue
+
+        if is_zip:
+            if len(raw) > 50 * 1024 * 1024:  # ZIP 上限 50MB
+                continue
+            safe.append({
+                "name": item.name or "project.zip",
+                "mime_type": "application/zip",
+                "data_url": data_url,
+                "raw": raw,
+            })
+        else:
+            if not mime.startswith("image/") or len(data_url) > 8 * 1024 * 1024:
+                continue
+            safe.append({
+                "name": item.name or "image.png",
+                "mime_type": mime,
+                "data_url": data_url,
+            })
     return safe
 
 
+def _extract_zip(raw: bytes, zip_name: str) -> tuple[str, str]:
+    """解压 ZIP 字节到工作区 .agent_zip/{name}/ 目录，返回 (目录绝对路径, 文件清单文本)"""
+    import hashlib
+    safe_name = re.sub(r'[^a-zA-Z0-9_-]', '_', Path(zip_name).stem)[:32]
+    dest = Path.home() / "agent_workspace" / ".agent_zip" / f"{safe_name}_{hashlib.md5(raw[:1024]).hexdigest()[:8]}"
+    dest.mkdir(parents=True, exist_ok=True)
+
+    tree: list[str] = []
+    try:
+        with zipfile.ZipFile(BytesIO(raw)) as zf:
+            for info in zf.infolist():
+                fname = info.filename
+                if fname.startswith("/") or ".." in fname:
+                    continue  # 路径穿越防护
+                target = dest / fname
+                if info.is_dir():
+                    target.mkdir(parents=True, exist_ok=True)
+                    tree.append(f"[DIR]  {fname}")
+                else:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    zf.extract(info, dest)
+                    size = info.file_size
+                    size_str = f"{size/1024:.1f}KB" if size < 1024*1024 else f"{size/1024/1024:.1f}MB"
+                    tree.append(f"[FILE] {fname}  ({size_str})")
+        # 限制文件列表长度
+        if len(tree) > 500:
+            tree = tree[:500] + [f"...（共 {len(tree)} 个文件，仅展示前 500 个）"]
+    except zipfile.BadZipFile:
+        return "", "❌ ZIP 文件损坏，无法解压。"
+    except Exception as e:
+        return "", f"❌ 解压失败: {type(e).__name__}: {e}"
+
+    manifest = (
+        f"用户上传了 ZIP 文件「{zip_name}」，已解压到工作区 .agent_zip/ 目录。\n"
+        f"解压路径: {dest}\n\n"
+        f"文件清单（共 {len(tree)} 个条目）:\n" + "\n".join(tree)
+    )
+    return str(dest), manifest
+
+
 def _display_user_message(uid: str, message: str, attachments: list[dict]) -> str:
-    """生成用户消息的存储文本。有图片时保存到磁盘，存入 JSON 结构。"""
+    """生成用户消息的存储文本。有图片/压缩包时保存到磁盘，返回摘要信息。"""
     if not attachments:
         return message
+
+    # ── 先处理 ZIP ──
+    zip_notes = ""
+    for item in attachments:
+        if item.get("mime_type") == "application/zip" and "raw" in item:
+            name = item.get("name", "project.zip")
+            raw = item.pop("raw")  # 移除原始字节，不保留
+            dest, manifest = _extract_zip(raw, name)
+            if dest:
+                zip_notes = manifest
+            break
+
+    if zip_notes:
+        return json.dumps({"text": message or "请分析这个项目。", "zip_manifest": zip_notes}, ensure_ascii=False)
+
+    # ── 图片处理 ──
     image_paths: list[str] = []
     img_dir = Path.home() / ".desktop_agent" / "user_images" / uid
     img_dir.mkdir(parents=True, exist_ok=True)
