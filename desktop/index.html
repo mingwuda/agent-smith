@@ -1479,37 +1479,6 @@ function handleStreamEvent(data) {
         }
       }
       break;
-            diffToggle.className = 'diff-toggle';
-            diffToggle.innerHTML = `
-              <span class="diff-arrow">▶</span>
-              <span class="diff-summary">📝 变更: <span class="diff-added-count">+${added}</span> / <span class="diff-removed-count">-${removed}</span> 行</span>
-            `;
-            const diffBody = document.createElement('div');
-            diffBody.className = 'diff-body';
-            diffBody.style.display = 'none';
-            const lines = data.diff.diff;
-            for (let i = 0; i < Math.min(lines.length, 300); i++) {
-              const item = lines[i];
-              const lineDiv = document.createElement('div');
-              lineDiv.className = 'diff-line diff-' + (item.t === '+' ? 'add' : item.t === '-' ? 'remove' : item.t === '…' ? 'more' : 'keep');
-              lineDiv.textContent = (item.t === '+' ? '＋ ' : item.t === '-' ? '－ ' : item.t === '…' ? '' : '　 ') + (item.c || '');
-              diffBody.appendChild(lineDiv);
-            }
-            diffToggle.onclick = () => {
-              const open = diffBody.style.display === 'block';
-              diffBody.style.display = open ? 'none' : 'block';
-              diffToggle.classList.toggle('open', !open);
-            };
-            diffWrap.appendChild(diffToggle);
-            diffWrap.appendChild(diffBody);
-            details.appendChild(diffWrap);
-          }
-        }
-      }
-      // 显示"分析中，准备下一步..."
-      showThinkingHint(t('analyzeResult'));
-      smartScroll(container);
-      break;
 
     case 'progress':
       hideTyping();

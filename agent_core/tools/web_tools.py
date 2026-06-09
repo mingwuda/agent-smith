@@ -1,5 +1,6 @@
 """网页搜索与抓取工具"""
 from datetime import date, timedelta
+import time
 import re
 import socket
 import subprocess
@@ -22,11 +23,12 @@ HEADERS = {
     "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
     "Cache-Control": "no-cache",
 }
-REQUEST_TIMEOUT = (5, 25)
-RETRY_TOTAL = 3
+REQUEST_TIMEOUT = (3, 10)
+RETRY_TOTAL = 1
 _TAVILY_SEARCH_ENABLED = False
 _TAVILY_API_KEY = ""
 _TAVILY_SEARCH_URL = "https://api.tavily.com/search"
+_search_attempt_start = 0.0
 
 _RELATIVE_DATE_RE = re.compile(
     r"(今天|今日|昨天|昨日|今年|本年|最新|近期|最近|当前|现在|today|yesterday|latest|recent|current|this year|now)",
@@ -154,16 +156,13 @@ def _curl_get(url: str, params: Optional[dict] = None) -> _SimpleResponse:
 
 
 def _http_get(url: str, params: Optional[dict] = None):
-    try:
-        return _SESSION.get(
-            url,
-            params=params,
-            timeout=REQUEST_TIMEOUT,
-            headers=HEADERS,
-            allow_redirects=True,
-        )
-    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
-        return _curl_get(url, params)
+    return _SESSION.get(
+        url,
+        params=params,
+        timeout=REQUEST_TIMEOUT,
+        headers=HEADERS,
+        allow_redirects=True,
+    )
 
 # 预解析 DNS（解决 urllib3 在部分网络下解析 cn.bing.com 慢的问题）
 _BING_IPS: dict[str, str] = {}
@@ -341,6 +340,8 @@ def web_search(query: str, max_results: int = 5, recency_days: int = 0) -> str:
         max_results: 返回结果数量（默认 5，建议 5-8）。先用一次高质量搜索，再 fetch 1-3 个最相关链接，避免多轮改写搜索。
         recency_days: 可选，限制近 N 天结果（1-365）。例如今天/最新新闻用 7，近期事件用 30；不需要近期约束时传 0。
     """
+    global _search_attempt_start
+    _search_attempt_start = time.time()
     max_results = max(1, min(max_results, 10))
     normalized_query, note = _normalize_search_query(query, recency_days)
     errors = []
@@ -351,6 +352,9 @@ def web_search(query: str, max_results: int = 5, recency_days: int = 0) -> str:
     search_backends.extend((("Bing", _search_bing), ("搜狗", _search_sogou), ("DuckDuckGo", _search_duckduckgo)))
 
     for source, search_fn in search_backends:
+        if time.time() - _search_attempt_start > 18:
+            errors.append(f"{source}: 总搜索超时已到（跳过）")
+            break
         try:
             results = search_fn(normalized_query, max_results)
             if results:
