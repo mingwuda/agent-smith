@@ -14,13 +14,22 @@ RUN sed -i 's/deb.debian.org/mirrors.tuna.tsinghua.edu.cn/g' /etc/apt/sources.li
 #   - libxml2/libxslt1.1: lxml 解析 HTML
 #   - curl + ca-certificates: web_search 的 fallback HTTP 客户端
 #   - git: git_tools 版本控制
+#   - xz-utils: 解压 Node.js 二进制包
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libxml2 \
     libxslt1.1 \
     curl \
     ca-certificates \
     git \
+    xz-utils \
     && rm -rf /var/lib/apt/lists/*
+
+# 安装 Node.js 22.x（使用清华镜像加速）
+RUN curl -fsSL https://mirrors.tuna.tsinghua.edu.cn/nodejs-release/v22.14.0/node-v22.14.0-linux-x64.tar.xz \
+    -o /tmp/node.tar.xz \
+    && tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1 \
+    && rm /tmp/node.tar.xz \
+    && node --version && npm --version
 
 # 先复制依赖文件，利用 Docker 缓存层
 COPY requirements.txt .
