@@ -352,8 +352,8 @@ def web_search(query: str, max_results: int = 5, recency_days: int = 0) -> str:
     search_backends.extend((("Bing", _search_bing), ("搜狗", _search_sogou), ("DuckDuckGo", _search_duckduckgo)))
 
     for source, search_fn in search_backends:
-        if time.time() - _search_attempt_start > 18:
-            errors.append(f"{source}: 总搜索超时已到（跳过）")
+        already = time.time() - _search_attempt_start
+        if already > 35:
             break
         try:
             results = search_fn(normalized_query, max_results)
