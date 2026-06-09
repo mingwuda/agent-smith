@@ -1,0 +1,9 @@
+{
+  "name": "pptx-generator",
+  "version": "1.0.0",
+  "description": "Generate PPTX presentations using PptxGenJS",
+  "type": "module",
+  "dependencies": {
+    "pptxgenjs": "^3.12.0"
+  }
+}
