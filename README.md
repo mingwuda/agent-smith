@@ -15,18 +15,20 @@ AgentSmith 是一个本地/私有部署的桌面 AI 智能体。它基于 FastAP
 | --- | --- |
 | 聊天式 Agent | LangGraph ReAct Agent，支持流式输出、思考/工具步骤展示、长任务进度提示和终止任务 |
 | 多行与图片输入 | 输入框支持多行文本、粘贴图片；图片只用于当轮分析，不把 base64 写入历史 |
+| 文件与 ZIP 上传 | 支持上传图片（分析视觉内容）和 ZIP 压缩包（自动解压到工作区，生成文件清单供 AI 分析项目结构） |
 | 多模态模型切换 | MiMo 系列发图时，如果当前模型不支持图片，会本轮临时切换到 `mimo-v2.5` |
 | 文件工具 | 读写/追加/删除/列出/搜索工作区文件，大文件只返回摘要和路径，避免撑爆上下文 |
 | 文件制品 | AI 生成工作区文件后自动追加下载链接；Markdown 文件支持弹窗预览 |
-| Python 执行 | 运行 Python 代码并返回输出；超大输出只返回摘要、开头和结尾 |
-| 网页能力 | `web_search` 搜索网页，`web_fetch` 抓取正文；带重试和兜底请求 |
+| Python 执行 | 运行 Python 代码并返回输出；超大输出只返回摘要、开头和结尾；**支持实时流式输出**，避免用户空等 |
+| 网页能力 | `web_search` 搜索网页（Bing → 搜狗 → DuckDuckGo 逐级 fallback），`web_fetch` 抓取正文 |
 | Git 工具 | 查看状态、diff、日志、show、worktree；按明确指令 add/commit/push/revert/merge/checkout |
-| 子代理 | `delegate_task` 串行 + `delegate_tasks_parallel` 并行委派 coder/reviewer/debugger |
+| 子代理 | `delegate_task` 串行 + `delegate_tasks_parallel` 并行委派 coder/reviewer/debugger/searcher；**支持实时日志流**展示执行过程 |
 | Skills | 加载 `SKILL.md`，兼容 YAML frontmatter 和 oh-my-openagent / Superpowers 风格技能 |
 | 长期记忆 | 按用户隔离保存长期偏好、项目事实和常用环境信息 |
-| 多用户 | 登录保护、管理员用户管理、每个用户独立工作区、会话、用量和记忆 |
+| 多用户 | 登录保护、管理员用户管理、每个用户独立工作区、会话、用量和记忆；支持 `AGENT_USERS` 环境变量批量配置 |
 | 上下文管理 | 按模型上下文窗口估算长度，达到阈值时压缩历史；大日志/大文件不直接塞全文 |
 | 用量统计 | 按用户、会话、Provider、模型和工具统计调用与 token |
+| 工具卡片 | 步骤卡片带绿色左边框、工具名 + 耗时 + 状态圆点、参数/结果分栏展示，支持折叠
 
 ---
 
@@ -242,6 +244,29 @@ Markdown 文件会同时提供：
 
 ---
 
+## Python 实时输出流
+
+当 Agent 执行 `run_python` 时，输出会**实时流式推送**到前端的终端风格黑底代码块中，无需等待脚本执行完毕即可看到中间输出。
+
+适用于长时间运行的脚本（如数据爬取、模型训练、批量处理）。
+
+---
+
+## ZIP 文件上传与分析
+
+支持上传 `.zip` 压缩包（最大 50MB），后端自动解压到工作区并生成文件清单：
+
+```
+[DIR]  src/
+[FILE] src/main.py  (2.3KB)
+[FILE] src/utils.py (1.1KB)
+...
+```
+
+LLM 会直接看到项目结构，可以据此分析代码、给出建议或执行后续操作。解压后的文件保留在工作区 `~/.agent_zip/{name}_{hash}/` 目录下，Agent 可直接读写。
+
+---
+
 ## 长上下文处理
 
 系统会估算 LangGraph checkpoint 中的消息长度，并根据模型最大上下文窗口的 80% 作为压缩阈值。
@@ -328,6 +353,9 @@ triggers: [debug, 排查, 根因]
 | `coder` | 编码实现、局部修改 |
 | `reviewer` | 代码审查、风险和缺失测试检查 |
 | `debugger` | 系统化排障、根因定位 |
+| `searcher` | 专精互联网搜索，调用 web_search + web_fetch 整理结果 |
+
+所有子代理都支持**实时日志流**，点击胶囊可查看执行过程（工具调用、AI 思考、结果）。
 
 ### 串行执行
 
