@@ -415,7 +415,6 @@
       <span id="status-text" data-i18n="connecting">连接中...</span>
     </div>
     <div class="right">
-      <button class="header-btn" id="memory-btn" data-i18n="memoryButton">🧠 记忆</button>
       <button class="header-btn" id="settings-btn" style="display:none;" data-i18n="settingsButton">⚙️ 设置</button>
       <div id="user-avatar" onclick="toggleUserMenu(event)">
         <span id="avatar-text"></span>
@@ -423,6 +422,10 @@
       <div id="user-menu" class="user-menu-dropdown">
         <div class="user-menu-header">
           <span id="user-menu-name"></span>
+        </div>
+        <div class="user-menu-item" onclick="openMemory()">
+          <span class="umi-icon">🧠</span>
+          <span data-i18n="memoryButton">记忆</span>
         </div>
         <div class="user-menu-item" onclick="openChangePassword()">
           <span class="umi-icon">🔑</span>
@@ -2221,7 +2224,6 @@ document.getElementById('artifact-preview-modal').addEventListener('click', func
 
 // 设置按钮
 document.getElementById('settings-btn').onclick = openSettings;
-document.getElementById('memory-btn').onclick = openMemory;
 // 新建会话按钮
 document.getElementById('new-session-btn').onclick = newSession;
 // 语言切换已移至用户菜单，不再需要 select change 事件
