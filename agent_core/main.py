@@ -1224,8 +1224,9 @@ def list_sessions(request: Request):
         )
         for s in raw
     ]
-    current_uid = agent._user_id if agent else "default"
-    return SessionListResponse(sessions=sessions, current_id=current_uid)
+    # 返回会话列表中最新的会话 ID，如果没有则返回 "default"
+    current_id = sessions[0].id if sessions else "default"
+    return SessionListResponse(sessions=sessions, current_id=current_id)
 
 
 @app.get("/sessions/{session_id}", response_model=SessionMessagesResponse)
