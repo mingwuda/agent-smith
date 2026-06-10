@@ -349,7 +349,7 @@ def web_search(query: str, max_results: int = 5, recency_days: int = 0) -> str:
     search_backends = []
     if _TAVILY_SEARCH_ENABLED:
         search_backends.append(("Tavily", lambda q, n: _search_tavily(q, n, recency_days)))
-    search_backends.extend((("Bing", _search_bing), ("搜狗", _search_sogou), ("DuckDuckGo", _search_duckduckgo)))
+    search_backends.extend((("Bing", _search_bing), ("搜狗", _search_sogou)))
 
     for source, search_fn in search_backends:
         already = time.time() - _search_attempt_start
@@ -370,7 +370,7 @@ def web_search(query: str, max_results: int = 5, recency_days: int = 0) -> str:
             errors.append(f"{source}: {type(e).__name__}: {e}")
 
     return (
-        f"❌ 未能获取「{normalized_query}」的搜索结果。已尝试 Bing、搜狗和 DuckDuckGo。\n"
+        f"❌ 未能获取「{normalized_query}」的搜索结果。已尝试 Bing 和搜狗。\n"
         + _current_date_context()
         + (f"\n搜索提示: {note}" if note else "")
         + "\n"
