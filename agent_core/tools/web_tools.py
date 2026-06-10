@@ -244,6 +244,42 @@ def _search_sogou(query: str, max_results: int) -> list[dict]:
     return results
 
 
+def _search_baidu(query: str, max_results: int) -> list[dict]:
+    """通过百度搜索，国内可用。"""
+    from bs4 import BeautifulSoup
+    import urllib.parse
+
+    encoded = urllib.parse.quote(query)
+    url = f"https://www.baidu.com/s?wd={encoded}&rn={max_results}"
+
+    resp = _http_get(url)
+    resp.raise_for_status()
+    resp.encoding = "utf-8"
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    results = []
+
+    for item in soup.select(".result, .c-container"):
+        title_el = item.select_one("h3 a, .t a")
+        snippet_el = item.select_one(".c-abstract, .content-right_8Zs40, .c-span-last")
+        if not title_el:
+            continue
+        title = title_el.get_text(strip=True)
+        href = title_el.get("href", "")
+        # 百度结果链接可能是跳转 URL，尝试提取真实链接
+        if href.startswith("http://www.baidu.com/link?") or href.startswith("https://www.baidu.com/link?"):
+            from urllib.parse import parse_qs, urlparse
+            parsed = parse_qs(urlparse(href).query)
+            href = parsed.get("url", [href])[0]
+        snippet = snippet_el.get_text(strip=True) if snippet_el else ""
+        if title and href:
+            results.append({"title": title, "href": href, "body": snippet})
+        if len(results) >= max_results:
+            break
+
+    return results
+
+
 def _search_duckduckgo(query: str, max_results: int) -> list[dict]:
     """通过 DuckDuckGo HTML 结果页搜索，作为 Bing 失败时的备用源。"""
     from bs4 import BeautifulSoup
@@ -349,7 +385,7 @@ def web_search(query: str, max_results: int = 5, recency_days: int = 0) -> str:
     search_backends = []
     if _TAVILY_SEARCH_ENABLED:
         search_backends.append(("Tavily", lambda q, n: _search_tavily(q, n, recency_days)))
-    search_backends.extend((("Bing", _search_bing), ("搜狗", _search_sogou)))
+    search_backends.extend((("Bing", _search_bing), ("百度", _search_baidu), ("搜狗", _search_sogou)))
 
     for source, search_fn in search_backends:
         already = time.time() - _search_attempt_start
@@ -370,7 +406,7 @@ def web_search(query: str, max_results: int = 5, recency_days: int = 0) -> str:
             errors.append(f"{source}: {type(e).__name__}: {e}")
 
     return (
-        f"❌ 未能获取「{normalized_query}」的搜索结果。已尝试 Bing 和搜狗。\n"
+        f"❌ 未能获取「{normalized_query}」的搜索结果。已尝试 Bing、百度、搜狗。\n"
         + _current_date_context()
         + (f"\n搜索提示: {note}" if note else "")
         + "\n"
