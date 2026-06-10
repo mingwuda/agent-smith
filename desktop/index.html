@@ -1756,6 +1756,9 @@ async function loadSessionMessages(sessionId) {
         addMessage(t('emptySession'), 'system');
       }
     }
+    // 会话消息加载完成后强制滚动到底部
+    const container = document.getElementById('messages');
+    if (container) container.scrollTop = container.scrollHeight;
   } catch (e) {
     console.error('[loadSession] failed:', e);
   }
