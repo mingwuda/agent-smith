@@ -101,13 +101,13 @@ def _detect_tool_loop(calls: list[dict], recursion_limit: int) -> str:
     if len(calls) < 4:
         return ""
 
-    # ── 检测1：同一工具+同一参数严格重复 ≥3 次（单步循环）──
+    # ── 检测1：同一工具+同一参数严格重复 ≥5 次（单步循环）──
     latest = calls[-1]
     latest_sig = latest.get("signature", "")
     if latest_sig and latest.get("tool") not in {"web_search", "web_fetch"}:
         last6_sigs = [item.get("signature", "") for item in calls[-6:] if item.get("signature")]
         count = last6_sigs.count(latest_sig)
-        if count >= 3:
+        if count >= 5:
             return f"最近 6 次工具调用中，同一工具和参数严格重复了 {count} 次"
 
     # ── 检测2：参数循环（A→B→A→B 模式）──
@@ -129,7 +129,7 @@ def _detect_tool_loop(calls: list[dict], recursion_limit: int) -> str:
                      for i in range(0, len(recent8)-1, 2)]
             if len(pairs) >= 3:
                 last_pair = pairs[-1]
-                if pairs.count(last_pair) >= 2:
+                if pairs.count(last_pair) >= 3:
                     return (
                         f"工具调用出现循环模式：连续调用 ({last_pair[0]} → {last_pair[1]}) 重复了 {pairs.count(last_pair)} 次"
                     )
