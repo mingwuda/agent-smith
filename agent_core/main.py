@@ -345,6 +345,11 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
 class MemoryRequest(BaseModel):
     key: str
     value: Any
@@ -510,6 +515,28 @@ def auth_login(req: LoginRequest, response: Response):
 @app.post("/auth/logout")
 def auth_logout(response: Response):
     response.delete_cookie(AUTH_COOKIE_NAME)
+    return {"status": "ok"}
+
+
+@app.post("/auth/change-password")
+def auth_change_password(req: "ChangePasswordRequest", request: Request):
+    """修改当前登录用户的密码"""
+    uid = _get_current_user(request)
+    auth = _auth_config()
+    users = auth.get("users", {})
+    expected = users.get(uid)
+    if not expected or not hmac.compare_digest(req.current_password, expected):
+        raise HTTPException(403, "当前密码错误")
+    if len(req.new_password) < 4:
+        raise HTTPException(400, "新密码至少需要 4 个字符")
+    users[uid] = req.new_password
+    AUTH_FILE.parent.mkdir(parents=True, exist_ok=True)
+    AUTH_FILE.write_text(json.dumps(auth, ensure_ascii=False, indent=2), encoding="utf-8")
+    if hasattr(_auth_config, "_cache"):
+        try:
+            del _auth_config._cache
+        except AttributeError:
+            pass
     return {"status": "ok"}
 
 

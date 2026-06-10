@@ -56,10 +56,16 @@
   #quick-provider-select:focus { border-color:#007aff; }
   .header-btn { padding:6px 12px; background:#f0f0f0; border:1px solid #ddd; border-radius:8px; font-size:13px; cursor:pointer; transition:all .2s; }
   .header-btn:hover { background:#e0e0e0; }
-  #logout-btn { padding:6px 12px; background:transparent; border:1px solid #ddd; border-radius:8px; font-size:13px; cursor:pointer; transition:all .2s; color:#8e8e93; }
-  #logout-btn:hover { background:#fbe9e7; border-color:#ff453a; color:#ff453a; }
-  #language-select { padding:6px 8px; background:#fff; border:1px solid #ddd; border-radius:8px; font-size:13px; outline:none; }
-  #language-select:focus { border-color:#007aff; }
+  #user-avatar { width:36px; height:36px; border-radius:50%; background:#007aff; color:#fff; display:flex; align-items:center; justify-content:center; cursor:pointer; font-size:15px; font-weight:600; flex-shrink:0; user-select:none; transition:opacity .15s; }
+  #user-avatar:hover { opacity:.85; }
+  .user-menu-dropdown { position:absolute; top:100%; right:0; min-width:190px; background:#fff; border:1px solid #e0e0e3; border-radius:10px; box-shadow:0 8px 24px rgba(0,0,0,.12); padding:6px 0; z-index:1000; display:none; margin-top:4px; }
+  .user-menu-dropdown.show { display:block; }
+  .user-menu-header { padding:8px 14px 6px; font-size:14px; font-weight:600; color:#333; border-bottom:1px solid #eee; margin-bottom:4px; }
+  .user-menu-item { display:flex; align-items:center; gap:10px; padding:8px 14px; font-size:13px; color:#555; cursor:pointer; transition:background .1s; }
+  .user-menu-item:hover { background:#f5f5f7; }
+  .user-menu-item .umi-icon { font-size:15px; width:20px; text-align:center; }
+  .user-menu-divider { height:1px; background:#eee; margin:4px 0; }
+  /* 用户头像下拉菜单样式在前 */
   
   #messages { flex:1; overflow-y:auto; padding:20px 24px; }
   .msg { margin-bottom:16px; max-width:85%; padding:12px 18px; border-radius:14px; font-size:14px; line-height:1.6; word-break:break-word; }
@@ -230,6 +236,9 @@
   /* 设置弹窗 */
   .modal-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.4); z-index:100; align-items:center; justify-content:center; }
   .modal-overlay.active { display:flex; }
+  .modal-input { width:100%; padding:10px 12px; border:1px solid #ddd; border-radius:8px; font-size:14px; margin:4px 0 12px; box-sizing:border-box; outline:none; background:#f9f9f9; }
+  .modal-input:focus { border-color:#007aff; background:#fff; }
+  .modal-error { color:#d70015; font-size:13px; margin:4px 0; }
   .modal { background:#fff; border-radius:16px; padding:24px 28px; width:480px; max-width:90vw; box-shadow:0 20px 60px rgba(0,0,0,0.3); }
   .modal h2 { font-size:18px; margin-bottom:20px; }
   .form-group { margin-bottom:16px; }
@@ -318,9 +327,6 @@
     #header .left { gap:4px; }
     #header .right { gap:4px; }
     #status-text { display:none; }
-    #language-select { max-width:72px; padding:6px 4px; font-size:12px; }
-    #logout-btn { font-size:0; padding:6px 8px; }
-    #logout-btn::after { content:"🚪"; font-size:16px; }
     #sidebar-toggle { font-size:18px; padding:2px; }
     #status-dot { width:6px; height:6px; flex-shrink:0; }
     #input-area { padding:8px 10px 14px; }
@@ -398,13 +404,29 @@
       <span id="status-text" data-i18n="connecting">连接中...</span>
     </div>
     <div class="right">
-      <select id="language-select" aria-label="Language">
-        <option value="zh-CN">中文</option>
-        <option value="en">English</option>
-      </select>
       <button class="header-btn" id="memory-btn" data-i18n="memoryButton">🧠 记忆</button>
       <button class="header-btn" id="settings-btn" style="display:none;" data-i18n="settingsButton">⚙️ 设置</button>
-      <button id="logout-btn" onclick="logout()" data-i18n="logoutButton">🚪 登出</button>
+      <div id="user-avatar" onclick="toggleUserMenu(event)">
+        <span id="avatar-text"></span>
+      </div>
+      <div id="user-menu" class="user-menu-dropdown">
+        <div class="user-menu-header">
+          <span id="user-menu-name"></span>
+        </div>
+        <div class="user-menu-item" onclick="openChangePassword()">
+          <span class="umi-icon">🔑</span>
+          <span data-i18n="changePassword">修改密码</span>
+        </div>
+        <div class="user-menu-item" onclick="switchLanguage()">
+          <span class="umi-icon">🌐</span>
+          <span id="user-menu-lang"></span>
+        </div>
+        <div class="user-menu-divider"></div>
+        <div class="user-menu-item" onclick="logout()">
+          <span class="umi-icon">🚪</span>
+          <span data-i18n="logoutButton">登出</span>
+        </div>
+      </div>
     </div>
   </div>
   
@@ -421,6 +443,29 @@
       </button>
     </div>
     <input type="file" id="file-input" accept="image/*,.zip" multiple style="display:none" />
+  </div>
+
+  <!-- ── 修改密码弹窗 ── -->
+  <div id="change-password-overlay" class="modal-overlay" onclick="if(event.target===this)closeChangePassword()">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 data-i18n="changePassword">修改密码</h3>
+        <button class="modal-close" onclick="closeChangePassword()">✕</button>
+      </div>
+      <div class="modal-body">
+        <label data-i18n="currentPassword">当前密码</label>
+        <input type="password" id="cp-current" class="modal-input" />
+        <label data-i18n="newPassword">新密码</label>
+        <input type="password" id="cp-new" class="modal-input" />
+        <label data-i18n="confirmPassword">确认新密码</label>
+        <input type="password" id="cp-confirm" class="modal-input" />
+        <p id="cp-error" class="modal-error" style="display:none"></p>
+      </div>
+      <div class="modal-footer">
+        <button class="modal-btn" onclick="closeChangePassword()" data-i18n="cancelButton">取消</button>
+        <button class="modal-btn modal-btn-primary" onclick="submitChangePassword()" data-i18n="saveButton">保存</button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -678,6 +723,10 @@ const I18N = {
     agentUnavailable: '⚠️ 无法连接到 Agent 服务。请在终端运行：',
     refreshAfterStart: '然后刷新页面。',
     tokensSuffix: ' tokens',
+    changePassword: '修改密码',
+    currentPassword: '当前密码',
+    newPassword: '新密码',
+    confirmPassword: '确认新密码',
   },
   en: {
     appTitle: 'Desktop Agent',
@@ -803,6 +852,10 @@ const I18N = {
     agentUnavailable: '⚠️ Cannot connect to the Agent service. Run this in a terminal:',
     refreshAfterStart: 'Then refresh this page.',
     tokensSuffix: ' tokens',
+    changePassword: 'Change Password',
+    currentPassword: 'Current Password',
+    newPassword: 'New Password',
+    confirmPassword: 'Confirm Password',
   },
 };
 
@@ -826,7 +879,7 @@ function applyI18n() {
   document.querySelectorAll('[data-i18n-title]').forEach(el => {
     el.setAttribute('title', t(el.dataset.i18nTitle));
   });
-  if (languageSelect) languageSelect.value = currentLanguage;
+  updateLangLabel();
   setSendButtonRunning(isLoading);
 }
 
@@ -1802,6 +1855,18 @@ async function loadCurrentUser() {
   if (!isAdmin) {
     document.getElementById('settings-modal').classList.remove('active');
   }
+  // 更新用户头像
+  const avatarText = document.getElementById('avatar-text');
+  const userName = document.getElementById('user-menu-name');
+  if (currentUser) {
+    const display = currentUser.name || currentUser.id || '?';
+    avatarText.textContent = display.charAt(0).toUpperCase();
+    avatarText.title = display;
+    userName.textContent = display;
+  } else {
+    avatarText.textContent = '?';
+    userName.textContent = '?';
+  }
   return currentUser;
 }
 
@@ -2148,19 +2213,94 @@ document.getElementById('settings-btn').onclick = openSettings;
 document.getElementById('memory-btn').onclick = openMemory;
 // 新建会话按钮
 document.getElementById('new-session-btn').onclick = newSession;
-languageSelect.addEventListener('change', () => {
-  currentLanguage = languageSelect.value;
-  localStorage.setItem('desktop-agent-language', currentLanguage);
-  applyI18n();
-  renderSessionList(sessionsCache, currentSessionId);
-  refreshSkills();
-  checkHealth();
-});
+// 语言切换已移至用户菜单，不再需要 select change 事件
 
 // 登出
 function logout() {
+  closeUserMenu();
   fetch('/auth/logout', { method: 'POST' }).then(() => {
     window.location.href = '/login';
+  });
+}
+
+// ── 用户头像下拉菜单 ──
+function toggleUserMenu(event) {
+  event.stopPropagation();
+  document.getElementById('user-menu').classList.toggle('show');
+}
+// 点击其他地方关闭
+document.addEventListener('click', function(e) {
+  if (!e.target.closest('#user-avatar') && !e.target.closest('#user-menu')) {
+    closeUserMenu();
+  }
+});
+function closeUserMenu() {
+  document.getElementById('user-menu').classList.remove('show');
+}
+
+// ── 切换语言（下拉菜单中） ──
+function switchLanguage() {
+  closeUserMenu();
+  currentLanguage = currentLanguage === 'zh-CN' ? 'en' : 'zh-CN';
+  localStorage.setItem('desktop-agent-language', currentLanguage);
+  applyI18n();
+  updateLangLabel();
+  renderSessionList(sessionsCache, currentSessionId);
+  refreshSkills();
+  checkHealth();
+}
+function updateLangLabel() {
+  const el = document.getElementById('user-menu-lang');
+  if (el) el.textContent = currentLanguage === 'zh-CN' ? 'English' : '中文';
+}
+
+// ── 修改密码 ──
+function openChangePassword() {
+  closeUserMenu();
+  document.getElementById('cp-current').value = '';
+  document.getElementById('cp-new').value = '';
+  document.getElementById('cp-confirm').value = '';
+  document.getElementById('cp-error').style.display = 'none';
+  document.getElementById('change-password-overlay').classList.add('active');
+}
+function closeChangePassword() {
+  document.getElementById('change-password-overlay').classList.remove('active');
+}
+function submitChangePassword() {
+  const cur = document.getElementById('cp-current').value;
+  const pwd = document.getElementById('cp-new').value;
+  const confirm = document.getElementById('cp-confirm').value;
+  const errEl = document.getElementById('cp-error');
+  if (!cur || !pwd || !confirm) {
+    errEl.textContent = currentLanguage === 'en' ? 'Please fill all fields' : '请填写所有字段';
+    errEl.style.display = 'block';
+    return;
+  }
+  if (pwd !== confirm) {
+    errEl.textContent = currentLanguage === 'en' ? 'Passwords do not match' : '两次密码不一致';
+    errEl.style.display = 'block';
+    return;
+  }
+  if (pwd.length < 4) {
+    errEl.textContent = currentLanguage === 'en' ? 'Password must be at least 4 characters' : '密码至少需要 4 个字符';
+    errEl.style.display = 'block';
+    return;
+  }
+  fetch('/auth/change-password', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ current_password: cur, new_password: pwd }),
+  }).then(r => {
+    if (r.ok) {
+      closeChangePassword();
+      const msg = currentLanguage === 'en' ? 'Password changed successfully' : '密码修改成功';
+      addMessage(msg, 'system');
+    } else {
+      return r.json().then(d => { throw new Error(d.detail || 'Failed'); });
+    }
+  }).catch(e => {
+    errEl.textContent = e.message;
+    errEl.style.display = 'block';
   });
 }
 
