@@ -906,7 +906,7 @@ def _format_loaded_skills() -> str:
     return "\n".join(lines)
 
 
-def _save_assistant_result(uid: str, session_id: str, user_message: str, result: str, steps: list[dict] | None = None):
+def _save_assistant_result(uid: str, session_id: str, user_message: str, result: str, steps: Optional[list[dict]] = None):
     content = result
     if steps:
         content = json.dumps({"text": result, "steps": steps}, ensure_ascii=False)

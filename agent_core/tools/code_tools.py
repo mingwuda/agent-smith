@@ -6,6 +6,7 @@ import sys
 import threading
 from io import StringIO
 from pathlib import Path
+from typing import Optional
 
 from langchain_core.tools import tool
 
@@ -44,7 +45,7 @@ class _ProgressIO(StringIO):
         return n
 
 
-def _gen_diff_lines(old_content: str, new_content: str) -> list[dict] | None:
+def _gen_diff_lines(old_content: str, new_content: str) -> Optional[list[dict]]:
     """对比新旧内容字符串，返回行级 diff 列表"""
     old_lines = old_content.splitlines()
     new_lines = new_content.splitlines()
@@ -79,7 +80,7 @@ def _diff_to_json(lines: list[dict], added: int, removed: int) -> str:
     return f"\n{DIFF_MARKER}{payload}"
 
 
-def _gen_file_diff(before_path: Path, after_content: str) -> str | None:
+def _gen_file_diff(before_path: Path, after_content: str) -> Optional[str]:
     """对比旧文件和 new_content，返回 diff JSON 字符串或 None（供 file_tools 使用）"""
     old_content = ""
     try:

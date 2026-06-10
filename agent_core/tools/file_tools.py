@@ -25,7 +25,7 @@ def resolve_workspace() -> Path:
     return _workspace or Path.home() / "agent_workspace"
 
 
-def _generate_diff(file_path: Path, new_content: str, old_content_override: str | None = None) -> str:
+def _generate_diff(file_path: Path, new_content: str, old_content_override: Optional[str] = None) -> str:
     """生成行级 diff JSON，通过 __DIFF__ 标记嵌入返回值尾。"""
     old_content = old_content_override
     if old_content is None and file_path.exists() and file_path.is_file():

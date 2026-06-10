@@ -7,7 +7,7 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Literal, Optional
 
 from langchain_core.messages import HumanMessage
 from langchain_core.tools import tool
@@ -72,7 +72,7 @@ SUBAGENT_PROMPTS = {
 
 
 # 各子代理类型可用的工具（None 表示全部可用，除了委托工具）
-SUBAGENT_TOOL_WHITELIST: dict[str, list[str] | None] = {
+SUBAGENT_TOOL_WHITELIST: dict[str, Optional[list[str]]] = {
     "searcher": ["web_search", "web_fetch"],
 }
 
@@ -82,7 +82,7 @@ class SubagentManager:
 
     def __init__(self):
         self._tasks: dict[str, SubagentTask] = {}
-        self._config: AgentConfig | None = None
+        self._config: Optional[AgentConfig] = None
         self._tools: list = []
         # 当前批次任务列表（按 capsule_id 索引），供前端 SSE 轮询用
         self._current_batch: list[SubagentTask] = []
@@ -108,7 +108,7 @@ class SubagentManager:
     def list_agent_types(self) -> list[str]:
         return sorted(SUBAGENT_PROMPTS)
 
-    def get_task(self, task_id: str) -> SubagentTask | None:
+    def get_task(self, task_id: str) -> Optional[SubagentTask]:
         return self._tasks.get(task_id)
 
     def get_progress_logs(self, capsule_id: int) -> tuple[list[dict], int, bool]:

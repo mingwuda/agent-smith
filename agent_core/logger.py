@@ -19,6 +19,7 @@ import os
 import sys
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
+from typing import Optional, Union
 
 DEFAULT_LOG_DIR = Path.home() / ".desktop_agent" / "logs"
 DEFAULT_LOG_FILE = "agent.log"
@@ -34,9 +35,9 @@ _initialized = False
 
 
 def setup_logging(
-    log_dir: str | Path | None = None,
+    log_dir: Optional[Union[str, Path]] = None,
     log_file: str = DEFAULT_LOG_FILE,
-    level: str | int | None = None,
+    level: Optional[Union[str, int]] = None,
     console: bool = True,
     backup_count: int = 4,
 ) -> logging.Logger:
