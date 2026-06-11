@@ -975,7 +975,27 @@ async def run_agent(req: RunRequest, request: Request):
     result = _append_artifact_links(result, uid, artifact_paths)
     _save_assistant_result(uid, session_id, req.message, result)
     
+    # 后台反思
+    asyncio.create_task(_async_reflect(uid, req.message, steps, result))
+    
     return RunResponse(result=result, steps=steps)
+
+
+async def _async_reflect(uid: str, user_message: str, steps: list[dict], result: str):
+    """后台任务反思，总结可复用模式并存入长期记忆。"""
+    try:
+        if not agent:
+            return
+        reflection = await agent.reflect_on_task(user_message, steps, result)
+        if reflection:
+            from memory.local_memory import get_memory
+            key = f"_learned_{hashlib.md5(reflection.encode()).hexdigest()[:12]}"
+            mem = get_memory(uid)
+            existing = mem.get(key)
+            if existing is None:  # 不覆盖已有记录
+                mem.set(key, reflection)
+    except Exception:
+        pass
 
 
 @app.post("/run/stream")
@@ -1121,6 +1141,8 @@ async def run_agent_stream(req: RunRequest, request: Request):
             err_msg = f"服务内部错误: {e}"
             yield f"data: {json.dumps({'type': 'done', 'content': err_msg}, ensure_ascii=False)}\n\n"
         yield "data: [DONE]\n\n"
+        # 后台反思
+        asyncio.create_task(_async_reflect(uid, req.message, collected_steps, final_content or ""))
     
     return StreamingResponse(
         event_stream(), media_type="text/event-stream",

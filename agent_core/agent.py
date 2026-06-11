@@ -8,7 +8,7 @@ from typing import AsyncGenerator, Optional
 from urllib.parse import urlparse
 
 from langchain_openai import ChatOpenAI
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.prebuilt import create_react_agent
 from langgraph.checkpoint.memory import MemorySaver
 
@@ -401,6 +401,12 @@ def _extract_steps_from_messages(messages: list) -> list[dict]:
     return steps
 
 
+def _truncate_args(args: object, max_len: int = 80) -> str:
+    """截断工具参数，用于反思日志。"""
+    text = json.dumps(args, ensure_ascii=False) if isinstance(args, dict) else str(args)
+    return text[:max_len] + "…" if len(text) > max_len else text
+
+
 class DesktopAgent:
     """桌面 AI 智能体"""
     
@@ -465,12 +471,74 @@ class DesktopAgent:
             + "## 当前日期与时间\n"
             + f"- 当前日期：{now.date().isoformat()}\n"
             + f"- 当前时间：{now.strftime('%Y-%m-%d %H:%M:%S %Z%z')}\n"
-            + "- 遇到“今天/昨日/今年/最新/current/latest/recent”等相对时间时，必须以这里的日期为准。\n"
+            + "- 遇到\u201c今天/昨日/今年/最新/current/latest/recent\u201d等相对时间时，必须以这里的日期为准。\n"
         )
         skill_block = self.registry.generate_prompt_block()
         if skill_block:
             prompt += skill_block
+
+        # ── 注入长期记忆中积累的进化模式 ──
+        try:
+            patterns = self._load_learned_patterns()
+            if patterns:
+                prompt += "\n\n## 从过往任务中学到的经验\n" + patterns
+        except Exception:
+            pass
+
         return prompt
+
+    def _load_learned_patterns(self) -> str:
+        """从长期记忆中读取经验模式，用于注入系统提示。"""
+        if not self._user_id:
+            return ""
+        from memory.local_memory import get_memory
+        mem = get_memory(self._user_id)
+        items = mem.list_items()
+        learned = []
+        for key, val in items:
+            if key.startswith("_learned_") and isinstance(val, str) and val.strip():
+                learned.append(f"- {val.strip()}")
+        return "\n".join(learned) if learned else ""
+
+    async def reflect_on_task(
+        self,
+        user_message: str,
+        steps: list[dict],
+        final_result: str,
+    ) -> str | None:
+        """任务完成后反思，总结可复用的模式经验。无工具调用或无有价值模式时返回 None。"""
+        # 只对涉及工具调用的任务反思
+        tool_steps = [s for s in steps if s.get("type") == "tool_start"]
+        if not tool_steps:
+            return None
+
+        tool_summary = "\n".join(
+            f"- {s.get('tool', '?')}({_truncate_args(s.get('args', {}))})"
+            for s in tool_steps
+        )
+
+        prompt = (
+            "你是一个 AI 助手，刚刚完成了一个多步骤任务。请回顾执行过程，总结可复用的经验。\n\n"
+            f"## 用户需求\n{user_message[:300]}\n\n"
+            f"## 工具调用过程\n{tool_summary}\n\n"
+            f"## 最终结果\n{final_result[:500]}\n\n"
+            "请用 20 字以内总结这个任务中是否有可复用的模式、工作流或经验教训。\n"
+            "- 如果有用且可复用的模式，回复格式：关键词|一句话总结\n"
+            "  例如：zip分析|用户上传zip后先解压再逐文件分析\n"
+            "- 如果只是普通的问答或一次性工具调用，回复：无需记录"
+        )
+
+        llm = self._build_llm()
+        # 用较短超时，避免阻塞后续请求
+        llm.request_timeout = 15
+        try:
+            resp = await llm.ainvoke([HumanMessage(content=prompt)])
+            text = str(resp.content).strip()
+            if not text or "无需记录" in text:
+                return None
+            return text
+        except Exception:
+            return None
 
     def _record_model_usage(self, input_tokens: int, output_tokens: int, cached_tokens: int = 0, source: str = "llm"):
         if input_tokens <= 0 and output_tokens <= 0:
