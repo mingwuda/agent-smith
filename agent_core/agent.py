@@ -101,7 +101,7 @@ def _detect_tool_loop(calls: list[dict], recursion_limit: int) -> str:
     if len(calls) < 4:
         return ""
 
-    # ── 检测1：同一工具+同一参数严格重复 ≥5 次（单步循环）──
+    # ── 检测1：同一工具+同一参数严格重复 ≥8 次（单步循环）──
     latest = calls[-1]
     latest_sig = latest.get("signature", "")
     if latest_sig and latest.get("tool") not in {"web_search", "web_fetch"}:
@@ -111,27 +111,24 @@ def _detect_tool_loop(calls: list[dict], recursion_limit: int) -> str:
             return f"最近 6 次工具调用中，同一工具和参数严格重复了 {count} 次"
 
     # ── 检测2：参数循环（A→B→A→B 模式）──
-    if len(calls) >= 6:
-        recent8 = calls[-8:]
-        sigs = [c.get("signature", "") for c in recent8 if c.get("signature")]
-        if len(sigs) >= 6:
-            # 检查最近 2 或 3 个签名是否与之前形成循环
-            # 例如: [A, B, A, B] → last2 pairs match
-            # 或者: [A, A, B, A, A, B] → last3 pairs match
-            for window in (2, 3):
+    if len(calls) >= 8:
+        recent12 = calls[-12:]
+        sigs = [c.get("signature", "") for c in recent12 if c.get("signature")]
+        if len(sigs) >= 8:
+            # 检查最近 2、3、4 个签名是否与之前形成循环
+            for window in (2, 3, 4):
                 if len(sigs) >= window * 2 and sigs[-window:] == sigs[-window*2:-window]:
                     return (
                         f"工具调用出现循环模式：最近 {window*2} 次的形式为 "
                         + " → ".join(sigs[-window*2:])
                     )
-            # 更松散的循环：最后两对连续工具名相同
-            pairs = [(recent8[i].get("tool", ""), recent8[i+1].get("tool", ""))
-                     for i in range(0, len(recent8)-1, 2)]
-            if len(pairs) >= 3:
-                last_pair = pairs[-1]
-                if pairs.count(last_pair) >= 3:
+            # 更松散的循环：连续 N 个工具名相同
+            tool_names = [c.get("tool", "") for c in recent12 if c.get("tool")]
+            if len(tool_names) >= 6:
+                last5 = tool_names[-5:]
+                if len(set(last5)) == 1 and tool_names.count(last5[0]) >= 5:
                     return (
-                        f"工具调用出现循环模式：连续调用 ({last_pair[0]} → {last_pair[1]}) 重复了 {pairs.count(last_pair)} 次"
+                        f"工具调用陷入循环：最近 5 次连续都是 {last5[0]}"
                     )
 
     estimated_graph_steps = len(calls) * 2 + 1
