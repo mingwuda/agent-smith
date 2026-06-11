@@ -159,7 +159,7 @@ def _is_authenticated(request: Request) -> bool:
 
 
 def _auth_exempt_path(path: str) -> bool:
-    return path in {"/login", "/auth/login", "/auth/logout", "/auth/token-login", "/health"} or path.startswith("/favicon")
+    return path in {"/login", "/auth/login", "/auth/logout", "/auth/token-login", "/health"} or path.startswith("/favicon") or path == "/user-images/download"
 
 
 def _wants_html(request: Request) -> bool:
@@ -1384,9 +1384,10 @@ USER_IMG_DIR = Path.home() / ".desktop_agent" / "user_images"
 
 
 @app.get("/user-images/download")
-def download_user_image(name: str, request: Request):
-    """下载用户上传的图片，供图生图模型等工具使用。"""
-    uid = _get_current_user(request)
+def download_user_image(name: str, request: Request, uid: str = ""):
+    """下载用户上传的图片，供图生图模型等工具使用（免认证，uid 由 URL 提供）。"""
+    if not uid:
+        uid = _get_current_user(request)
     img_path = USER_IMG_DIR / uid / name
     # 路径安全校验：不允许跨目录
     try:
@@ -1405,7 +1406,7 @@ def _user_image_urls(uid: str, image_paths: list[str], request: Request) -> list
     urls: list[str] = []
     for fpath in image_paths:
         name = Path(fpath).name
-        url = f"{base_url}/user-images/download?name={quote(name)}"
+        url = f"{base_url}/user-images/download?name={quote(name)}&uid={quote(uid)}"
         urls.append(url)
     return urls
 
