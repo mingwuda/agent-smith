@@ -122,14 +122,6 @@ def _detect_tool_loop(calls: list[dict], recursion_limit: int) -> str:
                         f"工具调用出现循环模式：最近 {window*2} 次的形式为 "
                         + " → ".join(sigs[-window*2:])
                     )
-            # 更松散的循环：连续 N 个工具名相同
-            tool_names = [c.get("tool", "") for c in recent12 if c.get("tool")]
-            if len(tool_names) >= 6:
-                last5 = tool_names[-5:]
-                if len(set(last5)) == 1 and tool_names.count(last5[0]) >= 5:
-                    return (
-                        f"工具调用陷入循环：最近 5 次连续都是 {last5[0]}"
-                    )
 
     estimated_graph_steps = len(calls) * 2 + 1
     if estimated_graph_steps >= max(6, recursion_limit - 3):
