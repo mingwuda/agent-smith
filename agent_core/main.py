@@ -952,6 +952,17 @@ async def run_agent(req: RunRequest, request: Request):
                 agent_message = req.message + "\n\n" + manifest
         except (json.JSONDecodeError, TypeError):
             pass
+    # ── 解析图片下载地址，追加到 LLM 消息中供图生图模型使用 ──
+    if attachments and any(a.get("mime_type", "").startswith("image/") for a in attachments):
+        try:
+            parsed = json.loads(display_text)
+            img_paths = parsed.get("images", [])
+            if img_paths:
+                img_urls = _user_image_urls(uid, img_paths, request)
+                url_lines = "\n".join(f"- {url}" for url in img_urls)
+                agent_message += f"\n\n[上传的图片已在服务器保存，以下为图片下载地址可供图生图模型使用：]\n{url_lines}"
+        except (json.JSONDecodeError, TypeError):
+            pass
     if _is_skill_inventory_query(req.message):
         result = _format_loaded_skills()
         _save_assistant_result(uid, session_id, req.message, result)
@@ -1024,6 +1035,17 @@ async def run_agent_stream(req: RunRequest, request: Request):
             manifest = parsed.get("zip_manifest", "")
             if manifest:
                 agent_message = req.message + "\n\n" + manifest
+        except (json.JSONDecodeError, TypeError):
+            pass
+    # ── 解析图片下载地址，追加到 LLM 消息中供图生图模型使用 ──
+    if attachments and any(a.get("mime_type", "").startswith("image/") for a in attachments):
+        try:
+            parsed = json.loads(display_text)
+            img_paths = parsed.get("images", [])
+            if img_paths:
+                img_urls = _user_image_urls(uid, img_paths, request)
+                url_lines = "\n".join(f"- {url}" for url in img_urls)
+                agent_message += f"\n\n[上传的图片已在服务器保存，以下为图片下载地址可供图生图模型使用：]\n{url_lines}"
         except (json.JSONDecodeError, TypeError):
             pass
     if _is_skill_inventory_query(req.message):
@@ -1354,6 +1376,38 @@ def download_artifact(path: str, request: Request):
     uid = _get_current_user(request)
     target = _resolve_artifact_path(uid, path)
     return FileResponse(target, filename=target.name)
+
+
+# ---------- 用户上传图片下载 ----------
+
+USER_IMG_DIR = Path.home() / ".desktop_agent" / "user_images"
+
+
+@app.get("/user-images/download")
+def download_user_image(name: str, request: Request):
+    """下载用户上传的图片，供图生图模型等工具使用。"""
+    uid = _get_current_user(request)
+    img_path = USER_IMG_DIR / uid / name
+    # 路径安全校验：不允许跨目录
+    try:
+        resolved = img_path.resolve(strict=False)
+        resolved.relative_to((USER_IMG_DIR / uid).resolve())
+    except (ValueError, RuntimeError, OSError) as exc:
+        raise HTTPException(403, "不允许访问该路径") from exc
+    if not resolved.exists() or not resolved.is_file():
+        raise HTTPException(404, "图片文件不存在")
+    return FileResponse(resolved, media_type="image/png")
+
+
+def _user_image_urls(uid: str, image_paths: list[str], request: Request) -> list[str]:
+    """将本地图片路径转换为可下载的 HTTP URL，供 LLM 工具使用。"""
+    base_url = str(request.base_url).rstrip("/")
+    urls: list[str] = []
+    for fpath in image_paths:
+        name = Path(fpath).name
+        url = f"{base_url}/user-images/download?name={quote(name)}"
+        urls.append(url)
+    return urls
 
 
 @app.get("/artifacts/preview")
