@@ -13,15 +13,25 @@
 ### 1. 理解用户需求
 - 解析用户想要什么数据、涉及哪些表、需要什么计算（统计、分组、排序等）
 - 如果不确定涉及哪些表，先调用 `db_schema` 列出所有可用表
+- 如果不确定用户要查哪个数据库，先调用 `db_connections` 查看所有可用数据库连接
 
 ### 2. 了解表结构
-- 始终先调用 `db_schema` 了解相关表的结构，包括列名、类型、主键
+- **始终先调用 `db_schema`** 了解相关表的结构，包括列名、类型、主键
 - 如果有多个相关表，分别查看它们的结构
 - 注意表之间的关系（通过列名推断外键关系）
+- 工具 `db_schema` 支持 `connection` 参数，如需查询非默认数据库，传入连接名：
+  ```
+  db_schema(table_name="orders", connection="prod_pg")
+  db_schema(connection="prod_pg")  # 列出该数据库下的所有表
+  ```
 
 ### 3. 生成并执行 SQL
 - 根据表结构编写正确的 SQL 查询
 - 使用 `db_query` 执行（自动经过权限检查）
+- 工具 `db_query` 支持 `connection` 参数，如需查询非默认数据库，传入连接名：
+  ```
+  db_query(sql="SELECT * FROM users", connection="prod_pg")
+  ```
 - SQL 必须使用正确的表名和列名（注意大小写）
 - 优先使用参数化查询
 

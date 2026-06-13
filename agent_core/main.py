@@ -1713,6 +1713,26 @@ class DBQueryRequest(BaseModel):
     connection: str = "local_sqlite"
 
 
+@app.get("/db/default-connection")
+def db_get_default_connection(request: Request):
+    """获取默认数据库连接名"""
+    from dbcli.config import get_default_connection
+    return {"default_connection": get_default_connection()}
+
+
+@app.put("/db/default-connection")
+def db_set_default_connection(req: DBConnectionRequest, request: Request):
+    """设置默认数据库连接"""
+    _require_admin(request)
+    from dbcli.config import get_db_configs, save_db_configs
+    configs = get_db_configs()
+    name = req.name
+    if not any(c.name == name for c in configs):
+        raise HTTPException(400, f"连接 '{name}' 不存在")
+    save_db_configs(configs, default_connection=name)
+    return {"status": "ok", "default_connection": name}
+
+
 @app.get("/db/connections")
 def db_list_connections(request: Request):
     """列出所有数据库连接配置（含状态）"""

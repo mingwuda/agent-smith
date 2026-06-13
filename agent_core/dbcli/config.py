@@ -92,11 +92,16 @@ def get_db_configs() -> list[DatabaseConfig]:
         return _default_connections()
 
 
-def save_db_configs(configs: list[DatabaseConfig]) -> None:
+def save_db_configs(configs: list[DatabaseConfig], default_connection: str = "") -> None:
     """保存数据库连接配置（供 UI 管理接口调用）"""
     _ensure_dir()
     config_file = CONFIG_DIR / "connections.yaml"
     data = {"connections": [c.to_dict() for c in configs]}
+    if default_connection:
+        # 检查默认连接是否存在
+        names = {c.name for c in configs}
+        if default_connection in names:
+            data["default_connection"] = default_connection
     with open(config_file, "w", encoding="utf-8") as f:
         yaml.safe_dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
 
@@ -111,6 +116,26 @@ def _default_connections() -> list[DatabaseConfig]:
             readonly=False,
         )
     ]
+
+
+def get_default_connection() -> str:
+    """读取默认数据库连接名"""
+    _ensure_dir()
+    config_file = CONFIG_DIR / "connections.yaml"
+    if not config_file.exists():
+        return "local_sqlite"
+    try:
+        with open(config_file, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        default = data.get("default_connection", "")
+        # 验证默认连接是否存在
+        if default:
+            configs = get_db_configs()
+            if any(c.name == default for c in configs):
+                return default
+        return "local_sqlite"
+    except Exception:
+        return "local_sqlite"
 
 
 # ═══════════════════════════════════════════════════

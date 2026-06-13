@@ -16,50 +16,67 @@ from langchain_core.tools import tool
 from dbcli.query import execute_query, execute_readonly
 from dbcli.schema import get_schema, list_tables, format_schema_for_llm
 from dbcli.connection import ConnectionPool
-from dbcli.config import get_db_configs
+from dbcli.config import get_db_configs, get_default_connection
 
 
 # ── 全局上下文（由 Agent 运行时注入） ──
 _current_role: str = ""
 _current_user_context: dict = {}
-_current_connection: str = "local_sqlite"
+_current_connection: str = ""
 
 
-def set_db_context(role: str = "", user_context: Optional[dict] = None, connection: str = "local_sqlite"):
-    """设置当前数据库交互上下文（由 main.py 在请求处理前调用）"""
+def _resolve_connection() -> str:
+    """获取当前连接名（优先用全局上下文，否则读配置的默认连接）"""
+    if _current_connection:
+        return _current_connection
+    return get_default_connection()
+
+
+def set_db_context(role: str = "", user_context: Optional[dict] = None, connection: str = ""):
+    """设置当前数据库交互上下文（由 main.py 在请求处理前调用）
+    如果 connection 为空，则不修改当前连接，使用配置中的默认连接。
+    """
     global _current_role, _current_user_context, _current_connection
     _current_role = role
     _current_user_context = user_context or {}
-    _current_connection = connection
+    if connection:
+        _current_connection = connection
 
 
 @tool
-def db_schema(table_name: str = "") -> str:
+def db_schema(table_name: str = "", connection: str = "") -> str:
     """查看数据库表结构。不传参数则列出所有表名；传表名则返回该表的列、类型、主键等详细信息。
     在编写 SQL 查询之前，建议先调用此工具了解表结构。
+    如需查询非默认数据库，请先调用 db_connections 查看可用连接名，然后传入 connection 参数。
     """
     try:
+        conn_name = connection or _resolve_connection()
         if not table_name:
-            tables = list_tables(_current_connection)
+            tables = list_tables(conn_name)
             if not tables:
-                return "数据库中没有找到任何表。"
-            return "数据库中的表:\n" + "\n".join(f"  - {t}" for t in tables)
+                return f"数据库 '{conn_name}' 中没有找到任何表。"
+            lines = [f"数据库 '{conn_name}' 中的表:"]
+            for t in tables:
+                lines.append(f"  - {t}")
+            return "\n".join(lines)
 
-        return format_schema_for_llm(_current_connection, table_name)
+        return format_schema_for_llm(conn_name, table_name)
     except Exception as e:
         return f"❌ 获取表结构失败: {e}"
 
 
 @tool
-def db_query(sql: str) -> str:
+def db_query(sql: str, connection: str = "") -> str:
     """执行只读 SQL 查询（SELECT），自动经过权限检查。只允许执行 SELECT 语句，
     不支持 INSERT/UPDATE/DELETE 等写操作。返回 Markdown 格式的表格结果。
     建议先调用 db_schema 了解表结构后再编写 SQL。
+    如需查询非默认数据库，请先调用 db_connections 查看可用连接名，然后传入 connection 参数。
     """
     try:
+        conn_name = connection or _resolve_connection()
         result = execute_readonly(
             sql,
-            connection_name=_current_connection,
+            connection_name=conn_name,
             role=_current_role,
             user_context=_current_user_context,
         )

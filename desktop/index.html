@@ -2715,6 +2715,13 @@ async function loadDBConnections() {
     const res = await fetch('/db/connections');
     if (!res.ok) return;
     const data = await res.json();
+    // 获取默认连接
+    var defaultConn = '';
+    try {
+      var defRes = await fetch('/db/default-connection');
+      var defData = await defRes.json();
+      defaultConn = defData.default_connection || '';
+    } catch(e) {}
     const list = document.getElementById('db-list');
     if (!data || data.length === 0) {
       list.innerHTML = '<div style="color:#999;font-size:13px;padding:4px 0 8px;">暂无数据库连接，点击下方添加</div>';
@@ -2723,10 +2730,15 @@ async function loadDBConnections() {
     list.innerHTML = data.map(function(c, idx) {
       var statusColor = c.enabled ? '#30d158' : '#ff453a';
       var dataAttr = encodeURIComponent(JSON.stringify(c));
+      var isDefault = c.name === defaultConn;
+      var starIcon = isDefault ? '⭐' : '☆';
+      var starTitle = isDefault ? '当前默认连接' : '设为默认';
+      var starClick = isDefault ? '' : 'event.stopPropagation();setDefaultConn(\'' + encodeURIComponent(c.name) + '\')';
       return '<div onclick="fillDBFromList(\'' + dataAttr + '\')" style="cursor:pointer;padding:6px 8px;border:1px solid #eee;border-radius:6px;margin-bottom:4px;font-size:13px;display:flex;align-items:center;gap:6px;">' +
         '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + statusColor + ';"></span>' +
-        '<span>' + escapeHtml(c.name) + '</span>' +
+        '<span style="flex:1;">' + escapeHtml(c.name) + '</span>' +
         '<span style="color:#999;font-size:11px;">' + escapeHtml(c.db_type) + '</span>' +
+        '<span onclick="' + starClick + '" title="' + starTitle + '" style="cursor:pointer;font-size:16px;line-height:1;">' + starIcon + '</span>' +
         '</div>';
     }).join('');
   } catch {}
@@ -2737,6 +2749,26 @@ function fillDBFromList(encoded) {
     var data = JSON.parse(decodeURIComponent(encoded));
     fillDBForm(data);
   } catch(e) {}
+}
+
+async function setDefaultConn(encodedName) {
+  try {
+    var name = decodeURIComponent(encodedName);
+    var res = await fetch('/db/default-connection', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name }),
+    });
+    if (res.ok) {
+      showDBMsg('已设 "' + name + '" 为默认连接', 'success');
+      loadDBConnections();
+    } else {
+      var err = await res.text();
+      showDBMsg('设置失败: ' + err, 'error');
+    }
+  } catch(e) {
+    showDBMsg('设置失败: ' + e.message, 'error');
+  }
 }
 
 async function testDBConnection() {
