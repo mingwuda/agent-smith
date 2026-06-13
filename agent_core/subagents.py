@@ -127,7 +127,7 @@ class SubagentManager:
     def clear_batch(self) -> None:
         self._current_batch = []
 
-    async def run_sync(self, task: str, agent_type: str = "coder", context: str = "") -> SubagentTask:
+    async def run_sync(self, task: str, agent_type: str = "coder", context: str = "", wall_timeout: float = 180.0) -> SubagentTask:
         if not self._config:
             raise RuntimeError("SubagentManager 尚未初始化")
         agent_type = agent_type if agent_type in SUBAGENT_PROMPTS else "coder"
@@ -141,8 +141,20 @@ class SubagentManager:
         item.status = "running"
         item.started_at = time.time()
         try:
-            item.result = await self._run_agent(item)
+            item.result = await asyncio.wait_for(
+                self._run_agent(item),
+                timeout=wall_timeout,
+            )
             item.status = "done"
+        except asyncio.TimeoutError:
+            elapsed = time.time() - item.started_at
+            item.error = f"超时（{elapsed:.1f}s）"
+            item.status = "error"
+            item.result = (
+                f"❌ 子代理执行超时（{elapsed:.1f}s）。\n"
+                f"可能是 search 源响应慢或模型端排队。可以缩小任务范围或换个网络环境重试。"
+            )
+            item.append_log(f"❌ 子代理整体超时（{elapsed:.1f}s，预算 {wall_timeout}s）", "error")
         except Exception as exc:
             item.error = f"{type(exc).__name__}: {exc}"
             item.status = "error"
@@ -193,7 +205,12 @@ class SubagentManager:
                 msg_type = getattr(last, "type", "")
                 if msg_type == "tool":
                     tool_name = getattr(last, "name", "unknown")
-                    item.append_log(f"🔧 调用工具: {tool_name}", "tool")
+                    tool_status = getattr(last, "status", "success")
+                    # status 字段：success / error
+                    if tool_status == "error":
+                        item.append_log(f"❌ 工具失败: {tool_name}", "error")
+                    else:
+                        item.append_log(f"🔧 调用工具: {tool_name}", "tool")
                 elif msg_type == "ai":
                     content = getattr(last, "content", "")
                     if content:

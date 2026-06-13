@@ -185,6 +185,11 @@
   .python-output { max-height:300px; overflow-y:auto; background:#1e1e1e; color:#d4d4d4; padding:10px 12px; border-radius:6px; font-size:12px; line-height:1.5; white-space:pre-wrap; word-break:break-word; margin:0; font-family:'SF Mono',Monaco,Menlo,Consolas,monospace; }
   .subagent-log { margin:10px 0; }
   .subagent-log pre { max-height:250px; overflow-y:auto; background:#f8f8fa; padding:8px 10px; border-radius:6px; font-size:12px; line-height:1.5; white-space:pre-wrap; word-break:break-word; margin:0; font-family:'SF Mono',Monaco,Menlo,Consolas,monospace; color:#333; border:1px solid #e0e0e3; }
+  /* 内联展开日志：默认展开，胶囊正下方显示，无需点击弹窗 */
+  .subagent-log-inline { margin:-2px 0 8px 8px; max-width:520px; transition:max-height .2s ease, opacity .15s; overflow:hidden; }
+  .subagent-log-inline pre { max-height:260px; overflow-y:auto; background:#1c1c1e; color:#e8e8ed; padding:10px 12px; border-radius:6px; font-size:12px; line-height:1.5; white-space:pre-wrap; word-break:break-word; margin:0; font-family:'SF Mono',Monaco,Menlo,Consolas,monospace; border:1px solid #333; }
+  .subagent-log-inline.collapsed pre { display:none; }
+  .subagent-log-inline.collapsed::before { content:"📋 点击胶囊查看日志"; color:#999; font-size:11px; padding:2px 0 6px; display:block; }
   .step-details .thought code { background:#d4d4d9; padding:1px 4px; border-radius:3px; font-size:12px; }
   .step-details .args { background:#1c1c1e; color:#e8e8ed; padding:8px; border-radius:6px; font-size:12px; font-family:"SF Mono",Menlo,monospace; overflow-x:auto; margin-bottom:6px; }
   .step-details .result { background:#e8f5e9; color:#2e7d32; padding:8px; border-radius:6px; font-size:12px; white-space:pre-wrap; word-break:break-word; }
@@ -1327,7 +1332,9 @@ function handleStreamEvent(data) {
     }
   }
 
-  // 子代理胶囊渲染
+  // 子代理胶囊渲染（按 cap.id diff 复用/创建/删除）
+  const _subagentStreams = new Map();  // capId -> EventSource
+
   function renderSubagentCapsules(capsules, forcedStatus) {
     if (!capsules) return;
     let row = container.querySelector('.subagent-row');
@@ -1340,13 +1347,34 @@ function handleStreamEvent(data) {
         container.appendChild(row);
       }
     }
-    row.innerHTML = '';
     const iconMap = { searcher: '🔍', coder: '<>', reviewer: '👁', debugger: '🐛' };
+
+    // 删除不再存在的胶囊节点
+    const incomingIds = new Set(capsules.map(c => String(c.id)));
+    Array.from(row.querySelectorAll('[data-cap-id]')).forEach(el => {
+      if (!incomingIds.has(el.dataset.capId)) el.remove();
+    });
+
     capsules.forEach(cap => {
-      const div = document.createElement('div');
-      div.className = 'subagent-capsule';
-      div.title = cap.task || '';
+      const capId = String(cap.id);
       const status = forcedStatus || cap.status || 'running';
+
+      // 找或创建胶囊节点
+      let capEl = row.querySelector(`.subagent-capsule[data-cap-id="${capId}"]`);
+      if (!capEl) {
+        capEl = document.createElement('div');
+        capEl.className = 'subagent-capsule';
+        capEl.dataset.capId = capId;
+        capEl.onclick = (e) => {
+          if (e.target.closest('.subagent-log-inline')) return;  // 点击日志不折叠
+          const logEl = capEl.nextElementSibling;
+          if (logEl && logEl.classList.contains('subagent-log-inline')) {
+            logEl.classList.toggle('collapsed');
+            smartScroll(container);
+          }
+        };
+        row.appendChild(capEl);
+      }
       const icon = iconMap[cap.agent_type] || '⚙';
       const initial = (cap.agent_type || '?')[0].toUpperCase();
       const statusHtml = status === 'running'
@@ -1354,16 +1382,68 @@ function handleStreamEvent(data) {
         : status === 'done'
         ? '<span class="sa-status done">✓</span>'
         : '<span class="sa-status error">✗</span>';
-      div.innerHTML = `
+      capEl.innerHTML = `
         <span class="sa-icon ${escapeHtml(cap.agent_type || '')}">${initial}</span>
         <span class="sa-task">${escapeHtml(cap.task || cap.agent_type)}</span>
         ${statusHtml}
         <span class="sa-badge">${icon} ${escapeHtml(cap.agent_type || '')} #${cap.id}</span>
       `;
-      div.onclick = () => showCapsuleDetail(cap);
-      row.appendChild(div);
+
+      // 找或创建 inline 日志节点（紧跟胶囊之后）
+      let logEl = capEl.nextElementSibling;
+      if (!logEl || !logEl.classList.contains('subagent-log-inline') || logEl.dataset.capId !== capId) {
+        logEl = document.createElement('div');
+        logEl.className = 'subagent-log-inline';
+        logEl.dataset.capId = capId;
+        logEl.innerHTML = '<pre></pre>';
+        capEl.insertAdjacentElement('afterend', logEl);
+      }
+      // 运行中默认展开；完成态默认折叠
+      if (status === 'running' && !logEl.dataset.collapsedByUser) {
+        logEl.classList.remove('collapsed');
+      } else if (status !== 'running' && !logEl.dataset.touched) {
+        logEl.classList.add('collapsed');
+      }
+      // 写最终结果摘要
+      const preEl = logEl.querySelector('pre');
+      if (preEl) {
+        if (status === 'done' && cap.result && !preEl.dataset.hasResult) {
+          const tail = `\n─── 完成 ───\n${String(cap.result).slice(0, 2000)}`;
+          preEl.textContent += tail;
+          preEl.dataset.hasResult = '1';
+        } else if (status === 'error' && cap.result && !preEl.dataset.hasResult) {
+          preEl.textContent += `\n─── 失败 ───\n${String(cap.result).slice(0, 800)}`;
+          preEl.dataset.hasResult = '1';
+        }
+      }
+
+      // 启动或维持 EventSource
+      _ensureCapsuleStream(capId, logEl);
     });
+
     smartScroll(container);
+  }
+
+  function _ensureCapsuleStream(capId, logEl) {
+    // 已存在则不重建
+    if (_subagentStreams.has(capId)) return;
+    const preEl = logEl.querySelector('pre');
+    if (!preEl) return;
+    const es = new EventSource(`/subagent-progress/${capId}`);
+    es.onmessage = (e) => {
+      try {
+        const d = JSON.parse(e.data || '{}');
+        const prefix = d.cat === 'tool' ? '🔧 ' : d.cat === 'ai' ? '💭 ' : d.cat === 'error' ? '❌ ' : d.cat === 'done' ? '✅ ' : '';
+        preEl.textContent += `[${d.cat}] ${prefix}${d.text}\n`;
+        if (!logEl.classList.contains('collapsed')) smartScroll(container);
+      } catch {}
+    };
+    es.onerror = () => {
+      // 后端在 done=True 时会主动断开；这里保险起见也关闭
+      es.close();
+      _subagentStreams.delete(capId);
+    };
+    _subagentStreams.set(capId, es);
   }
 
   // 子代理胶囊详情弹窗
