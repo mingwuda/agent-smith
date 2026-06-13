@@ -101,14 +101,14 @@ def _detect_tool_loop(calls: list[dict], recursion_limit: int) -> str:
     if len(calls) < 4:
         return ""
 
-    # ── 检测1：同一工具+同一参数严格重复 ≥8 次（单步循环）──
+    # ── 检测1：同一工具+同一参数严格重复 ≥20 次（单步循环）──
     latest = calls[-1]
     latest_sig = latest.get("signature", "")
     if latest_sig and latest.get("tool") not in {"web_search", "web_fetch"}:
-        last6_sigs = [item.get("signature", "") for item in calls[-6:] if item.get("signature")]
-        count = last6_sigs.count(latest_sig)
-        if count >= 5:
-            return f"最近 6 次工具调用中，同一工具和参数严格重复了 {count} 次"
+        last30_sigs = [item.get("signature", "") for item in calls[-30:] if item.get("signature")]
+        count = last30_sigs.count(latest_sig)
+        if count >= 20:
+            return f"最近 30 次工具调用中，同一工具和参数严格重复了 {count} 次"
 
     # ── 检测2：参数循环（A→B→A→B 模式）──
     if len(calls) >= 8:
