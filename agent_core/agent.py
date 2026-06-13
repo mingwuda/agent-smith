@@ -802,9 +802,9 @@ class DesktopAgent:
                     # 工具参数
                     inp = event.get("data", {}).get("input", {})
                     if isinstance(inp, dict):
-                        args_preview = {k: str(v)[:80] for k, v in inp.items() if not k.startswith("_")}
+                        args_preview = {k: str(v)[:2000] for k, v in inp.items() if not k.startswith("_")}
                     else:
-                        args_preview = {"input": str(inp)[:80]}
+                        args_preview = {"input": str(inp)[:2000]}
                     tool_call_history.append({
                         "tool": tool_name,
                         "signature": _tool_signature(tool_name, inp),
