@@ -2720,16 +2720,23 @@ async function loadDBConnections() {
       list.innerHTML = '<div style="color:#999;font-size:13px;padding:4px 0 8px;">暂无数据库连接，点击下方添加</div>';
       return;
     }
-    list.innerHTML = data.map(function(c) {
+    list.innerHTML = data.map(function(c, idx) {
       var statusColor = c.enabled ? '#30d158' : '#ff453a';
-      var dataStr = escapeHtml(JSON.stringify(c));
-      return '<div onclick="fillDBForm(JSON.parse(\'' + dataStr + '\'))" style="cursor:pointer;padding:6px 8px;border:1px solid #eee;border-radius:6px;margin-bottom:4px;font-size:13px;display:flex;align-items:center;gap:6px;">' +
+      var dataAttr = encodeURIComponent(JSON.stringify(c));
+      return '<div onclick="fillDBFromList(\'' + dataAttr + '\')" style="cursor:pointer;padding:6px 8px;border:1px solid #eee;border-radius:6px;margin-bottom:4px;font-size:13px;display:flex;align-items:center;gap:6px;">' +
         '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + statusColor + ';"></span>' +
         '<span>' + escapeHtml(c.name) + '</span>' +
         '<span style="color:#999;font-size:11px;">' + escapeHtml(c.db_type) + '</span>' +
         '</div>';
     }).join('');
   } catch {}
+}
+
+function fillDBFromList(encoded) {
+  try {
+    var data = JSON.parse(decodeURIComponent(encoded));
+    fillDBForm(data);
+  } catch(e) {}
 }
 
 async function testDBConnection() {

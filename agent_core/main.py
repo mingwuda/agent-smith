@@ -1719,8 +1719,12 @@ def db_list_connections(request: Request):
     _require_admin(request)
     from dbcli.config import get_db_configs
     configs = get_db_configs()
-    return [{"name": c.name, "db_type": c.db_type, "readonly": c.readonly,
-             "enabled": c.enabled} for c in configs]
+    return [{
+        "name": c.name, "db_type": c.db_type, "readonly": c.readonly,
+        "enabled": c.enabled,
+        "path": c.path, "host": c.host, "port": c.port,
+        "database": c.database, "username": c.username,
+    } for c in configs]
 
 
 @app.post("/db/connections")
@@ -1765,26 +1769,42 @@ def db_test_connection(name: str, request: Request):
 @app.post("/db/test-connection")
 def db_test_connection_inline(req: DBConnectionRequest, request: Request):
     """测试未保存的数据库连接（供前端表单预测试用）"""
-    from sqlalchemy import create_engine, text
     try:
-        url = ""
+        from sqlalchemy import create_engine, text
+
         if req.db_type == "sqlite":
+            if not req.path:
+                return {"ok": False, "error": "SQLite 需要指定文件路径"}
             url = f"sqlite:///{req.path}"
         elif req.db_type == "postgresql":
+            if not req.host or not req.database:
+                return {"ok": False, "error": "PostgreSQL 需要填写主机地址和数据库名"}
             pwd = f":{req.password}" if req.password else ""
             port = f":{req.port}" if req.port else ""
             url = f"postgresql://{req.username}{pwd}@{req.host}{port}/{req.database}"
         elif req.db_type == "mysql":
+            if not req.host or not req.database:
+                return {"ok": False, "error": "MySQL 需要填写主机地址和数据库名"}
             pwd = f":{req.password}" if req.password else ""
             port = f":{req.port}" if req.port else ""
             url = f"mysql+pymysql://{req.username}{pwd}@{req.host}{port}/{req.database}"
-        engine = create_engine(url)
-        with engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
-        engine.dispose()
+        else:
+            return {"ok": False, "error": f"不支持的数据库类型: {req.db_type}"}
+
+        engine = create_engine(url, pool_pre_ping=True)
+        try:
+            with engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+        finally:
+            engine.dispose()
+
         return {"ok": True}
+
+    except ImportError as e:
+        missing = str(e).replace("No module named ", "").strip("'\" ")
+        return {"ok": False, "error": f"缺少数据库驱动: {missing}，请安装对应的 Python 包（参考 requirements.txt）"}
     except Exception as e:
-        return {"ok": False, "error": str(e)}
+        return {"ok": False, "error": f"连接失败: {type(e).__name__}: {e}"}
 
 
 @app.get("/db/permissions")
