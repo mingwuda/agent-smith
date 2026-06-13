@@ -1683,20 +1683,40 @@ function handleStreamEvent(data) {
       // ── Python 实时输出流 ──
       if (data.tool === 'run_python') {
         closePythonProgress();
-        const pyBox = document.createElement('div');
+        var pyBox = document.createElement('div');
         pyBox.className = 'python-progress';
         pyBox.style.marginTop = '8px';
-        pyBox.innerHTML = '<pre class="python-output" id="python-out-' + curStep + '"></pre>';
+        pyBox.innerHTML = '<div style="color:#999;font-size:12px;margin-bottom:4px;">⏳ Python 实时日志</div>' +
+          '<pre class="python-output" id="python-out-' + curStep + '">等待输出...</pre>';
         cardDiv.querySelector('.tool-card-body').appendChild(pyBox);
-        _pythonProgressSource = new EventSource('/tool-progress');
-        const outEl = document.getElementById('python-out-' + curStep);
-        _pythonProgressSource.onmessage = (e) => {
-          try {
-            const d = JSON.parse(e.data || '{}');
-            if (d.text && outEl) { outEl.textContent += d.text + '\n'; }
-          } catch {}
-        };
-        _pythonProgressSource.onerror = () => { closePythonProgress(); };
+        var outEl = document.getElementById('python-out-' + curStep);
+        // 用 fetch 轮询 JSON 接口获取实时输出
+        var seenCount = 0;
+        var pollTimer = setInterval(function() {
+          fetch('/tool-progress-json').then(function(r) { return r.json(); }).then(function(d) {
+            if (!d || !outEl) return;
+            if (d.lines && d.lines.length > seenCount) {
+              var newLines = d.lines.slice(seenCount);
+              if (outEl.textContent === '等待输出...') outEl.textContent = '';
+              for (var j = 0; j < newLines.length; j++) {
+                outEl.textContent += newLines[j] + '\n';
+              }
+              outEl.scrollTop = outEl.scrollHeight;
+              seenCount = d.lines.length;
+            }
+            if (!d.running && seenCount >= d.lines.length) {
+              clearInterval(pollTimer);
+            }
+          }).catch(function() {});
+        }, 500);
+        // 5 秒后如果还没有实时日志，显示等待提示
+        setTimeout(function() {
+          if (outEl && outEl.textContent === '等待输出...') {
+            outEl.textContent = '等待输出中...（执行完成后会自动显示结果）';
+          }
+        }, 5000);
+        // 保存定时器以便 tool_result 清理
+        _pythonProgressSource = { close: function() { clearInterval(pollTimer); } };
       }
       break;
 
@@ -1721,8 +1741,13 @@ function handleStreamEvent(data) {
         // 添加结果
         const outArea = card.querySelector(`#tool-output-${trStep}`);
         if (outArea && data.result) {
+          // 如果有完整 Python 输出，显示完整版
+          var fullResult = data.result;
+          if (data.result_full && data.result_full.length > 400) {
+            fullResult = data.result_full;
+          }
           outArea.innerHTML = '<div class="tool-section-label">结果</div>' +
-            `<pre class="tool-code-block" style="${isError ? 'color:#fca5a5;' : ''}">${escapeHtml(String(data.result))}</pre>`;
+            `<pre class="tool-code-block" style="${isError ? 'color:#fca5a5;' : ''}max-height:400px;overflow-y:auto;">${escapeHtml(String(fullResult))}</pre>`;
         }
 
         // Diff 视图

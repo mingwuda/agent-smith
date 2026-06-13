@@ -1656,6 +1656,18 @@ async def tool_progress_stream(request: Request):
     )
 
 
+@app.get("/tool-progress-json")
+async def tool_progress_json():
+    """Python 执行进度 JSON 接口（供前端 fetch 轮询）"""
+    from tools import code_tools as _ct
+    lines, total = _ct.get_progress_since(0)
+    return {
+        "lines": [l.rstrip() for l in lines if l.rstrip()],
+        "total": total,
+        "running": _ct.is_progress_running(),
+    }
+
+
 # ── 子代理实时日志流 ──
 @app.get("/subagent-progress/{capsule_id}")
 async def subagent_progress_stream(capsule_id: int, request: Request):

@@ -876,6 +876,7 @@ class DesktopAgent:
                         "tool": tool_name,
                         "step": step_for_tool,
                         "result": _truncate(output_str, 400),
+                        "result_full": full_output if tool_name == "run_python" else "",
                         "error": is_error,
                         "diff": diff_data,
                     })
