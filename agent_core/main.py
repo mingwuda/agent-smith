@@ -39,7 +39,7 @@ logger = get_logger(__name__)
 
 from config import AgentConfig
 from agent import DesktopAgent
-from tools import file_tools, code_tools, system_tools, web_tools, memory_tools, git_tools
+from tools import file_tools, code_tools, system_tools, web_tools, memory_tools, git_tools, database_tool
 import subagents
 from monitoring.usage_tracker import get_tracker
 from skills.registry import get_registry
@@ -242,6 +242,7 @@ def init_agent():
     all_tools.extend(memory_tools.TOOLS)
     all_tools.extend(git_tools.TOOLS)
     all_tools.extend(subagents.TOOLS)
+    all_tools.extend(database_tool.TOOLS)
     subagents.manager.configure(config, all_tools)
     
     # 先加载 Skills，再构建 Agent graph；set_tools 会把技能块注入 system prompt。
@@ -921,6 +922,15 @@ def _resolve_user(request: Request) -> str:
     file_tools.set_workspace(_workspace_for_user(uid))
     if agent:
         agent.set_user(uid)
+    # 设置数据库交互上下文（角色和用户信息，后续可从用户配置扩展）
+    try:
+        from user_manager import get_user
+        user = get_user(uid) or {}
+        role = user.get("role", "")
+        user_context = {"user_id": uid, "role": role, **(user.get("context", {}) or {})}
+        database_tool.set_db_context(role=role, user_context=user_context)
+    except Exception:
+        database_tool.set_db_context()  # fallback：无上下文
     return uid
 
 
@@ -1670,6 +1680,159 @@ async def subagent_progress_stream(capsule_id: int, request: Request):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
     )
+
+# ---------- 数据库管理路由 ----------
+# （预留给 UI 管理界面，后续前端对接这些接口即可）
+
+class DBConnectionRequest(BaseModel):
+    name: str
+    db_type: str = "sqlite"
+    path: str = ""
+    host: str = ""
+    port: int = 0
+    database: str = ""
+    username: str = ""
+    password: str = ""
+    readonly: bool = True
+
+
+class DBQueryRequest(BaseModel):
+    sql: str
+    connection: str = "local_sqlite"
+
+
+@app.get("/db/connections")
+def db_list_connections(request: Request):
+    """列出所有数据库连接配置（含状态）"""
+    _require_admin(request)
+    from dbcli.config import get_db_configs
+    configs = get_db_configs()
+    return [{"name": c.name, "db_type": c.db_type, "readonly": c.readonly,
+             "enabled": c.enabled} for c in configs]
+
+
+@app.post("/db/connections")
+def db_add_connection(req: DBConnectionRequest, request: Request):
+    """添加或更新数据库连接"""
+    _require_admin(request)
+    from dbcli.config import get_db_configs, save_db_configs, DatabaseConfig
+    from dbcli.connection import ConnectionPool
+    configs = get_db_configs()
+    configs = [c for c in configs if c.name != req.name]
+    config = DatabaseConfig(
+        name=req.name, db_type=req.db_type, path=req.path,
+        host=req.host, port=req.port, database=req.database,
+        username=req.username, password=req.password, readonly=req.readonly,
+    )
+    configs.append(config)
+    save_db_configs(configs)
+    ConnectionPool.reload(req.name)
+    return {"status": "ok", "message": f"已添加/更新连接 {req.name}"}
+
+
+@app.delete("/db/connections/{name}")
+def db_remove_connection(name: str, request: Request):
+    """删除数据库连接"""
+    _require_admin(request)
+    from dbcli.config import get_db_configs, save_db_configs
+    from dbcli.connection import ConnectionPool
+    configs = get_db_configs()
+    configs = [c for c in configs if c.name != name]
+    save_db_configs(configs)
+    ConnectionPool.remove(name)
+    return {"status": "ok", "message": f"已移除连接 {name}"}
+
+
+@app.post("/db/connections/{name}/test")
+def db_test_connection(name: str, request: Request):
+    """测试已保存的数据库连接"""
+    from dbcli.connection import ConnectionPool
+    return ConnectionPool.test_connection(name)
+
+
+@app.post("/db/test-connection")
+def db_test_connection_inline(req: DBConnectionRequest, request: Request):
+    """测试未保存的数据库连接（供前端表单预测试用）"""
+    from sqlalchemy import create_engine, text
+    try:
+        url = ""
+        if req.db_type == "sqlite":
+            url = f"sqlite:///{req.path}"
+        elif req.db_type == "postgresql":
+            pwd = f":{req.password}" if req.password else ""
+            port = f":{req.port}" if req.port else ""
+            url = f"postgresql://{req.username}{pwd}@{req.host}{port}/{req.database}"
+        elif req.db_type == "mysql":
+            pwd = f":{req.password}" if req.password else ""
+            port = f":{req.port}" if req.port else ""
+            url = f"mysql+pymysql://{req.username}{pwd}@{req.host}{port}/{req.database}"
+        engine = create_engine(url)
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        engine.dispose()
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.get("/db/permissions")
+def db_get_permissions(request: Request):
+    """获取权限配置"""
+    _require_admin(request)
+    from dbcli.config import get_permission_config
+    perm = get_permission_config()
+    # 简化返回（不暴露密码等敏感信息）
+    output = {"global_defaults": perm.global_defaults, "roles": {}}
+    for role_name, role in perm.roles.items():
+        output["roles"][role_name] = {"databases": {
+            db: [{"table": t.table, "columns_allow": t.columns_allow,
+                   "row_filter": t.row_filter, "allow_write": t.allow_write,
+                   "max_rows": t.max_rows} for t in tables]
+            for db, tables in role.databases.items()
+        }}
+    return output
+
+
+@app.put("/db/permissions")
+def db_save_permissions(req: DBQueryRequest, request: Request):
+    """保存权限配置（req.sql 为权限 YAML 文本，复用 DBQueryRequest 结构）"""
+    _require_admin(request)
+    from dbcli.config import save_permission_config
+    import yaml
+    try:
+        data = yaml.safe_load(req.sql)
+        from dbcli.config import _parse_permission_config
+        config = _parse_permission_config(data)
+        save_permission_config(config)
+        return {"status": "ok", "message": "权限配置已保存"}
+    except Exception as e:
+        raise HTTPException(400, f"权限配置格式错误: {e}")
+
+
+@app.post("/db/query")
+def db_execute_query(req: DBQueryRequest, request: Request):
+    """执行 SQL 查询（含权限检查，供 UI 管理界面使用）"""
+    from dbcli.query import execute_query
+    uid = _get_current_user(request)
+    from user_manager import get_user
+    user = get_user(uid) or {}
+    role = user.get("role", "")
+    user_context = {"user_id": uid, "role": role}
+    result = execute_query(req.sql, connection_name=req.connection,
+                       role=role, user_context=user_context)
+    return result.to_dict()
+
+
+@app.get("/db/schema/{connection_name}")
+def db_get_schema(connection_name: str, table: str = "", request: Request = None):
+    """获取数据库 schema（供 UI 管理界面自动补全）"""
+    _require_admin(request)
+    from dbcli.schema import get_schema
+    tables = get_schema(connection_name, table or None)
+    return [{"name": t.name, "columns": [
+        {"name": c.name, "type": c.type, "primary_key": c.primary_key}
+        for c in t.columns
+    ]} for t in tables]
 
 
 # ---------- 启动 ----------

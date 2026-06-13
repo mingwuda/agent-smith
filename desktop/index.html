@@ -32,7 +32,7 @@
   .sidebar-accordion.open .accordion-chevron { transform:rotate(90deg); color:#f5f5f7; }
   .accordion-body { max-height:0; overflow:hidden; transition:max-height .22s ease; }
   .sidebar-accordion.open .accordion-body { max-height:260px; }
-  .monitoring-body { padding:0 0 8px; }
+  .accordion-body.monitoring-body { padding:0 0 8px; }
   .skills-body { display:flex; flex-direction:column; min-height:0; }
   #skills-list { overflow-y:auto; max-height:220px; padding-bottom:8px; scrollbar-width:thin; scrollbar-color:#4a4a4d transparent; }
   #skills-list::-webkit-scrollbar { width:6px; }
@@ -43,7 +43,7 @@
   #skill-tooltip { display:none; position:fixed; z-index:300; max-width:360px; padding:8px 10px; background:#2c2c2e; color:#f5f5f7; border:1px solid #4a4a4d; border-radius:8px; box-shadow:0 8px 24px rgba(0,0,0,.28); font-size:12px; line-height:1.45; pointer-events:none; }
   #skill-tooltip .tooltip-title { font-weight:600; margin-bottom:4px; color:#fff; }
   #skill-tooltip .tooltip-muted { margin-top:4px; color:#b8b8bd; }
-  
+
   /* 聊天区域 */
   #header { padding:16px 24px; background:#fff; border-bottom:1px solid #ddd; display:flex; align-items:center; justify-content:space-between; }
   #header .left { display:flex; align-items:center; gap:6px; }
@@ -255,8 +255,28 @@
   .modal-input { width:100%; padding:10px 12px; border:1px solid #ddd; border-radius:8px; font-size:14px; margin:4px 0 12px; box-sizing:border-box; outline:none; background:#f9f9f9; }
   .modal-input:focus { border-color:#007aff; background:#fff; }
   .modal-error { color:#d70015; font-size:13px; margin:4px 0; }
-  .modal { background:#fff; border-radius:16px; padding:24px 28px; width:480px; max-width:90vw; box-shadow:0 20px 60px rgba(0,0,0,0.3); }
-  .modal h2 { font-size:18px; margin-bottom:20px; }
+  /* 设置弹窗 - 侧边栏布局 */
+  .settings-modal { background:#fff; border-radius:16px; width:680px; max-width:92vw; box-shadow:0 20px 60px rgba(0,0,0,0.3); display:flex; flex-direction:column; max-height:80vh; }
+  .settings-modal .settings-header { display:flex; align-items:center; justify-content:space-between; padding:20px 24px 0; flex-shrink:0; }
+  .settings-modal .settings-header h2 { font-size:18px; margin:0; }
+  .settings-modal .settings-close { background:none; border:none; font-size:18px; cursor:pointer; color:#999; padding:4px; line-height:1; }
+  .settings-modal .settings-close:hover { color:#333; }
+  .settings-modal .settings-body { display:flex; flex:1; min-height:0; padding:16px 0 0; }
+  .settings-modal .settings-sidebar { width:160px; flex-shrink:0; border-right:1px solid #eee; padding:0 0 8px; overflow-y:auto; }
+  .settings-modal .settings-tab { display:block; width:100%; padding:10px 16px; border:none; background:none; cursor:pointer; font-size:14px; color:#666; text-align:left; transition:all .12s; }
+  .settings-modal .settings-tab:hover { background:#f5f5f7; color:#333; }
+  .settings-modal .settings-tab.active { background:#e8f0fe; color:#007aff; font-weight:500; border-right:3px solid #007aff; }
+  .settings-modal .settings-content { flex:1; overflow-y:auto; padding:0 24px 8px; }
+  .settings-modal .settings-content .form-group { margin-bottom:16px; }
+  .settings-modal .settings-footer { display:flex; justify-content:flex-end; gap:10px; padding:12px 24px 18px; flex-shrink:0; border-top:1px solid #eee; }
+  .settings-modal .settings-footer .btn-secondary { padding:8px 20px; border-radius:8px; font-size:14px; border:1px solid #ddd; background:#fff; cursor:pointer; }
+  .settings-modal .settings-footer .btn-secondary:hover { background:#f0f0f0; }
+  .settings-modal .settings-footer .btn-primary { padding:8px 20px; border-radius:8px; font-size:14px; border:1px solid #007aff; background:#007aff; color:#fff; cursor:pointer; }
+  .settings-modal .settings-footer .btn-primary:hover { background:#0062cc; }
+  .settings-modal .modal { display:none; } /* hide old modal when new layout is used */
+  .settings-tab-panel { display:none; }
+  .settings-tab-panel.active { display:block; }
+  .settings-modal h2 { font-size:18px; margin-bottom:20px; }
   .form-group { margin-bottom:16px; }
   .form-group label { display:block; font-size:13px; font-weight:500; color:#555; margin-bottom:4px; }
   .form-group input,
@@ -518,61 +538,133 @@
 
 <!-- 设置弹窗 -->
 <div class="modal-overlay" id="settings-modal">
-  <div class="modal">
-    <h2 data-i18n="settingsTitle">⚙️ 设置</h2>
-    <div class="form-group">
-      <label for="s-provider" data-i18n="providerLabel">模型厂商</label>
-      <div class="provider-row">
-        <select id="s-provider" onchange="onProviderChange()"></select>
-        <button type="button" onclick="addCustomProvider()" data-i18n="addCustomProvider">新增自定义</button>
+  <div class="settings-modal">
+    <div class="settings-header">
+      <h2 data-i18n="settingsTitle">⚙️ 设置</h2>
+      <button class="settings-close" onclick="closeSettings()">✕</button>
+    </div>
+    <div class="settings-body">
+      <div class="settings-sidebar">
+        <button class="settings-tab active" data-tab="model" onclick="switchSettingsTab('model')">🤖 模型</button>
+        <button class="settings-tab" data-tab="database" onclick="switchSettingsTab('database');loadDBConnections()">🗄️ 数据库</button>
       </div>
-      <div class="hint" id="s-provider-hint" data-i18n="providerHint">选择要使用的模型厂商。</div>
+      <div class="settings-content">
+        <!-- 模型设置 -->
+        <div class="settings-tab-panel active" id="panel-model">
+          <div class="form-group">
+            <label for="s-provider" data-i18n="providerLabel">模型厂商</label>
+            <div class="provider-row">
+              <select id="s-provider" onchange="onProviderChange()"></select>
+              <button type="button" onclick="addCustomProvider()" data-i18n="addCustomProvider">新增自定义</button>
+            </div>
+            <div class="hint" id="s-provider-hint" data-i18n="providerHint">选择要使用的模型厂商。</div>
+          </div>
+          <div class="form-group hidden" id="s-provider-name-group">
+            <label for="s-provider-name" data-i18n="providerNameLabel">厂商名称</label>
+            <input id="s-provider-name" placeholder="例如 Mimo / 本地 LM Studio / 公司网关" data-i18n-placeholder="providerNamePlaceholder" />
+            <div class="hint" data-i18n="providerNameHint">自定义厂商会按这个名称显示在顶部切换器里。</div>
+          </div>
+          <div class="form-group">
+            <label for="s-api-key">API Key</label>
+            <input id="s-api-key" type="password" placeholder="sk-..." autocomplete="new-password" />
+            <div class="hint" id="s-api-key-hint" data-i18n="apiKeyHint">留空则保留当前厂商已保存的 API Key。</div>
+          </div>
+          <div class="form-group">
+            <label for="s-model" data-i18n="modelLabel">模型名称</label>
+            <input id="s-model" list="s-model-options" placeholder="选择或输入模型名称" data-i18n-placeholder="modelPlaceholder" />
+            <datalist id="s-model-options"></datalist>
+            <div class="hint" data-i18n="modelHint">可从候选中选择，也可以输入兼容接口支持的模型名。</div>
+          </div>
+          <div class="form-group">
+            <label for="s-base-url" data-i18n="baseUrlLabel">API 地址（可选）</label>
+            <input id="s-base-url" placeholder="留空用 OpenAI 官方，DeepSeek: https://api.deepseek.com" data-i18n-placeholder="baseUrlPlaceholder" />
+            <div class="hint" data-i18n="baseUrlHint">自定义 API 地址，如 DeepSeek 填 https://api.deepseek.com</div>
+          </div>
+          <div class="form-group">
+            <label for="s-recursion-limit" data-i18n="recursionLimitLabel">最大推理步数</label>
+            <input id="s-recursion-limit" type="number" min="10" max="200" step="1" />
+            <div class="hint" data-i18n="recursionLimitHint">复杂任务或多次工具调用可适当调大；过大时循环任务会运行更久。</div>
+          </div>
+          <div class="form-group">
+            <label>
+              <input id="s-tavily-enabled" type="checkbox" style="width:auto;height:auto;margin-right:6px;" />
+              <span data-i18n="tavilyEnabledLabel">优先使用 Tavily Search</span>
+            </label>
+            <div class="hint" data-i18n="tavilyEnabledHint">开启后 web_search 会优先调用 Tavily API，失败时自动回退原来的 Bing/DuckDuckGo 搜索。</div>
+          </div>
+          <div class="form-group">
+            <label for="s-tavily-api-key">Tavily API Key</label>
+            <input id="s-tavily-api-key" type="password" placeholder="tvly-..." autocomplete="new-password" />
+            <div class="hint" id="s-tavily-api-key-hint" data-i18n="tavilyApiKeyHint">留空则保留当前已保存的 Tavily API Key。</div>
+          </div>
+          <div class="form-group">
+            <label for="s-tavily-search-url" data-i18n="tavilySearchUrlLabel">Tavily Search URL</label>
+            <input id="s-tavily-search-url" placeholder="https://api.tavily.com/search" />
+            <div class="hint" data-i18n="tavilySearchUrlHint">默认使用 Tavily 官方搜索接口。</div>
+          </div>
+        </div>
+
+        <!-- 数据库设置 -->
+        <div class="settings-tab-panel" id="panel-database">
+          <div id="db-list" style="margin-bottom:12px;"></div>
+          <div class="form-group">
+            <label>连接名</label>
+            <input id="db-name" class="modal-input" placeholder="例如 prod_db" />
+          </div>
+          <div class="form-group">
+            <label>类型</label>
+            <select id="db-type" class="modal-input" onchange="toggleDbFields()" style="width:100%;padding:10px 12px;border:1px solid #ddd;border-radius:8px;font-size:14px;">
+              <option value="sqlite">SQLite</option>
+              <option value="postgresql">PostgreSQL</option>
+              <option value="mysql">MySQL</option>
+            </select>
+          </div>
+          <div id="db-sqlite-fields">
+            <div class="form-group">
+              <label>文件路径</label>
+              <input id="db-path" class="modal-input" placeholder="例如 /path/to/database.db" />
+            </div>
+          </div>
+          <div id="db-server-fields" style="display:none;">
+            <div class="form-group">
+              <label>主机地址</label>
+              <input id="db-host" class="modal-input" placeholder="127.0.0.1" />
+            </div>
+            <div class="form-group">
+              <label>端口</label>
+              <input id="db-port" class="modal-input" placeholder="5432" />
+            </div>
+            <div class="form-group">
+              <label>数据库名</label>
+              <input id="db-database" class="modal-input" placeholder="mydb" />
+            </div>
+            <div class="form-group">
+              <label>用户名</label>
+              <input id="db-username" class="modal-input" placeholder="user" />
+            </div>
+            <div class="form-group">
+              <label>密码</label>
+              <input id="db-password" class="modal-input" type="password" placeholder="****" />
+            </div>
+          </div>
+          <div class="form-group">
+            <label style="display:flex;align-items:center;gap:6px;font-weight:400;">
+              <input type="checkbox" id="db-readonly" checked style="width:auto;height:auto;" />
+              只读模式（默认开启，防止误写操作）
+            </label>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <button class="btn-secondary" onclick="testDBConnection()" style="padding:8px 16px;border:1px solid #ddd;border-radius:8px;background:#fff;cursor:pointer;font-size:13px;">🔌 测试连接</button>
+            <button class="btn-primary" id="db-save-btn" onclick="saveDBConnection()" style="padding:8px 16px;border:1px solid #007aff;border-radius:8px;background:#007aff;color:#fff;cursor:pointer;font-size:13px;">💾 保存连接</button>
+            <span id="db-msg" style="font-size:12px;color:#999;display:none;"></span>
+          </div>
+          <div class="save-feedback" id="db-feedback" style="margin-top:8px;"></div>
+        </div>
+
+        <div class="save-feedback" id="save-feedback"></div>
+      </div>
     </div>
-    <div class="form-group hidden" id="s-provider-name-group">
-      <label for="s-provider-name" data-i18n="providerNameLabel">厂商名称</label>
-      <input id="s-provider-name" placeholder="例如 Mimo / 本地 LM Studio / 公司网关" data-i18n-placeholder="providerNamePlaceholder" />
-      <div class="hint" data-i18n="providerNameHint">自定义厂商会按这个名称显示在顶部切换器里。</div>
-    </div>
-    <div class="form-group">
-      <label for="s-api-key">API Key</label>
-      <input id="s-api-key" type="password" placeholder="sk-..." autocomplete="new-password" />
-      <div class="hint" id="s-api-key-hint" data-i18n="apiKeyHint">留空则保留当前厂商已保存的 API Key。</div>
-    </div>
-    <div class="form-group">
-      <label for="s-model" data-i18n="modelLabel">模型名称</label>
-      <input id="s-model" list="s-model-options" placeholder="选择或输入模型名称" data-i18n-placeholder="modelPlaceholder" />
-      <datalist id="s-model-options"></datalist>
-      <div class="hint" data-i18n="modelHint">可从候选中选择，也可以输入兼容接口支持的模型名。</div>
-    </div>
-    <div class="form-group">
-      <label for="s-base-url" data-i18n="baseUrlLabel">API 地址（可选）</label>
-      <input id="s-base-url" placeholder="留空用 OpenAI 官方，DeepSeek: https://api.deepseek.com" data-i18n-placeholder="baseUrlPlaceholder" />
-      <div class="hint" data-i18n="baseUrlHint">自定义 API 地址，如 DeepSeek 填 https://api.deepseek.com</div>
-    </div>
-    <div class="form-group">
-      <label for="s-recursion-limit" data-i18n="recursionLimitLabel">最大推理步数</label>
-      <input id="s-recursion-limit" type="number" min="10" max="200" step="1" />
-      <div class="hint" data-i18n="recursionLimitHint">复杂任务或多次工具调用可适当调大；过大时循环任务会运行更久。</div>
-    </div>
-    <div class="form-group">
-      <label>
-        <input id="s-tavily-enabled" type="checkbox" style="width:auto;height:auto;margin-right:6px;" />
-        <span data-i18n="tavilyEnabledLabel">优先使用 Tavily Search</span>
-      </label>
-      <div class="hint" data-i18n="tavilyEnabledHint">开启后 web_search 会优先调用 Tavily API，失败时自动回退原来的 Bing/DuckDuckGo 搜索。</div>
-    </div>
-    <div class="form-group">
-      <label for="s-tavily-api-key">Tavily API Key</label>
-      <input id="s-tavily-api-key" type="password" placeholder="tvly-..." autocomplete="new-password" />
-      <div class="hint" id="s-tavily-api-key-hint" data-i18n="tavilyApiKeyHint">留空则保留当前已保存的 Tavily API Key。</div>
-    </div>
-    <div class="form-group">
-      <label for="s-tavily-search-url" data-i18n="tavilySearchUrlLabel">Tavily Search URL</label>
-      <input id="s-tavily-search-url" placeholder="https://api.tavily.com/search" />
-      <div class="hint" data-i18n="tavilySearchUrlHint">默认使用 Tavily 官方搜索接口。</div>
-    </div>
-    <div class="save-feedback" id="save-feedback"></div>
-    <div class="modal-actions">
+    <div class="settings-footer">
       <button class="btn-secondary" onclick="closeSettings()" data-i18n="cancelButton">取消</button>
       <button class="btn-primary" id="save-settings-btn" onclick="saveSettings()" data-i18n="saveRestartButton">保存并重启</button>
     </div>
@@ -2294,10 +2386,7 @@ function closeArtifactPreview() {
   document.getElementById('artifact-preview-modal').classList.remove('active');
 }
 
-// 点击遮罩关闭
-document.getElementById('settings-modal').addEventListener('click', function(e) {
-  if (e.target === this) closeSettings();
-});
+// 点击遮罩关闭的记忆弹窗（设置弹窗仅能通过关闭按钮关闭）
 document.getElementById('memory-modal').addEventListener('click', function(e) {
   if (e.target === this) closeMemory();
 });
@@ -2524,6 +2613,141 @@ document.addEventListener('mousemove', (event) => {
   tooltip.style.left = `${Math.max(margin, Math.min(event.clientX + margin, maxX))}px`;
   tooltip.style.top = `${Math.max(margin, Math.min(event.clientY + margin, maxY))}px`;
 });
+
+// ---------- 设置弹窗 Tab 切换 ----------
+
+function switchSettingsTab(tabId) {
+  document.querySelectorAll('.settings-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tabId));
+  document.querySelectorAll('.settings-tab-panel').forEach(p => p.classList.toggle('active', p.id === 'panel-' + tabId));
+}
+
+// ---------- 数据库连接管理 ----------
+
+function showDBMsg(msg, type) {
+  const el = document.getElementById('db-msg');
+  el.textContent = msg;
+  el.style.display = msg ? '' : 'none';
+  el.style.color = type === 'success' ? '#30d158' : type === 'error' ? '#d70015' : '#999';
+}
+
+function toggleDbFields() {
+  const type = document.getElementById('db-type').value;
+  document.getElementById('db-sqlite-fields').style.display = type === 'sqlite' ? '' : 'none';
+  document.getElementById('db-server-fields').style.display = type !== 'sqlite' ? '' : 'none';
+}
+
+function getDBFormData() {
+  const type = document.getElementById('db-type').value;
+  const data = {
+    name: document.getElementById('db-name').value.trim(),
+    db_type: type,
+    readonly: document.getElementById('db-readonly').checked,
+  };
+  if (type === 'sqlite') {
+    data.path = document.getElementById('db-path').value.trim();
+  } else {
+    data.host = document.getElementById('db-host').value.trim();
+    data.port = parseInt(document.getElementById('db-port').value) || 0;
+    data.database = document.getElementById('db-database').value.trim();
+    data.username = document.getElementById('db-username').value.trim();
+    data.password = document.getElementById('db-password').value;
+  }
+  return data;
+}
+
+function clearDBForm() {
+  document.getElementById('db-name').value = '';
+  document.getElementById('db-path').value = '';
+  document.getElementById('db-host').value = '';
+  document.getElementById('db-port').value = '';
+  document.getElementById('db-database').value = '';
+  document.getElementById('db-username').value = '';
+  document.getElementById('db-password').value = '';
+  document.getElementById('db-readonly').checked = true;
+  showDBMsg('', '');
+}
+
+function fillDBForm(data) {
+  document.getElementById('db-name').value = data.name || '';
+  document.getElementById('db-type').value = data.db_type || 'sqlite';
+  toggleDbFields();
+  if (data.db_type === 'sqlite') {
+    document.getElementById('db-path').value = data.path || '';
+  } else {
+    document.getElementById('db-host').value = data.host || '';
+    document.getElementById('db-port').value = data.port || '';
+    document.getElementById('db-database').value = data.database || '';
+    document.getElementById('db-username').value = data.username || '';
+    document.getElementById('db-password').value = data.password || '';
+  }
+  document.getElementById('db-readonly').checked = data.readonly !== false;
+}
+
+async function loadDBConnections() {
+  try {
+    const res = await fetch('/db/connections');
+    if (!res.ok) return;
+    const data = await res.json();
+    const list = document.getElementById('db-list');
+    if (!data || data.length === 0) {
+      list.innerHTML = '<div style="color:#999;font-size:13px;padding:4px 0 8px;">暂无数据库连接，点击下方添加</div>';
+      return;
+    }
+    list.innerHTML = data.map(function(c) {
+      var statusColor = c.enabled ? '#30d158' : '#ff453a';
+      var dataStr = escapeHtml(JSON.stringify(c));
+      return '<div onclick="fillDBForm(JSON.parse(\'' + dataStr + '\'))" style="cursor:pointer;padding:6px 8px;border:1px solid #eee;border-radius:6px;margin-bottom:4px;font-size:13px;display:flex;align-items:center;gap:6px;">' +
+        '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + statusColor + ';"></span>' +
+        '<span>' + escapeHtml(c.name) + '</span>' +
+        '<span style="color:#999;font-size:11px;">' + escapeHtml(c.db_type) + '</span>' +
+        '</div>';
+    }).join('');
+  } catch {}
+}
+
+async function testDBConnection() {
+  var data = getDBFormData();
+  if (!data.name) { showDBMsg('请输入连接名', 'error'); return; }
+  showDBMsg('测试中...', '');
+  try {
+    var res = await fetch('/db/test-connection', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    var result = await res.json();
+    if (result.ok) {
+      showDBMsg('连接成功！', 'success');
+    } else {
+      showDBMsg('连接失败: ' + (result.error || '未知错误'), 'error');
+    }
+  } catch (e) {
+    showDBMsg('测试失败: ' + e.message, 'error');
+  }
+}
+
+async function saveDBConnection() {
+  var data = getDBFormData();
+  if (!data.name) { showDBMsg('请输入连接名', 'error'); return; }
+  showDBMsg('保存中...', '');
+  try {
+    var res = await fetch('/db/connections', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    if (res.ok) {
+      showDBMsg('保存成功！', 'success');
+      clearDBForm();
+      loadDBConnections();
+    } else {
+      var err = await res.text();
+      showDBMsg('保存失败: ' + err, 'error');
+    }
+  } catch (e) {
+    showDBMsg('保存失败: ' + e.message, 'error');
+  }
+}
 
 // ---------- 初始化 ----------
 

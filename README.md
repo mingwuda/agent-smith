@@ -23,8 +23,9 @@ AgentSmith 是一个本地/私有部署的桌面 AI 智能体。它基于 FastAP
 | 网页能力 | `web_search` 搜索网页（Bing → 搜狗 → DuckDuckGo 逐级 fallback），`web_fetch` 抓取正文 |
 | Git 工具 | 查看状态、diff、日志、show、worktree；按明确指令 add/commit/push/revert/merge/checkout |
 | 子代理 | `delegate_task` 串行 + `delegate_tasks_parallel` 并行委派 coder/reviewer/debugger/searcher；**支持实时日志流**展示执行过程 |
-| Skills | 加载 `SKILL.md`，兼容 YAML frontmatter 和 oh-my-openagent / Superpowers 风格技能 |
+| Skills | 加载 `SKILL.md`，兼容 YAML frontmatter 和 oh-my-openagent / Superpowers 风格技能；内置 `database-interaction` 技能支持自然语言数据库交互 |
 | 长期记忆 | 按用户隔离保存长期偏好、项目事实和常用环境信息 |
+| 数据库交互 | 内置 `dbcli` 核心库 + CLI 工具 + Agent 技能，支持 SQLite / PostgreSQL / MySQL 自然语言查询，列级/行级权限控制 |
 | 多用户 | 登录保护、管理员用户管理、每个用户独立工作区、会话、用量和记忆；支持 `AGENT_USERS` 环境变量批量配置 |
 | 上下文管理 | 按模型上下文窗口估算长度，达到阈值时压缩历史；大日志/大文件不直接塞全文 |
 | 用量统计 | 按用户、会话、Provider、模型和工具统计调用与 token |
@@ -341,6 +342,68 @@ triggers: [debug, 排查, 根因]
 | `dispatching-parallel-agents` | Superpowers | 并行派发独立子代理（P1） |
 | `finishing-a-development-branch` | Superpowers | 开发分支收尾清理（P2） |
 | `using-git-worktrees` | Superpowers | Git Worktree 隔离开发环境（P1） |
+| `database-interaction` | 内置 | 自然语言数据库交互 |
+
+---
+
+## 数据库交互
+
+AgentSmith 内置 `dbcli` 数据库交互系统，让 Agent 可以直接用自然语言与数据库对话。
+
+### 架构
+
+```
+用户 ═▶ Agent ═▶ database_tool（Agent 工具）
+                         │
+                    dbcli 核心库
+                  ┌─ auth.py   —— 列级/行级权限控制
+                  ├─ connection.py —— SQLAlchemy 连接池
+                  ├─ query.py  —— SQL 执行与结果格式化
+                  └─ schema.py —— 表结构自省
+                         │
+              ┌──────────┼──────────┐
+           SQLite    PostgreSQL    MySQL
+```
+
+### 使用方法
+
+在设置弹窗的「数据库」面板中添加/测试/保存连接，然后 Agent 就能直接查询：
+
+```
+用户：帮我查一下 orders 表里上周的订单
+Agent：先调用 db_schema 查看 orders 表结构，再生成 SQL 查询并返回结果
+```
+
+### 命令行
+
+```bash
+cd agent_core
+python -m dbcli.cli query "SELECT count(*) FROM users" --conn prod_db
+python -m dbcli.cli schema --conn prod_db --table orders
+python -m dbcli.cli connect list
+python -m dbcli.cli connect test my_db
+```
+
+### 权限控制
+
+数据库面板默认开启只读模式，更细粒度的权限在 `~/.desktop_agent/dbcli/permissions.yaml` 中配置：
+
+```yaml
+roles:
+  analyst:
+    databases:
+      prod_db:
+        - table: orders
+          columns_allow: [id, amount, status, created_at]  # 列级白名单
+          row_filter: "dept_id = {{user.dept_id}}"          # 行级过滤
+          allow_write: false
+          max_rows: 200
+```
+
+### 配置文件
+
+- 数据库连接：`~/.desktop_agent/dbcli/connections.yaml`
+- 权限规则：`~/.desktop_agent/dbcli/permissions.yaml`
 
 ---
 
@@ -442,6 +505,14 @@ http://127.0.0.1:8899/docs
 | `/users` | GET/POST | 管理用户 |
 | `/users/{user_id}` | DELETE | 删除用户 |
 | `/users/me` | GET | 当前登录用户 |
+| `/users/me` | GET | 当前登录用户 |
+| `/db/connections` | GET/POST | 列出或添加数据库连接 |
+| `/db/connections/{name}` | DELETE | 删除数据库连接 |
+| `/db/connections/{name}/test` | POST | 测试已保存连接 |
+| `/db/test-connection` | POST | 测试未保存连接（表单预测试） |
+| `/db/permissions` | GET/PUT | 读写权限配置 |
+| `/db/query` | POST | 执行 SQL 查询（含权限检查） |
+| `/db/schema/{connection_name}` | GET | 获取数据库表结构 |
 | `/health` | GET | 健康检查 |
 
 除登录、退出、Token 登录和健康检查外，其它 API 都需要登录。
@@ -606,6 +677,14 @@ desktop-agent/
 │   ├── session_store.py        # SQLite 会话存储
 │   ├── user_manager.py         # 多用户数据目录
 │   ├── network_resolver.py     # DNS 兜底解析
+│   ├── dbcli/                   # 数据库交互核心库
+│   │   ├── auth.py              # 列级/行级权限引擎
+│   │   ├── connection.py        # SQLAlchemy 连接池
+│   │   ├── query.py             # SQL 执行与结果格式化
+│   │   ├── schema.py            # 表结构自省
+│   │   ├── config.py            # 连接与权限配置管理
+│   │   ├── cli.py               # Click 命令行工具
+│   │   └── permissions.yaml     # 权限规则模板
 │   ├── memory/
 │   │   └── local_memory.py     # 长期记忆
 │   ├── monitoring/
@@ -620,7 +699,8 @@ desktop-agent/
 │       ├── git_tools.py        # Git 工具（含白名单安全验证）
 │       ├── web_tools.py        # 搜索和网页抓取
 │       ├── memory_tools.py     # 记忆工具
-│       └── system_tools.py     # 系统信息和 Skills 列表
+│       ├── system_tools.py     # 系统信息和 Skills 列表
+│       └── database_tool.py    # 数据库交互工具（db_schema, db_query, db_connections）
 ├── desktop/
 │   └── index.html              # 单页前端
 ├── skills/                     # 项目内 Skills（9 个 oh-my-openagent + 5 个 Superpowers）

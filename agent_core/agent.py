@@ -494,7 +494,7 @@ class DesktopAgent:
         user_message: str,
         steps: list[dict],
         final_result: str,
-    ) -> str | None:
+    ) -> Optional[str]:
         """任务完成后反思，总结可复用的模式经验。无工具调用或无有价值模式时返回 None。"""
         # 只对涉及工具调用的任务反思
         tool_steps = [s for s in steps if s.get("type") == "tool_start"]

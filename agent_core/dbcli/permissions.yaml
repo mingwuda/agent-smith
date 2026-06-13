@@ -1,0 +1,40 @@
+# 数据库权限规则配置
+# 由 UI 管理界面编辑，或直接修改此文件
+#
+# 规则类型：
+#   columns_allow: 白名单列（空 = 全部允许）
+#   columns_deny:  黑名单列
+#   row_filter:    行级 Jinja2 模板，变量来自运行时 user_context
+#   allow_write:   是否允许 INSERT/UPDATE/DELETE
+#   max_rows:      单次查询最大返回行数
+
+global_defaults:
+  max_query_rows: 500
+  default_readonly: true
+  allow_dangerous_sql: false
+
+roles:
+  # ── 示例：分析师角色 ──
+  analyst:
+    databases:
+      prod_db:
+        - table: orders
+          columns_allow: [id, amount, status, created_at]  # 只暴露这四列
+          row_filter: "dept_id = {{user.dept_id}}"          # 只能看自己部门的数据
+          allow_write: false
+          max_rows: 200
+        - table: products
+          columns_allow: []                                  # 空 = 全部列
+          row_filter: ""
+          allow_write: false
+          max_rows: 500
+
+  # ── 示例：管理员角色 ──
+  admin:
+    databases:
+      prod_db:
+        - table: "*"           # * 表示所有表
+          columns_allow: []     # 空 = 全部允许
+          row_filter: ""
+          allow_write: true
+          max_rows: 5000

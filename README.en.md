@@ -21,8 +21,9 @@ It works well as a personal or intranet team assistant for reading and writing w
 | Web tools | `web_search` for search and `web_fetch` for page text, with retries and fallback requests |
 | Git tools | Inspect status, diff, log, show, worktree; add, commit, push, revert, merge, checkout only on explicit user request |
 | Subagents | `delegate_task` for serial + `delegate_tasks_parallel` for parallel delegation to coder/reviewer/debugger agents |
-| Skills | Loads `SKILL.md`, compatible with YAML frontmatter and common oh-my-openagent / Superpowers-style skills |
+| Skills | Loads `SKILL.md`, compatible with YAML frontmatter and common oh-my-openagent / Superpowers-style skills; built-in `database-interaction` skill for natural-language database queries |
 | Long-term memory | Stores user preferences, project facts, and reusable environment notes per user |
+| Database interaction | Built-in `dbcli` core library + CLI tool + Agent skill, supports SQLite / PostgreSQL / MySQL with natural-language queries, column-level and row-level permission control |
 | Multi-user | Login protection, admin user management, and isolated workspaces, sessions, usage records, and memories per user |
 | Context management | Estimates model context usage and compresses history near the threshold; large logs/files are not inserted in full |
 | Usage tracking | Tracks calls and tokens by user, session, provider, model, and tool |
@@ -277,6 +278,69 @@ Currently 13 built-in skills:
 | `dispatching-parallel-agents` | Superpowers | Parallel independent subagent dispatch (P1) |
 | `finishing-a-development-branch` | Superpowers | Branch finalization and cleanup (P2) |
 | `using-git-worktrees` | Superpowers | Git Worktree isolated development (P1) |
+| `database-interaction` | built-in | Natural-language database queries |
+
+---
+
+## Database Interaction
+
+AgentSmith includes a built-in `dbcli` database interaction system that allows the Agent to talk to databases in natural language.
+
+### Architecture
+
+```
+User ═▶ Agent ═▶ database_tool (Agent tools)
+                         │
+                    dbcli core library
+                  ┌─ auth.py   —— Column/row-level permission control
+                  ├─ connection.py —— SQLAlchemy connection pool
+                  ├─ query.py  —— SQL execution & result formatting
+                  └─ schema.py —— Schema introspection
+                         │
+              ┌──────────┼──────────┐
+           SQLite    PostgreSQL    MySQL
+```
+
+### Usage
+
+Add, test, and save database connections through the **Database** panel in the settings modal. Then talk to the Agent:
+
+```
+User: Show me last week's orders from the orders table
+Agent: Calls db_schema to inspect the orders table, generates a SQL query,
+       executes it through db_query, and returns the formatted result
+```
+
+### CLI
+
+```bash
+cd agent_core
+python -m dbcli.cli query "SELECT count(*) FROM users" --conn prod_db
+python -m dbcli.cli schema --conn prod_db --table orders
+python -m dbcli.cli connect list
+python -m dbcli.cli connect test my_db
+```
+
+### Permission Control
+
+The database panel enables read-only mode by default. Finer-grained permissions can be configured in `~/.desktop_agent/dbcli/permissions.yaml`:
+
+```yaml
+roles:
+  analyst:
+    databases:
+      prod_db:
+        - table: orders
+          columns_allow: [id, amount, status, created_at]
+          row_filter: "dept_id = {{user.dept_id}}"
+          allow_write: false
+          max_rows: 200
+```
+
+### Configuration Files
+
+- Database connections: `~/.desktop_agent/dbcli/connections.yaml`
+- Permission rules: `~/.desktop_agent/dbcli/permissions.yaml`
 
 ---
 
@@ -315,6 +379,13 @@ Main endpoints:
 | `/users` | GET/POST | Manage users |
 | `/users/{user_id}` | DELETE | Delete user |
 | `/users/me` | GET | Current user |
+| `/db/connections` | GET/POST | List or add database connections |
+| `/db/connections/{name}` | DELETE | Delete database connection |
+| `/db/connections/{name}/test` | POST | Test saved connection |
+| `/db/test-connection` | POST | Test unsaved connection (form preview) |
+| `/db/permissions` | GET/PUT | Read/write permission config |
+| `/db/query` | POST | Execute SQL query (with permission check) |
+| `/db/schema/{connection_name}` | GET | Get database schema |
 | `/health` | GET | Health check |
 
 All APIs except login, logout, token login, and health check require authentication.
@@ -410,6 +481,14 @@ desktop-agent/
 │   ├── session_store.py        # SQLite session storage
 │   ├── user_manager.py         # Multi-user data directories
 │   ├── network_resolver.py     # DNS fallback resolver
+│   ├── dbcli/                   # Database interaction core library
+│   │   ├── auth.py              # Column/row-level permission engine
+│   │   ├── connection.py        # SQLAlchemy connection pool
+│   │   ├── query.py             # SQL execution & result formatting
+│   │   ├── schema.py            # Schema introspection
+│   │   ├── config.py            # Connection & permission config management
+│   │   ├── cli.py               # Click CLI tool
+│   │   └── permissions.yaml     # Permission rules template
 │   ├── memory/
 │   │   └── local_memory.py     # Long-term memory
 │   ├── monitoring/
@@ -424,7 +503,8 @@ desktop-agent/
 │       ├── git_tools.py        # Git tools with allowlist security
 │       ├── web_tools.py        # Search and page fetch
 │       ├── memory_tools.py     # Memory tools
-│       └── system_tools.py     # System info and Skills list
+│       ├── system_tools.py     # System info and Skills list
+│       └── database_tool.py    # Database interaction tools (db_schema, db_query, db_connections)
 ├── desktop/
 │   └── index.html              # Single-page frontend with built-in i18n
 ├── skills/                     # 14 built-in skills (9 oh-my-openagent + 5 Superpowers)
