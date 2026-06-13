@@ -127,7 +127,7 @@ class SubagentManager:
     def clear_batch(self) -> None:
         self._current_batch = []
 
-    async def run_sync(self, task: str, agent_type: str = "coder", context: str = "", wall_timeout: float = 180.0) -> SubagentTask:
+    async def run_sync(self, task: str, agent_type: str = "coder", context: str = "", wall_timeout: float = 180.0, idle_timeout: float = 60.0) -> SubagentTask:
         if not self._config:
             raise RuntimeError("SubagentManager 尚未初始化")
         agent_type = agent_type if agent_type in SUBAGENT_PROMPTS else "coder"
@@ -140,6 +140,27 @@ class SubagentManager:
         self._tasks[item.id] = item
         item.status = "running"
         item.started_at = time.time()
+        # 最后一个日志时间戳，用于检测 idle timeout
+        item._last_log_ts = time.time()
+        # 包装 append_log 记录活跃时间
+        _orig_append = item.append_log
+        def _tracked_append_log(text: str, cat: str = "info") -> None:
+            item._last_log_ts = time.time()
+            _orig_append(text, cat)
+        item.append_log = _tracked_append_log  # type: ignore[method-assign]
+
+        # 启动 idle 监视后台任务
+        async def _idle_watcher():
+            while item.status == "running":
+                await asyncio.sleep(5)
+                idle = time.time() - item._last_log_ts
+                if idle > idle_timeout:
+                    item.append_log(
+                        f"❌ 长时间无新日志（{idle:.0f}s），判定为卡死，强制结束",
+                        "error",
+                    )
+                    raise asyncio.CancelledError(f"idle timeout {idle:.0f}s")
+        watcher = asyncio.create_task(_idle_watcher())
         try:
             item.result = await asyncio.wait_for(
                 self._run_agent(item),
@@ -155,11 +176,25 @@ class SubagentManager:
                 f"可能是 search 源响应慢或模型端排队。可以缩小任务范围或换个网络环境重试。"
             )
             item.append_log(f"❌ 子代理整体超时（{elapsed:.1f}s，预算 {wall_timeout}s）", "error")
-        except Exception as exc:
-            item.error = f"{type(exc).__name__}: {exc}"
-            item.status = "error"
-            item.result = f"❌ 子代理执行失败：{item.error}"
+        except (asyncio.CancelledError, Exception) as exc:
+            if item.status == "running":  # 来自 idle watcher
+                idle = time.time() - item._last_log_ts
+                item.error = f"长时间无活动（{idle:.0f}s）"
+                item.status = "error"
+                item.result = (
+                    f"❌ 子代理长时间无新日志（{idle:.0f}s），判定为卡死。\n"
+                    f"通常是 search 源不可达或模型端无响应。可以降低搜索并发或换个网络重试。"
+                )
+            else:
+                item.error = f"{type(exc).__name__}: {exc}"
+                item.status = "error"
+                item.result = f"❌ 子代理执行失败：{item.error}"
         finally:
+            watcher.cancel()
+            try:
+                await watcher
+            except (asyncio.CancelledError, Exception):
+                pass
             item.finished_at = time.time()
         return item
 
