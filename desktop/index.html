@@ -3199,6 +3199,7 @@ function showAddPermEntity(type) {
   }
   const names = val.split(',').map(s => s.trim()).filter(s => s && s.length > 0);
   if (names.length === 0) return;
+  const addedNames = [];
   for (const n of names) {
     const key = type;
     if (!_permData[key]) _permData[key] = {};
@@ -3215,8 +3216,14 @@ function showAddPermEntity(type) {
       }
     }
     _permData[key][n] = { databases: {}, role: role };
+    addedNames.push(n);
   }
   renderPermEntities();
+  // 自动展开新添加的实体卡片，让用户立即看到角色选择器和规则区
+  for (const n of addedNames) {
+    const body = document.getElementById(`body-${type}-${escapeId(n)}`);
+    if (body) body.classList.add('open');
+  }
 }
 
 function deletePermEntity(type, name) {
