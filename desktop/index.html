@@ -378,6 +378,88 @@
     #sidebar.collapsed > * { display:none; }
     #sidebar-toggle { display:block; }
   }
+
+  /* ═══ 数据库设置内部二级页签 ═══ */
+  .db-inner-tabs {
+    display:flex;gap:0;margin-bottom:16px;border-bottom:2px solid #e8e8ee;
+  }
+  .db-inner-tab {
+    padding:8px 18px;border:none;background:none;cursor:pointer;font-size:14px;
+    color:#666;border-bottom:2px solid transparent;margin-bottom:-2px;transition:all .2s;
+    font-weight:500;
+  }
+  .db-inner-tab:hover { color:#333; }
+  .db-inner-tab.active {
+    color:#007aff;border-bottom-color:#007aff;font-weight:600;
+  }
+  .db-sub-panel { display:none; }
+  .db-sub-panel.active { display:block; }
+
+  /* ═══ 权限配置可视化UI样式 ═══ */
+  .perm-section { margin-bottom:20px;padding:16px;background:#f9f9fb;border-radius:10px;border:1px solid #eee; }
+  .perm-section-header { display:flex;justify-content:space-between;align-items:center;margin-bottom:12px; }
+  .perm-section-title { font-size:14px;font-weight:600;margin:0;color:#222; }
+  .perm-add-btn { padding:5px 12px;border:1px solid #007aff;border-radius:6px;background:#fff;color:#007aff;cursor:pointer;font-size:12px;font-weight:500; }
+  .perm-add-btn:hover { background:#007aff;color:#fff; }
+
+  .perm-form-grid { display:grid;grid-template-columns:repeat(3,1fr);gap:12px;align-items:end; }
+  @media(max-width:640px){ .perm-form-grid{grid-template-columns:1fr;} }
+
+  .perm-entity-list { min-height:30px; }
+  .perm-placeholder { font-size:13px;color:#aaa;text-align:center;padding:16px 0;margin:0; }
+
+  /* 实体卡片（用户/角色）*/
+  .perm-entity-card {
+    background:#fff;border:1px solid #e0e0e6;border-radius:8px;margin-bottom:10px;
+    overflow:hidden;transition:border-color .15s;
+  }
+  .perm-entity-card:hover { border-color:#c0c0cc; }
+  .perm-entity-card-header {
+    display:flex;justify-content:space-between;align-items:center;
+    padding:10px 14px;background:#f4f4f8;cursor:pointer;
+    user-select:none;border-bottom:1px solid #eee;
+  }
+  .perm-entity-name { font-size:13px;font-weight:600;color:#222;display:flex;align-items:center;gap:6px; }
+  .perm-entity-type-badge {
+    font-size:10px;padding:2px 7px;border-radius:10px;font-weight:500;
+    vertical-align:middle;
+  }
+  .perm-type-role { background:#e8f0fe;color:#1a56db; }
+  .perm-type-user { background:#e6f4ea;color:#137333; }
+  .perm-entity-actions { display:flex;gap:4px; }
+  .perm-act-btn {
+    padding:3px 8px;border:1px solid #ddd;border-radius:4px;background:#fff;
+    cursor:pointer;font-size:11px;color:#555;
+  }
+  .perm-act-btn:hover { background:#f0f0f0; }
+  .perm-act-btn.danger:hover { color:#d70015;border-color:#d70015; }
+  .perm-entity-body { padding:12px 14px;display:none; }
+  .perm-entity-body.open { display:block; }
+
+  /* 规则列表 */
+  .perm-rules-header { display:flex;justify-content:space-between;align-items:center;margin-bottom:8px; }
+  .perm-rules-label { font-size:12px;color:#888;font-weight:500; }
+  .perm-rule-add-btn { padding:3px 10px;border:1px solid #ccc;border-radius:4px;background:#fff;cursor:pointer;font-size:11px;color:#555; }
+  .perm-rule-add-btn:hover { background:#f5f5f5; }
+
+  .perm-rule-card {
+    background:#fafafc;border:1px solid #e8e8ee;border-radius:6px;
+    margin-bottom:8px;padding:12px;position:relative;
+  }
+  .perm-rule-delete {
+    position:absolute;top:6px;right:6px;width:20px;height:20px;border-radius:50%;
+    border:1px solid #e0e0e6;background:#fff;color:#999;cursor:pointer;font-size:14px;line-height:18px;text-align:center;
+  }
+  .perm-rule-delete:hover { color:#d70015;border-color:#d70015; }
+  .perm-rule-fields { display:grid;grid-template-columns:1fr 1fr;gap:8px; }
+  .perm-rule-field label { font-size:11px;color:#777;display:block;margin-bottom:3px;font-weight:500; }
+  .perm-rule-field input, .perm-rule-field select, .perm-rule-field textarea {
+    padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:12px;width:100%;box-sizing:border-box;
+    background:#fff;
+  }
+  .perm-rule-field textarea { resize:vertical;min-height:32px; }
+  .perm-rule-field-full { grid-column:1/-1; }
+
 </style>
 </head>
 <body>
@@ -548,7 +630,7 @@
     <div class="settings-body">
       <div class="settings-sidebar">
         <button class="settings-tab active" data-tab="model" onclick="switchSettingsTab('model')">🤖 模型</button>
-        <button class="settings-tab" data-tab="database" onclick="switchSettingsTab('database');loadDBConnections();loadPermSummary()">🗄️ 数据库</button>
+        <button class="settings-tab" data-tab="database" onclick="switchSettingsTab('database');switchDBSubTab('connections');loadDBConnections()">🗄️ 数据库</button>
       </div>
       <div class="settings-content">
         <!-- 模型设置 -->
@@ -608,78 +690,118 @@
 
         <!-- 数据库设置 -->
         <div class="settings-tab-panel" id="panel-database">
-          <div id="db-list" style="margin-bottom:12px;"></div>
-          <div class="form-group">
-            <label>连接名</label>
-            <input id="db-name" class="modal-input" placeholder="例如 prod_db" />
+          <!-- 内部二级页签 -->
+          <div class="db-inner-tabs">
+            <button class="db-inner-tab active" id="dbtab-conn" onclick="switchDBSubTab('connections')">🔌 连接配置</button>
+            <button class="db-inner-tab" id="dbtab-perm" onclick="switchDBSubTab('permissions')">🔒 权限配置</button>
           </div>
-          <div class="form-group">
-            <label>类型</label>
-            <select id="db-type" class="modal-input" onchange="toggleDbFields()" style="width:100%;padding:10px 12px;border:1px solid #ddd;border-radius:8px;font-size:14px;">
-              <option value="sqlite">SQLite</option>
-              <option value="postgresql">PostgreSQL</option>
-              <option value="mysql">MySQL</option>
-            </select>
-          </div>
-          <div id="db-sqlite-fields">
-            <div class="form-group">
-              <label>文件路径</label>
-              <input id="db-path" class="modal-input" placeholder="例如 /path/to/database.db" />
-            </div>
-          </div>
-          <div id="db-server-fields" style="display:none;">
-            <div class="form-group">
-              <label>主机地址</label>
-              <input id="db-host" class="modal-input" placeholder="127.0.0.1" />
-            </div>
-            <div class="form-group">
-              <label>端口</label>
-              <input id="db-port" class="modal-input" placeholder="5432" />
-            </div>
-            <div class="form-group">
-              <label>数据库名</label>
-              <input id="db-database" class="modal-input" placeholder="mydb" />
-            </div>
-            <div class="form-group">
-              <label>用户名</label>
-              <input id="db-username" class="modal-input" placeholder="user" />
-            </div>
-            <div class="form-group">
-              <label>密码</label>
-              <input id="db-password" class="modal-input" type="password" placeholder="****" />
-            </div>
-          </div>
-          <div class="form-group">
-            <label style="display:flex;align-items:center;gap:6px;font-weight:400;">
-              <input type="checkbox" id="db-readonly" checked style="width:auto;height:auto;" />
-              只读模式（默认开启，防止误写操作）
-            </label>
-          </div>
-          <div style="display:flex;gap:8px;align-items:center;">
-            <button class="btn-secondary" onclick="testDBConnection()" style="padding:8px 16px;border:1px solid #ddd;border-radius:8px;background:#fff;cursor:pointer;font-size:13px;">🔌 测试连接</button>
-            <button class="btn-primary" id="db-save-btn" onclick="saveDBConnection()" style="padding:8px 16px;border:1px solid #007aff;border-radius:8px;background:#007aff;color:#fff;cursor:pointer;font-size:13px;">💾 保存连接</button>
-            <span id="db-msg" style="font-size:12px;color:#999;display:none;"></span>
-          </div>
-          <div class="save-feedback" id="db-feedback" style="margin-top:8px;"></div>
 
-          <!-- 权限管理 -->
-          <div style="margin-top:20px;border-top:1px solid #eee;padding-top:16px;">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-              <h3 style="font-size:15px;margin:0;">权限配置</h3>
-              <button class="btn-secondary" onclick="loadPermissionsYaml()" style="padding:6px 14px;border:1px solid #ddd;border-radius:8px;background:#fff;cursor:pointer;font-size:13px;">📝 编辑权限 YAML</button>
+          <!-- ═══ 连接配置页签 ═══ -->
+          <div class="db-sub-panel active" id="db-sub-connections">
+            <div id="db-list" style="margin-bottom:12px;"></div>
+            <div class="form-group">
+              <label>连接名</label>
+              <input id="db-name" class="modal-input" placeholder="例如 prod_db" />
             </div>
-            <div id="perm-editor" style="display:none;">
-              <p style="font-size:12px;color:#666;margin:0 0 8px;">编辑权限配置（YAML 格式）。<code>users:</code> 节定义用户白名单，优先于 <code>roles:</code> 节。</p>
-              <textarea id="perm-yaml" style="width:100%;height:260px;padding:10px;border:1px solid #ddd;border-radius:8px;font-family:monospace;font-size:12px;resize:vertical;"></textarea>
-              <div style="display:flex;gap:8px;margin-top:8px;">
-                <button class="btn-primary" onclick="savePermissionsYaml()" style="padding:6px 16px;border:1px solid #007aff;border-radius:8px;background:#007aff;color:#fff;cursor:pointer;font-size:13px;">💾 保存</button>
-                <button class="btn-secondary" onclick="cancelPermEdit()" style="padding:6px 16px;border:1px solid #ddd;border-radius:8px;background:#fff;cursor:pointer;font-size:13px;">取消</button>
-                <span id="perm-msg" style="font-size:12px;color:#999;"></span>
+            <div class="form-group">
+              <label>类型</label>
+              <select id="db-type" class="modal-input" onchange="toggleDbFields()" style="width:100%;padding:10px 12px;border:1px solid #ddd;border-radius:8px;font-size:14px;">
+                <option value="sqlite">SQLite</option>
+                <option value="postgresql">PostgreSQL</option>
+                <option value="mysql">MySQL</option>
+              </select>
+            </div>
+            <div id="db-sqlite-fields">
+              <div class="form-group">
+                <label>文件路径</label>
+                <input id="db-path" class="modal-input" placeholder="例如 /path/to/database.db" />
               </div>
             </div>
-            <div id="perm-list-view" style="font-size:13px;color:#666;">
-              <span id="perm-summary">加载中...</span>
-              <a href="#" onclick="loadPermissionsYaml();return false;" style="margin-left:8px;color:#007aff;font-size:12px;">查看/编辑</a>
+            <div id="db-server-fields" style="display:none;">
+              <div class="form-group">
+                <label>主机地址</label>
+                <input id="db-host" class="modal-input" placeholder="127.0.0.1" />
+              </div>
+              <div class="form-group">
+                <label>端口</label>
+                <input id="db-port" class="modal-input" placeholder="5432" />
+              </div>
+              <div class="form-group">
+                <label>数据库名</label>
+                <input id="db-database" class="modal-input" placeholder="mydb" />
+              </div>
+              <div class="form-group">
+                <label>用户名</label>
+                <input id="db-username" class="modal-input" placeholder="user" />
+              </div>
+              <div class="form-group">
+                <label>密码</label>
+                <input id="db-password" class="modal-input" type="password" placeholder="****" />
+              </div>
+            </div>
+            <div class="form-group">
+              <label style="display:flex;align-items:center;gap:6px;font-weight:400;">
+                <input type="checkbox" id="db-readonly" checked style="width:auto;height:auto;" />
+                只读模式（默认开启，防止误写操作）
+              </label>
+            </div>
+            <div style="display:flex;gap:8px;align-items:center;">
+              <button class="btn-secondary" onclick="testDBConnection()" style="padding:8px 16px;border:1px solid #ddd;border-radius:8px;background:#fff;cursor:pointer;font-size:13px;">🔌 测试连接</button>
+              <button class="btn-primary" id="db-save-btn" onclick="saveDBConnection()" style="padding:8px 16px;border:1px solid #007aff;border-radius:8px;background:#007aff;color:#fff;cursor:pointer;font-size:13px;">💾 保存连接</button>
+              <span id="db-msg" style="font-size:12px;color:#999;display:none;"></span>
+            </div>
+            <div class="save-feedback" id="db-feedback" style="margin-top:8px;"></div>
+          </div>
+
+          <!-- ═══ 权限配置页签（可视化） ═══ -->
+          <div class="db-sub-panel" id="db-sub-permissions">
+            <!-- 全局默认设置 -->
+            <div class="perm-section">
+              <h4 class="perm-section-title">📋 全局默认设置</h4>
+              <div class="perm-form-grid">
+                <div class="form-group">
+                  <label>单次查询最大行数</label>
+                  <input type="number" id="g-max-rows" value="500" min="10" max="50000" class="modal-input" style="padding:8px 12px;" />
+                </div>
+                <div class="form-group">
+                  <label>
+                    <input type="checkbox" id="g-default-readonly" checked style="width:auto;height:auto;margin-right:6px;" /> 默认只读
+                  </label>
+                </div>
+                <div class="form-group">
+                  <label>
+                    <input type="checkbox" id="g-dangerous-sql" style="width:auto;height:auto;margin-right:6px;" /> 允许危险 SQL
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            <!-- 角色权限管理 -->
+            <div class="perm-section">
+              <div class="perm-section-header">
+                <h4 class="perm-section-title">👥 角色权限</h4>
+                <button class="btn-secondary perm-add-btn" onclick="showAddPermEntity('role')">+ 添加角色</button>
+              </div>
+              <div id="perm-roles-list" class="perm-entity-list">
+                <p class="perm-placeholder">暂无角色权限，点击上方按钮添加</p>
+              </div>
+            </div>
+
+            <!-- 用户白名单管理 -->
+            <div class="perm-section">
+              <div class="perm-section-header">
+                <h4 class="perm-section-title">🧑 用户白名单（优先于角色）</h4>
+                <button class="btn-secondary perm-add-btn" onclick="showAddPermEntity('user')">+ 添加用户</button>
+              </div>
+              <div id="perm-users-list" class="perm-entity-list">
+                <p class="perm-placeholder">暂无用户白名单，点击上方按钮添加</p>
+              </div>
+            </div>
+
+            <!-- 保存按钮 -->
+            <div style="display:flex;gap:8px;align-items:center;margin-top:16px;padding-top:16px;border-top:1px solid #eee;">
+              <button class="btn-primary" onclick="saveVisualPermissions()" style="padding:8px 20px;border:1px solid #007aff;border-radius:8px;background:#007aff;color:#fff;cursor:pointer;font-size:13px;">💾 保存所有权限配置</button>
+              <span id="perm-save-msg" style="font-size:12px;color:#999;"></span>
             </div>
           </div>
         </div>
@@ -2888,55 +3010,329 @@ sendBtn.onclick = () => {
 };
 
 
-// 权限管理函数
-async function loadPermSummary() {
-  const summaryEl = document.getElementById('perm-summary');
-  try {
-    const resp = await fetch('/db/permissions');
-    const data = await resp.json();
-    const roles = Object.keys(data.roles || {}).length;
-    const users = Object.keys(data.users || {}).length;
-    summaryEl.textContent = `已配置 ${roles} 个角色权限，${users} 个用户白名单`;
-  } catch (e) {
-    summaryEl.textContent = '加载失败';
+// ═════ 数据库内部二级页签切换 ═════
+function switchDBSubTab(tab) {
+  document.querySelectorAll('.db-inner-tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.db-sub-panel').forEach(p => p.classList.remove('active'));
+  if (tab === 'connections') {
+    document.getElementById('dbtab-conn').classList.add('active');
+    document.getElementById('db-sub-connections').classList.add('active');
+  } else {
+    document.getElementById('dbtab-perm').classList.add('active');
+    document.getElementById('db-sub-permissions').classList.add('active');
+    loadVisualPermissions(); // 切换到权限页签时加载
   }
 }
 
-async function loadPermissionsYaml() {
-  const editor = document.getElementById('perm-editor');
-  const listView = document.getElementById('perm-list-view');
-  const yamlEl = document.getElementById('perm-yaml');
-  const msgEl = document.getElementById('perm-msg');
-  editor.style.display = 'block';
-  listView.style.display = 'none';
-  msgEl.style.display = 'none';
+// ═════ 权限可视化管理 ═════
+let _permData = { roles: {}, users: {}, global_defaults: {} };
+
+async function loadVisualPermissions() {
   try {
     const resp = await fetch('/db/permissions');
     const data = await resp.json();
-    yamlEl.value = data.yaml || '';
+    _permData = data;
+    // 全局默认值
+    const gd = data.global_defaults || {};
+    document.getElementById('g-max-rows').value = gd.max_query_rows || 500;
+    document.getElementById('g-default-readonly').checked = gd.default_readonly !== false;
+    document.getElementById('g-dangerous-sql').checked = !!gd.allow_dangerous_sql;
+    renderPermEntities();
   } catch (e) {
-    yamlEl.value = '# 加载失败: ' + e.message;
+    console.error('加载权限配置失败:', e);
   }
 }
 
-async function savePermissionsYaml() {
-  const yamlEl = document.getElementById('perm-yaml');
-  const msgEl = document.getElementById('perm-msg');
-  msgEl.style.display = 'inline';
+function renderPermEntities() {
+  // 渲染角色列表
+  const rolesList = document.getElementById('perm-roles-list');
+  const roleNames = Object.keys(_permData.roles || {});
+  if (roleNames.length === 0) {
+    rolesList.innerHTML = '<p class="perm-placeholder">暂无角色权限，点击上方按钮添加</p>';
+  } else {
+    let html = '';
+    for (const name of roleNames) {
+      html += buildEntityCard(name, 'role', _permData.roles[name]);
+    }
+    rolesList.innerHTML = html;
+  }
+
+  // 渲染用户列表
+  const usersList = document.getElementById('perm-users-list');
+  const userNames = Object.keys(_permData.users || {});
+  if (userNames.length === 0) {
+    usersList.innerHTML = '<p class="perm-placeholder">暂无用户白名单，点击上方按钮添加</p>';
+  } else {
+    let html = '';
+    for (const name of userNames) {
+      html += buildEntityCard(name, 'user', _permData.users[name]);
+    }
+    usersList.innerHTML = html;
+  }
+}
+
+function buildEntityCard(name, type, entityData) {
+  const badgeClass = type === 'role' ? 'perm-type-role' : 'perm-type-user';
+  const badgeText = type === 'role' ? '角色' : '用户';
+  const icon = type === 'role' ? '👥' : '🧑';
+  const rules = entityData.databases || {};
+  const dbNames = Object.keys(rules);
+
+  // 构建每个数据库的规则HTML
+  let rulesHtml = '';
+  if (dbNames.length > 0) {
+    for (const dbName of dbNames) {
+      const tableRules = rules[dbName] || [];
+      for (let i = 0; i < tableRules.length; i++) {
+        const r = tableRules[i];
+        rulesHtml += buildRuleCard(dbName, r, i);
+      }
+    }
+  } else {
+    rulesHtml = '<p style="font-size:12px;color:#aaa;padding:8px 0;">暂无规则，点击下方添加</p>';
+  }
+
+  return `<div class="perm-entity-card" id="entity-${type}-${escapeId(name)}">
+    <div class="perm-entity-card-header" onclick="togglePermEntity('${type}','${escAttr(name)}')">
+      <span class="perm-entity-name">${icon} ${escHtml(name)}
+        <span class="perm-entity-type-badge ${badgeClass}">${badgeText}</span>
+      </span>
+      <div class="perm-entity-actions" onclick="event.stopPropagation()">
+        <button class="perm-act-btn" onclick="showAddRuleForm('${type}','${escAttr(name)}')">+ 规则</button>
+        <button class="perm-act-btn danger" onclick="deletePermEntity('${type}','${escAttr(name)}')">删除</button>
+      </div>
+    </div>
+    <div class="perm-entity-body" id="body-${type}-${escapeId(name)}">
+      <div class="perm-rules-header">
+        <span class="perm-rules-label">${dbNames.length} 个数据库的规则</span>
+        <button class="perm-rule-add-btn" onclick="showAddRuleForm('${type}','${escAttr(name)}')">+ 添加规则</button>
+      </div>
+      ${rulesHtml}
+      <!-- 内联添加规则表单（默认隐藏）-->
+      <div class="perm-rule-card" id="addrule-form-${type}-${escapeId(name)}" style="display:none;">
+        ${buildRuleForm(type, name, '', null)}
+      </div>
+    </div>
+  </div>`;
+}
+
+function buildRuleCard(dbName, rule, idx) {
+  return `<div class="perm-rule-card">
+    <button class="perm-rule-delete" onclick="this.parentElement.remove()" title="删除规则">×</button>
+    <div class="perm-rule-fields">
+      <div class="perm-rule-field"><label>数据库连接</label><input value="${escHtml(dbName)}" disabled /></div>
+      <div class="perm-rule-field"><label>表名</label><input value="${escHtml(rule.table || '')}" disabled /></div>
+      <div class="perm-rule-field perm-rule-field-full"><label>允许的列（逗号分隔，空=全部）</label><input value="${escHtml((rule.columns_allow||[]).join(', '))}" disabled /></div>
+      <div class="perm-rule-field perm-rule-field-full"><label>行级过滤条件</label><input value="${escHtml(rule.row_filter || '')}" placeholder='如 dept_id={{user.dept_id}}' disabled /></div>
+      <div class="perm-rule-field"><label>允许写操作</label><input value="${!!rule.allow_write ? '是' : '否'}" disabled /></div>
+      <div class="perm-rule-field"><label>最大行数</label><input value="${rule.max_rows||1000}" disabled /></div>
+    </div>
+  </div>`;
+}
+
+function buildRuleForm(type, name, dbName, existingRule) {
+  const r = existingRule || {};
+  return `<div class="perm-rule-fields">
+    <div class="perm-rule-field"><label>数据库连接 *</label>
+      <select id="rf-db-${type}-${escapeId(name)}" onchange="onPermDbChange('${type}','${escAttr(name)}')">
+        <option value="">选择数据库...</option></select>
+    </div>
+    <div class="perm-rule-field"><label>表名 *</label><input id="rf-table-${type}-${escapeId(name)}" value="${r.table||''}" placeholder="orders 或 * 表示所有表" /></div>
+    <div class="perm-rule-field perm-rule-field-full"><label>允许列（逗号分隔，空=全部允许）</label>
+      <input id="rf-cols-${type}-${escapeId(name)}" value="${(r.columns_allow||[]).join(',')}" placeholder="id,amount,status" />
+    </div>
+    <div class="perm-rule-field perm-rule-field-full"><label>行级过滤（Jinja2模板）</label>
+      <input id="rf-filter-${type}-${escapeId(name)}" value="${escHtml(r.row_filter||'')}" placeholder='dept_id={{user.dept_id}}' />
+    </div>
+    <div class="perm-rule-field"><label>允许写入</label>
+      <select id="rf-write-${type}-${escapeId(name)}"><option value="false" ${!r.allow_write?'selected':''}>否</option><option value="true" ${!!r.allow_write?'selected':''}>是</option></select>
+    </div>
+    <div class="perm-rule-field"><label>最大返回行数</label>
+      <input type="number" id="rf-maxrows-${type}-${escapeId(name)}" value="${r.max_rows||500}" min="10" max="50000" /></div>
+    <div class="perm-rule-field perm-rule-field-full" style="margin-top:6px;display:flex;gap:8px;">
+      <button class="btn-secondary" onclick="confirmAddRule('${type}','${escAttr(name)}')" style="padding:5px 14px;border:1px solid #007aff;border-radius:6px;background:#007aff;color:#fff;cursor:pointer;font-size:12px;">✓ 确认添加</button>
+      <button class="btn-secondary" onclick="hideAddRuleForm('${type}','${escAttr(name)}')" style="padding:5px 14px;border:1px solid #ddd;border-radius:6px;background:#fff;cursor:pointer;font-size:12px;">取消</button>
+    </div>
+  </div>`;
+}
+
+// ---- 实体操作 ----
+
+function togglePermEntity(type, name) {
+  const body = document.getElementById(`body-${type}-${escapeId(name)}`);
+  if (body) body.classList.toggle('open');
+}
+
+function showAddPermEntity(type) {
+  const label = type === 'role' ? '角色名称' : '用户ID';
+  const hint = type === 'role' ? '如 analyst, admin, viewer' : '如 alice, bob (支持逗号分隔多个用户)';
+  const val = prompt(`请输入${label}:\n提示：${hint}`);
+  if (!val || !val.trim()) return;
+  const names = val.split(',').map(s => s.trim()).filter(s => s);
+  for (const n of names) {
+    const key = type;
+    if (!_permData[key]) _permData[key] = {};
+    if (_permData[key][n]) {
+      alert(`${n} 已存在，请勿重复添加`);
+      continue;
+    }
+    _permData[key][n] = { databases: {} };
+  }
+  renderPermEntities();
+}
+
+function deletePermEntity(type, name) {
+  if (!confirm(`确定要删除 ${type==='role'?'角色':'用户'} "${name}" 吗？`)) return;
+  if (type === 'role') {
+    delete _permData.roles[name];
+  } else {
+    delete _permData.users[name];
+  }
+  renderPermEntities();
+}
+
+// ---- 规则操作 ----
+
+function showAddRuleForm(type, name) {
+  const form = document.getElementById(`addrule-form-${type}-${escapeId(name)}`);
+  if (form) {
+    form.style.display = 'block';
+    // 填充数据库下拉框
+    populateDbSelectForRule(type, name);
+  }
+  // 确保实体展开
+  const body = document.getElementById(`body-${type}-${escapeId(name)}`);
+  if (body) body.classList.add('open');
+}
+
+function hideAddRuleForm(type, name) {
+  const form = document.getElementById(`addrule-form-${type}-${escapeId(name)}`);
+  if (form) form.style.display = 'none';
+}
+
+function onPermDbChange(type, name) {
+  // 可以在这里联动获取表名列表（暂不实现）
+}
+
+function populateDbSelectForRule(type, name) {
+  const sel = document.getElementById(`rf-db-${type}-${escapeId(name)}`);
+  if (!sel) return;
+  sel.innerHTML = '<option value="">选择数据库...</option>';
+  // 从已保存的连接列表获取数据库名
+  fetch('/db/connections')
+    .then(r=>r.json())
+    .then(conns => {
+      if (conns && Array.isArray(conns)) {
+        conns.forEach(c => {
+          const opt = document.createElement('option');
+          opt.value = c.name; opt.textContent = `${c.name} (${c.db_type})`;
+          sel.appendChild(opt);
+        });
+      }
+    })
+    .catch(()=>{});
+}
+
+function confirmAddRule(type, name) {
+  const dbName = document.getElementById(`rf-db-${type}-${escapeId(name)}`).value;
+  const tableName = document.getElementById(`rf-table-${type}-${escapeId(name)}`).value.trim();
+  const colsStr = document.getElementById(`rf-cols-${type}-${escapeId(name)}`).value.trim();
+  const rowFilter = document.getElementById(`rf-filter-${type}-${escapeId(name)}`).value.trim();
+  const allowWrite = document.getElementById(`rf-write-${type}-${escapeId(name)}`).value === 'true';
+  const maxRows = parseInt(document.getElementById(`rf-maxrows-${type}-${escapeId(name)}`).value) || 500;
+
+  if (!dbName) { alert('请选择数据库连接'); return; }
+  if (!tableName) { alert('请输入表名'); return; }
+
+  const cols = colsStr ? colsStr.split(',').map(c=>c.trim()).filter(c=>c) : [];
+
+  const ruleObj = {
+    table: tableName,
+    columns_allow: cols,
+    row_filter: rowFilter,
+    allow_write: allowWrite,
+    max_rows: maxRows
+  };
+
+  const key = type;
+  if (!_permData[key]) _permData[key] = {};
+  if (!_permData[key][name]) _permData[key][name] = { databases: {} };
+  if (!_permData[key][name].databases[dbName]) {
+    _permData[key][name].databases[dbName] = [];
+  }
+  _permData[key][name].databases[dbName].push(ruleObj);
+
+  hideAddRuleForm(type, name);
+  renderPermEntities();
+
+  // 自动展开刚编辑的实体
+  setTimeout(() => {
+    const body = document.getElementById(`body-${type}-${escapeId(name)}`);
+    if (body) body.classList.add('open');
+  }, 50);
+}
+
+// ---- 保存到后端 ----
+
+async function saveVisualPermissions() {
+  const msgEl = document.getElementById('perm-save-msg');
+  msgEl.style.display = 'inline';msgEl.style.color = '#666';msgEl.textContent = '正在保存...';
+
+  // 收集全局默认值
+  const yamlObj = {
+    global_defaults: {
+      max_query_rows: parseInt(document.getElementById('g-max-rows').value) || 500,
+      default_readonly: document.getElementById('g-default-readonly').checked,
+      allow_dangerous_sql: document.getElementById('g-dangerous-sql').checked,
+    },
+    roles: {},
+    users: {}
+  };
+
+  // 收集角色
+  for (const [rn, rd] of Object.entries(_permData.roles || {})) {
+    yamlObj.roles[rn] = { databases: {} };
+    for (const [dn, tables] of Object.entries(rd.databases || {})) {
+      yamlObj.roles[rn].databases[dn] = tables.map(t => ({
+        table: t.table, columns_allow: t.columns_allow||[],
+        row_filter: t.row_filter||'', allow_write: !!t.allow_write,
+        max_rows: t.max_rows||500
+      }));
+    }
+  }
+  // 收集用户
+  for (const [un, ud] of Object.entries(_permData.users || {})) {
+    yamlObj.users[un] = { databases: {} };
+    for (const [dn, tables] of Object.entries(ud.databases || {})) {
+      yamlObj.users[un].databases[dn] = tables.map(t => ({
+        table: t.table, columns_allow: t.columns_allow||[],
+        row_filter: t.row_filter||'', allow_write: !!t.allow_write,
+        max_rows: t.max_rows||500
+      }));
+    }
+  }
+
   try {
-    const resp = await fetch('/db/permissions', {
+    // 转换为 YAML 文本
+    const resp = await fetch('/db/permissions');
+    const existing = await resp.json();
+    // 使用已有的yaml库或手动构建简单YAML格式
+    const yamlText = objToYaml(yamlObj);
+
+    const saveResp = await fetch('/db/permissions', {
       method: 'PUT',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({sql: yamlEl.value})
+      body: JSON.stringify({sql: yamlText})
     });
-    const data = await resp.json();
-    if (data.status === 'ok') {
+    const result = await saveResp.json();
+    if (result.status === 'ok') {
       msgEl.style.color = '#30d158';
-      msgEl.textContent = '保存成功';
-      setTimeout(() => { cancelPermEdit(); }, 1000);
+      msgEl.textContent = '✓ 保存成功！';
+      setTimeout(() => { msgEl.style.display = 'none'; }, 3000);
+      loadVisualPermissions(); // 重新加载确认
     } else {
       msgEl.style.color = '#d70015';
-      msgEl.textContent = '保存失败: ' + (data.detail || '未知错误');
+      msgEl.textContent = '保存失败: ' + (result.detail || '未知错误');
     }
   } catch (e) {
     msgEl.style.color = '#d70015';
@@ -2944,11 +3340,46 @@ async function savePermissionsYaml() {
   }
 }
 
-function cancelPermEdit() {
-  document.getElementById('perm-editor').style.display = 'none';
-  document.getElementById('perm-list-view').style.display = 'block';
-  loadPermSummary();
+// 简易对象转YAML（不需要依赖外部库）
+function objToYaml(obj, indent=0) {
+  const pad = '  '.repeat(indent);
+  let lines = [];
+  for (const [key, val] of Object.entries(obj)) {
+    if (val === null || val === undefined) continue;
+    if (Array.isArray(val)) {
+      if (val.length === 0) {
+        lines.push(`${pad}${key}: []`);
+      } else if (typeof val[0] === 'object' && val[0] !== null) {
+        lines.push(`${pad}${key}:`);
+        for (const item of val) {
+          lines.push(pad + '  - ' + objToYaml(item, indent + 2).trimStart());
+        }
+      } else {
+        lines.push(`${pad}${key}: ${JSON.stringify(val).replace(/"/g, "'").slice(1,-1)}`);
+      }
+    } else if (typeof val === 'object') {
+      const subKeys = Object.keys(val);
+      if (subKeys.length === 0) {
+        lines.push(`${pad}${key}: {}`);
+      } else {
+        lines.push(`${pad}${key}:`);
+        lines.push(objToYaml(val, indent + 1));
+      }
+    } else if (typeof val === 'boolean') {
+      lines.push(`${pad}${key}: ${val ? 'true' : 'false'}`);
+    } else if (typeof val === 'number') {
+      lines.push(`${pad}${key}: ${val}`);
+    } else {
+      lines.push(`${pad}${key}: "${String(val).replace(/\\/g,'\\\\').replace(/"/g,'\\"')}"`);
+    }
+  }
+  return lines.join('\n');
 }
+
+// ---- 工具函数 ----
+function escHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function escAttr(s) { return s.replace(/'/g,"\\'").replace(/"/g,'&quot;'); }
+function escapeId(s) { return s.replace(/[^a-zA-Z0-9_-]/g, '_'); }
 
 // 定时刷新状态和会话列表
 setInterval(() => { checkHealth(); refreshStats(); }, 5000);
