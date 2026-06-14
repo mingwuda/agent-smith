@@ -1831,10 +1831,12 @@ def db_test_connection_inline(req: DBConnectionRequest, request: Request):
 def db_get_permissions(request: Request):
     """获取权限配置"""
     _require_admin(request)
-    from dbcli.config import get_permission_config
+    from dbcli.config import get_permission_config, CONFIG_DIR
+    from pathlib import Path
+    import yaml
     perm = get_permission_config()
     # 简化返回（不暴露密码等敏感信息）
-    output = {"global_defaults": perm.global_defaults, "roles": {}}
+    output = {"global_defaults": perm.global_defaults, "roles": {}, "users": {}}
     for role_name, role in perm.roles.items():
         output["roles"][role_name] = {"databases": {
             db: [{"table": t.table, "columns_allow": t.columns_allow,
@@ -1842,6 +1844,24 @@ def db_get_permissions(request: Request):
                    "max_rows": t.max_rows} for t in tables]
             for db, tables in role.databases.items()
         }}
+    for user_id, user in perm.users.items():
+        output["users"][user_id] = {"databases": {
+            db: [{"table": t.table, "columns_allow": t.columns_allow,
+                   "row_filter": t.row_filter, "allow_write": t.allow_write,
+                   "max_rows": t.max_rows} for t in tables]
+            for db, tables in user.databases.items()
+        }}
+    # 返回原始 YAML 文本（供前端编辑器使用）
+    yaml_path = CONFIG_DIR / "permissions.yaml"
+    if not yaml_path.exists():
+        yaml_path = Path(__file__).parent / "dbcli" / "permissions.yaml"
+    yaml_text = ""
+    if yaml_path.exists():
+        try:
+            yaml_text = yaml_path.read_text(encoding="utf-8")
+        except Exception:
+            yaml_text = ""
+    output["yaml"] = yaml_text
     return output
 
 

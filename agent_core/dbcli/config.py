@@ -154,6 +154,14 @@ class TablePermission:
 
 
 @dataclass
+class UserPermission:
+    """用户权限定义（用户白名单，优先于角色权限）"""
+    user_id: str                                  # 用户ID
+    databases: dict[str, list[TablePermission]] = field(default_factory=dict)
+    # databases: { "prod_db": [TablePermission, ...], "analytics": [...] }
+
+
+@dataclass
 class RolePermission:
     """角色权限定义"""
     role: str                                      # 角色名
@@ -165,6 +173,7 @@ class RolePermission:
 class PermissionConfig:
     """权限配置总结构"""
     roles: dict[str, RolePermission] = field(default_factory=dict)
+    users: dict[str, UserPermission] = field(default_factory=dict)
     global_defaults: dict = field(default_factory=lambda: {
         "max_query_rows": 500,
         "default_readonly": True,
@@ -219,8 +228,15 @@ def _parse_permission_config(data: dict) -> PermissionConfig:
         for db_name, tables in role_data.get("databases", {}).items():
             dbs[db_name] = [TablePermission(**t) if isinstance(t, dict) else t for t in tables]
         roles[role_name] = RolePermission(role=role_name, databases=dbs)
+    users = {}
+    for user_id, user_data in data.get("users", {}).items():
+        dbs = {}
+        for db_name, tables in user_data.get("databases", {}).items():
+            dbs[db_name] = [TablePermission(**t) if isinstance(t, dict) else t for t in tables]
+        users[user_id] = UserPermission(user_id=user_id, databases=dbs)
     return PermissionConfig(
         roles=roles,
+        users=users,
         global_defaults=data.get("global_defaults", {}),
     )
 
@@ -233,4 +249,14 @@ def _serialize_permission_config(config: PermissionConfig) -> dict:
         for db_name, tables in role.databases.items():
             dbs_out[db_name] = [asdict(t) for t in tables]
         roles_out[role_name] = {"databases": dbs_out}
-    return {"roles": roles_out, "global_defaults": config.global_defaults}
+    users_out = {}
+    for user_id, user in config.users.items():
+        dbs_out = {}
+        for db_name, tables in user.databases.items():
+            dbs_out[db_name] = [asdict(t) for t in tables]
+        users_out[user_id] = {"databases": dbs_out}
+    result = {"roles": roles_out}
+    if users_out:
+        result["users"] = users_out
+    result["global_defaults"] = config.global_defaults
+    return result

@@ -548,7 +548,7 @@
     <div class="settings-body">
       <div class="settings-sidebar">
         <button class="settings-tab active" data-tab="model" onclick="switchSettingsTab('model')">🤖 模型</button>
-        <button class="settings-tab" data-tab="database" onclick="switchSettingsTab('database');loadDBConnections()">🗄️ 数据库</button>
+        <button class="settings-tab" data-tab="database" onclick="switchSettingsTab('database');loadDBConnections();loadPermSummary()">🗄️ 数据库</button>
       </div>
       <div class="settings-content">
         <!-- 模型设置 -->
@@ -661,6 +661,27 @@
             <span id="db-msg" style="font-size:12px;color:#999;display:none;"></span>
           </div>
           <div class="save-feedback" id="db-feedback" style="margin-top:8px;"></div>
+
+          <!-- 权限管理 -->
+          <div style="margin-top:20px;border-top:1px solid #eee;padding-top:16px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+              <h3 style="font-size:15px;margin:0;">权限配置</h3>
+              <button class="btn-secondary" onclick="loadPermissionsYaml()" style="padding:6px 14px;border:1px solid #ddd;border-radius:8px;background:#fff;cursor:pointer;font-size:13px;">📝 编辑权限 YAML</button>
+            </div>
+            <div id="perm-editor" style="display:none;">
+              <p style="font-size:12px;color:#666;margin:0 0 8px;">编辑权限配置（YAML 格式）。<code>users:</code> 节定义用户白名单，优先于 <code>roles:</code> 节。</p>
+              <textarea id="perm-yaml" style="width:100%;height:260px;padding:10px;border:1px solid #ddd;border-radius:8px;font-family:monospace;font-size:12px;resize:vertical;"></textarea>
+              <div style="display:flex;gap:8px;margin-top:8px;">
+                <button class="btn-primary" onclick="savePermissionsYaml()" style="padding:6px 16px;border:1px solid #007aff;border-radius:8px;background:#007aff;color:#fff;cursor:pointer;font-size:13px;">💾 保存</button>
+                <button class="btn-secondary" onclick="cancelPermEdit()" style="padding:6px 16px;border:1px solid #ddd;border-radius:8px;background:#fff;cursor:pointer;font-size:13px;">取消</button>
+                <span id="perm-msg" style="font-size:12px;color:#999;"></span>
+              </div>
+            </div>
+            <div id="perm-list-view" style="font-size:13px;color:#666;">
+              <span id="perm-summary">加载中...</span>
+              <a href="#" onclick="loadPermissionsYaml();return false;" style="margin-left:8px;color:#007aff;font-size:12px;">查看/编辑</a>
+            </div>
+          </div>
         </div>
 
         <div class="save-feedback" id="save-feedback"></div>
@@ -2865,6 +2886,69 @@ sendBtn.onclick = () => {
   }
   send();
 };
+
+
+// 权限管理函数
+async function loadPermSummary() {
+  const summaryEl = document.getElementById('perm-summary');
+  try {
+    const resp = await fetch('/db/permissions');
+    const data = await resp.json();
+    const roles = Object.keys(data.roles || {}).length;
+    const users = Object.keys(data.users || {}).length;
+    summaryEl.textContent = `已配置 ${roles} 个角色权限，${users} 个用户白名单`;
+  } catch (e) {
+    summaryEl.textContent = '加载失败';
+  }
+}
+
+async function loadPermissionsYaml() {
+  const editor = document.getElementById('perm-editor');
+  const listView = document.getElementById('perm-list-view');
+  const yamlEl = document.getElementById('perm-yaml');
+  const msgEl = document.getElementById('perm-msg');
+  editor.style.display = 'block';
+  listView.style.display = 'none';
+  msgEl.style.display = 'none';
+  try {
+    const resp = await fetch('/db/permissions');
+    const data = await resp.json();
+    yamlEl.value = data.yaml || '';
+  } catch (e) {
+    yamlEl.value = '# 加载失败: ' + e.message;
+  }
+}
+
+async function savePermissionsYaml() {
+  const yamlEl = document.getElementById('perm-yaml');
+  const msgEl = document.getElementById('perm-msg');
+  msgEl.style.display = 'inline';
+  try {
+    const resp = await fetch('/db/permissions', {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({sql: yamlEl.value})
+    });
+    const data = await resp.json();
+    if (data.status === 'ok') {
+      msgEl.style.color = '#30d158';
+      msgEl.textContent = '保存成功';
+      setTimeout(() => { cancelPermEdit(); }, 1000);
+    } else {
+      msgEl.style.color = '#d70015';
+      msgEl.textContent = '保存失败: ' + (data.detail || '未知错误');
+    }
+  } catch (e) {
+    msgEl.style.color = '#d70015';
+    msgEl.textContent = '网络错误: ' + e.message;
+  }
+}
+
+function cancelPermEdit() {
+  document.getElementById('perm-editor').style.display = 'none';
+  document.getElementById('perm-list-view').style.display = 'block';
+  loadPermSummary();
+}
 
 // 定时刷新状态和会话列表
 setInterval(() => { checkHealth(); refreshStats(); }, 5000);

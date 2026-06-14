@@ -7,6 +7,9 @@
 #   row_filter:    行级 Jinja2 模板，变量来自运行时 user_context
 #   allow_write:   是否允许 INSERT/UPDATE/DELETE
 #   max_rows:      单次查询最大返回行数
+#
+# 优先级：用户白名单(users) > 角色权限(roles)
+#   同一表同时配置了用户白名单和角色权限时，用户白名单优先
 
 global_defaults:
   max_query_rows: 500
@@ -38,3 +41,23 @@ roles:
           row_filter: ""
           allow_write: true
           max_rows: 5000
+
+users:
+  # ── 示例：用户 alice 的白名单权限（优先于角色权限）──
+  alice:
+    databases:
+      prod_db:
+        - table: orders
+          columns_allow: [id, amount, status, created_at, customer_name]  # alice 可看客户名
+          row_filter: "dept_id = 5"                                  # alice 只能看部门5的数据
+          allow_write: false
+          max_rows: 500
+  # ── 示例：用户 bob 的白名单权限 ──
+  bob:
+    databases:
+      prod_db:
+        - table: orders
+          columns_allow: [id, amount]  # bob 只能看 id 和 amount
+          row_filter: "dept_id = 3"    # bob 只能看部门3的数据
+          allow_write: false
+          max_rows: 100

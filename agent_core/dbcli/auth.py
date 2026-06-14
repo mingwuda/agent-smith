@@ -20,6 +20,7 @@ from typing import Optional
 from dbcli.config import (
     PermissionConfig,
     RolePermission,
+    UserPermission,
     TablePermission,
     get_permission_config,
 )
@@ -72,6 +73,10 @@ class PermissionChecker:
     def get_role(self, role: str) -> Optional[RolePermission]:
         return self.config.roles.get(role)
 
+    def get_user(self, user_id: str) -> Optional[UserPermission]:
+        """获取用户权限配置"""
+        return self.config.users.get(user_id)
+
     def get_table_permission(
         self, role: str, connection_name: str, table_name: str
     ) -> Optional[TablePermission]:
@@ -80,6 +85,19 @@ class PermissionChecker:
         if not role_perm:
             return None
         db_tables = role_perm.databases.get(connection_name, [])
+        for tp in db_tables:
+            if tp.table == table_name or tp.table == "*":
+                return tp
+        return None
+
+    def get_user_table_permission(
+        self, user_id: str, connection_name: str, table_name: str
+    ) -> Optional[TablePermission]:
+        """获取指定用户在某数据库某表的权限规则（用户白名单优先）"""
+        user_perm = self.get_user(user_id)
+        if not user_perm:
+            return None
+        db_tables = user_perm.databases.get(connection_name, [])
         for tp in db_tables:
             if tp.table == table_name or tp.table == "*":
                 return tp
@@ -142,18 +160,29 @@ class PermissionChecker:
         tables = self._extract_tables(sql_stripped)
 
         # ── 3. 获取权限规则 ──
-        # 取第一个非 unknown 表的权限规则（默认所有表用同一规则）
+        # 优先使用用户白名单权限，其次使用角色权限
+        user_id = user_context.get("user_id", "") if user_context else ""
         table_perm = None
         for t in tables:
-            tp = self.get_table_permission(role, connection_name, t)
-            if tp:
-                table_perm = tp
+            # 先查用户白名单
+            if user_id:
+                utp = self.get_user_table_permission(user_id, connection_name, t)
+                if utp:
+                    table_perm = utp
+                    break
+            # 再查角色权限
+            rtp = self.get_table_permission(role, connection_name, t)
+            if rtp:
+                table_perm = rtp
                 break
 
         if table_perm is None:
             # 没有显式授权 → 拒绝
             result.allowed = False
-            result.reason = f"角色 '{role}' 无权访问数据库 '{connection_name}' 中的表 {tables}"
+            if user_id:
+                result.reason = f"用户 '{user_id}' (角色 '{role}') 无权访问数据库 '{connection_name}' 中的表 {tables}"
+            else:
+                result.reason = f"角色 '{role}' 无权访问数据库 '{connection_name}' 中的表 {tables}"
             return result
 
         # ── 4. 写操作检查 ──
