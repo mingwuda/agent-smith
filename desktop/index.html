@@ -3201,7 +3201,7 @@ function showAddPermEntity(type) {
   if (names.length === 0) return;
   const addedNames = [];
   for (const n of names) {
-    const key = type;
+    const key = type === 'user' ? 'users' : 'roles';
     if (!_permData[key]) _permData[key] = {};
     if (_permData[key][n]) {
       alert(`${n} 已存在，请勿重复添加`);
@@ -3299,7 +3299,7 @@ function confirmAddRule(type, name) {
     max_rows: maxRows
   };
 
-  const key = type;
+  const key = type === 'user' ? 'users' : 'roles';
   if (!_permData[key]) _permData[key] = {};
   if (!_permData[key][name]) _permData[key][name] = { databases: {} };
   if (!_permData[key][name].databases[dbName]) {
