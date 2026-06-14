@@ -48,6 +48,24 @@ _DANGEROUS_PATTERNS = [
 ]
 
 
+def _table_matches(rule_tables: str, query_table: str) -> bool:
+    """判断规则表名是否匹配查询的表名
+
+    支持：
+      - 精确匹配: "orders" == "orders"
+      - 通配: "*" 匹配任何表
+      - 逗号分隔多表: "orders, products" 匹配 "orders" 或 "products"
+    """
+    if not rule_tables or not query_table:
+        return False
+    if rule_tables.strip() == "*":
+        return True
+    for t in rule_tables.split(","):
+        if t.strip().lower() == query_table.lower():
+            return True
+    return False
+
+
 class PermissionChecker:
     """权限检查器
 
@@ -86,7 +104,7 @@ class PermissionChecker:
             return None
         db_tables = role_perm.databases.get(connection_name, [])
         for tp in db_tables:
-            if tp.table == table_name or tp.table == "*":
+            if _table_matches(tp.table, table_name):
                 return tp
         return None
 
@@ -99,7 +117,7 @@ class PermissionChecker:
             return None
         db_tables = user_perm.databases.get(connection_name, [])
         for tp in db_tables:
-            if tp.table == table_name or tp.table == "*":
+            if _table_matches(tp.table, table_name):
                 return tp
         return None
 
@@ -125,11 +143,13 @@ class PermissionChecker:
                 if role_perm:
                     db_tables = role_perm.databases.get(connection_name, [])
                     for tp in db_tables:
-                        if tp.table == table_name or tp.table == "*":
+                        if _table_matches(tp.table, table_name):
                             return tp
 
         # 3. 最后回退到传入的角色参数
         return self.get_table_permission(role, connection_name, table_name)
+
+
 
     def _extract_tables(self, sql: str) -> list[str]:
         """从 SQL 语句中提取涉及的表名"""

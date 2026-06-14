@@ -3179,9 +3179,9 @@ function editRule(type, name, dbName, idx) {
       <button class="perm-rule-delete" onclick="cancelRuleEdit('${type}','${escAttr(name)}','${escAttr(dbName)}',${idx})" title="取消编辑" style="position:absolute;top:0;right:0;">×</button>
       <div class="perm-rule-field"><label>数据库连接</label>
         <input id="erf-db-${type}-${escapeId(name)}-${idx}" value="${escHtml(dbName)}" disabled style="background:#f5f5f5;" /></div>
-      <div class="perm-rule-field"><label>表名 *</label>
-        <select id="erf-table-${type}-${escapeId(name)}-${idx}" onchange="onEditRuleTableChange('${type}','${escAttr(name)}','${escAttr(dbName)}',${idx})" style="padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:12px;width:100%;background:#fff;">
-          <option value="">选择表...</option></select></div>
+      <div class="perm-rule-field"><label>表名 *（按住 Ctrl 多选）</label>
+        <select id="erf-table-${type}-${escapeId(name)}-${idx}" multiple onchange="onEditRuleTableChange('${type}','${escAttr(name)}','${escAttr(dbName)}',${idx})" style="padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:12px;width:100%;min-height:80px;background:#fff;">
+        </select></div>
       <div class="perm-rule-field perm-rule-field-full"><label>允许列（勾选或逗号分隔，空=全部）</label>
         <div id="erf-cols-checkboxes-${type}-${escapeId(name)}-${idx}" style="max-height:120px;overflow-y:auto;border:1px solid #eee;border-radius:6px;padding:6px 8px;margin-bottom:4px;display:none;"></div>
         <input id="erf-cols-${type}-${escapeId(name)}-${idx}" value="${escHtml(colsStr)}" placeholder="id,amount,status" style="margin-top:4px;" oninput="onEditRuleColsInput('${type}','${escAttr(name)}','${escAttr(dbName)}',${idx})" /></div>
@@ -3215,17 +3215,19 @@ function saveRuleEdit(type, name, dbName, idx) {
   const rules = (_permData[key][name] && _permData[key][name].databases[dbName]) || [];
   if (!rules[idx]) return;
 
-  const tableName = document.getElementById(`erf-table-${type}-${escapeId(name)}-${idx}`).value.trim();
+  const sel = document.getElementById(`erf-table-${type}-${escapeId(name)}-${idx}`);
+  const selected = Array.from(sel.selectedOptions).map(o => o.value).filter(v => v);
+  const tableNames = selected.join(', ');
   const colsStr = document.getElementById(`erf-cols-${type}-${escapeId(name)}-${idx}`).value.trim();
   const rowFilter = document.getElementById(`erf-filter-${type}-${escapeId(name)}-${idx}`).value.trim();
   const allowWrite = document.getElementById(`erf-write-${type}-${escapeId(name)}-${idx}`).value === 'true';
   const maxRows = parseInt(document.getElementById(`erf-maxrows-${type}-${escapeId(name)}-${idx}`).value) || 500;
 
-  if (!tableName) { alert('请输入表名'); return; }
+  if (!tableNames) { alert('请选择表名'); return; }
   const cols = colsStr ? colsStr.split(',').map(c=>c.trim()).filter(c=>c) : [];
 
   rules[idx] = {
-    table: tableName,
+    table: tableNames,
     columns_allow: cols,
     row_filter: rowFilter,
     allow_write: allowWrite,
@@ -3260,9 +3262,9 @@ function buildRuleForm(type, name, dbName, existingRule) {
       <select id="rf-db-${type}-${escapeId(name)}" onchange="onAddRuleDbChange('${type}','${escAttr(name)}')">
         <option value="">选择数据库...</option></select>
     </div>
-    <div class="perm-rule-field"><label>表名 *</label>
-      <select id="rf-table-${type}-${escapeId(name)}" onchange="onAddRuleTableChange('${type}','${escAttr(name)}')" style="padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:12px;width:100%;background:#fff;">
-        <option value="">先选择数据库...</option></select>
+    <div class="perm-rule-field"><label>表名 *（按住 Ctrl 多选）</label>
+      <select id="rf-table-${type}-${escapeId(name)}" multiple onchange="onAddRuleTableChange('${type}','${escAttr(name)}')" style="padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:12px;width:100%;min-height:80px;background:#fff;">
+      </select>
     </div>
     <div class="perm-rule-field perm-rule-field-full"><label>允许列（勾选或逗号分隔，空=全部允许）</label>
       <div id="rf-cols-checkboxes-${type}-${escapeId(name)}" style="max-height:120px;overflow-y:auto;border:1px solid #eee;border-radius:6px;padding:6px 8px;margin-bottom:4px;display:none;"></div>
@@ -3284,15 +3286,17 @@ function buildRuleForm(type, name, dbName, existingRule) {
 }
 
 // ---- 数据库→表名→列联动 ----
-function loadTablesForSelect(selectId, dbName, selectedTable) {
+function loadTablesForSelect(selectId, dbName, selectedTables) {
   const sel = document.getElementById(selectId);
   if (!sel) return;
   sel.innerHTML = '<option value="">加载中...</option>';
   sel.disabled = true;
+  // selectedTables 可以是逗号分隔的多个表名，如 "orders, products"
+  const selSet = new Set((selectedTables || '').split(',').map(s => s.trim().toLowerCase()).filter(s => s));
   fetch(`/db/schema/${encodeURIComponent(dbName)}`)
     .then(r => { if (!r.ok) throw new Error('连接失败'); return r.json(); })
     .then(tables => {
-      sel.innerHTML = '<option value="">选择表...</option>';
+      sel.innerHTML = ''; // 移除占位 option（多选时不需要"选择表..."占位行）
       if (tables.length === 0) {
         sel.innerHTML = '<option value="">（该数据库无表）</option>';
         return;
@@ -3301,7 +3305,7 @@ function loadTablesForSelect(selectId, dbName, selectedTable) {
         const opt = document.createElement('option');
         opt.value = t.name;
         opt.textContent = t.name;
-        if (t.name === selectedTable) opt.selected = true;
+        if (selSet.has(t.name.toLowerCase())) opt.selected = true;
         sel.appendChild(opt);
       }
       sel.disabled = false;
@@ -3398,7 +3402,7 @@ function onAddRuleDbChange(type, name) {
   const dbName = dbSel ? dbSel.value : '';
   // 重置并加载表列表
   const tableSel = document.getElementById(`rf-table-${type}-${escapeId(name)}`);
-  if (tableSel) tableSel.innerHTML = '<option value="">先选择数据库...</option>';
+  if (tableSel) tableSel.innerHTML = '';
   const colsContainer = document.getElementById(`rf-cols-checkboxes-${type}-${escapeId(name)}`);
   if (colsContainer) { colsContainer.style.display = 'none'; colsContainer.innerHTML = ''; }
   if (dbName) {
@@ -3409,7 +3413,8 @@ function onAddRuleDbChange(type, name) {
 function onAddRuleTableChange(type, name) {
   const tableSel = document.getElementById(`rf-table-${type}-${escapeId(name)}`);
   const dbSel = document.getElementById(`rf-db-${type}-${escapeId(name)}`);
-  const tableName = tableSel ? tableSel.value : '';
+  const firstSelected = tableSel ? Array.from(tableSel.selectedOptions).find(o => o.value) : null;
+  const tableName = firstSelected ? firstSelected.value : '';
   const dbName = dbSel ? dbSel.value : '';
   const containerId = `rf-cols-checkboxes-${type}-${escapeId(name)}`;
   const inputId = `rf-cols-${type}-${escapeId(name)}`;
@@ -3423,7 +3428,8 @@ function onAddRuleTableChange(type, name) {
 
 function onEditRuleTableChange(type, name, dbName, idx) {
   const tableSel = document.getElementById(`erf-table-${type}-${escapeId(name)}-${idx}`);
-  const tableName = tableSel ? tableSel.value : '';
+  const firstSelected = tableSel ? Array.from(tableSel.selectedOptions).find(o => o.value) : null;
+  const tableName = firstSelected ? firstSelected.value : '';
   const containerId = `erf-cols-checkboxes-${type}-${escapeId(name)}-${idx}`;
   const inputId = `erf-cols-${type}-${escapeId(name)}-${idx}`;
   if (dbName && tableName) {
@@ -3528,19 +3534,21 @@ function populateDbSelectForRule(type, name) {
 
 function confirmAddRule(type, name) {
   const dbName = document.getElementById(`rf-db-${type}-${escapeId(name)}`).value;
-  const tableName = document.getElementById(`rf-table-${type}-${escapeId(name)}`).value.trim();
+  const sel = document.getElementById(`rf-table-${type}-${escapeId(name)}`);
+  const selected = Array.from(sel.selectedOptions).map(o => o.value).filter(v => v);
+  const tableNames = selected.join(', ');
   const colsStr = document.getElementById(`rf-cols-${type}-${escapeId(name)}`).value.trim();
   const rowFilter = document.getElementById(`rf-filter-${type}-${escapeId(name)}`).value.trim();
   const allowWrite = document.getElementById(`rf-write-${type}-${escapeId(name)}`).value === 'true';
   const maxRows = parseInt(document.getElementById(`rf-maxrows-${type}-${escapeId(name)}`).value) || 500;
 
   if (!dbName) { alert('请选择数据库连接'); return; }
-  if (!tableName) { alert('请输入表名'); return; }
+  if (!tableNames) { alert('请选择至少一个表'); return; }
 
   const cols = colsStr ? colsStr.split(',').map(c=>c.trim()).filter(c=>c) : [];
 
   const ruleObj = {
-    table: tableName,
+    table: tableNames,
     columns_allow: cols,
     row_filter: rowFilter,
     allow_write: allowWrite,
