@@ -1896,9 +1896,12 @@ def db_get_permissions(request: Request):
 def db_save_permissions(req: PermissionsSaveRequest, request: Request):
     """保存权限配置（后端生成 YAML）"""
     _require_admin(request)
-    from dbcli.config import CONFIG_DIR
+    from dbcli.config import CONFIG_DIR, logger as config_logger
     import yaml
+    import traceback
     try:
+        logger.info(f"[保存权限] 收到保存请求: roles={len(req.roles or {})}, users={len(req.users or {})}")
+        
         # 清理空 key
         roles = {k: v for k, v in (req.roles or {}).items() if k and k.strip()}
         users = {k: v for k, v in (req.users or {}).items() if k and k.strip()}
@@ -1907,23 +1910,34 @@ def db_save_permissions(req: PermissionsSaveRequest, request: Request):
             "roles": roles,
             "users": users,
         }
+        logger.info(f"[保存权限] 清理后数据: roles={list(roles.keys())}, users={list(users.keys())}")
 
         from dbcli.config import _parse_permission_config, _serialize_permission_config_for_yaml
         config = _parse_permission_config(data)
+        logger.info(f"[保存权限] 解析配置成功")
 
         # 用 PyYAML 生成干净 YAML
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         yaml_path = CONFIG_DIR / "permissions.yaml"
         clean_data = _serialize_permission_config_for_yaml(config)
+        logger.info(f"[保存权限] 序列化后的数据: {clean_data.keys()}")
+        
+        yaml_content = yaml.safe_dump(clean_data, allow_unicode=True, default_flow_style=False, sort_keys=False)
+        logger.info(f"[保存权限] YAML内容预览:\n{yaml_content[:500]}")
+        
         with open(yaml_path, "w", encoding="utf-8") as f:
-            yaml.safe_dump(clean_data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+            f.write(yaml_content)
+        logger.info(f"[保存权限] YAML已写入: {yaml_path}")
 
         # 热更新权限检查器
         from dbcli.auth import reload_checker
         reload_checker()
+        logger.info(f"[保存权限] 权限检查器已热更新")
 
         return {"status": "ok", "message": "权限配置已保存"}
     except Exception as e:
+        error_detail = traceback.format_exc()
+        logger.error(f"[保存权限] 保存失败: {e}\n{error_detail}")
         raise HTTPException(400, f"权限配置格式错误: {e}")
 
 

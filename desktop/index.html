@@ -3576,56 +3576,73 @@ function confirmAddRule(type, name) {
 // ---- 保存到后端 ----
 
 async function saveVisualPermissions() {
-  const msgEl = document.getElementById('perm-save-msg');
-  msgEl.style.display = 'inline';msgEl.style.color = '#666';msgEl.textContent = '正在保存...';
-
-  // 收集全局默认值
-  const permObj = {
-    global_defaults: {
-      max_query_rows: parseInt(document.getElementById('g-max-rows').value) || 500,
-      default_readonly: document.getElementById('g-default-readonly').checked,
-      allow_dangerous_sql: document.getElementById('g-dangerous-sql').checked,
-    },
-    roles: {},
-    users: {}
-  };
-
-  // 收集角色（跳过空角色名）
-  for (const [rn, rd] of Object.entries(_permData.roles || {})) {
-    if (!rn || !rn.trim()) continue;
-    permObj.roles[rn] = { databases: {} };
-    for (const [dn, tables] of Object.entries(rd.databases || {})) {
-      permObj.roles[rn].databases[dn] = tables.map(t => ({
-        table: t.table, columns_allow: t.columns_allow||[],
-        row_filter: t.row_filter||'', allow_write: !!t.allow_write,
-        max_rows: t.max_rows||500
-      }));
-    }
-  }
-  // 收集用户（跳过空用户名）
-  for (const [un, ud] of Object.entries(_permData.users || {})) {
-    if (!un || !un.trim()) continue;
-    const userObj = { databases: {} };
-    if (ud.role) {
-      userObj.role = ud.role;
-    }
-    for (const [dn, tables] of Object.entries(ud.databases || {})) {
-      userObj.databases[dn] = tables.map(t => ({
-        table: t.table, columns_allow: t.columns_allow||[],
-        row_filter: t.row_filter||'', allow_write: !!t.allow_write,
-        max_rows: t.max_rows||500
-      }));
-    }
-    permObj.users[un] = userObj;
-  }
-
   try {
+    console.log('[保存权限] 开始保存...');
+    const msgEl = document.getElementById('perm-save-msg');
+    if (!msgEl) { console.error('[保存权限] 找不到 perm-save-msg 元素'); return; }
+    msgEl.style.display = 'inline';msgEl.style.color = '#666';msgEl.textContent = '正在保存...';
+
+    // 收集全局默认值
+    const permObj = {
+      global_defaults: {
+        max_query_rows: parseInt(document.getElementById('g-max-rows').value) || 500,
+        default_readonly: document.getElementById('g-default-readonly').checked,
+        allow_dangerous_sql: document.getElementById('g-dangerous-sql').checked,
+      },
+      roles: {},
+      users: {}
+    };
+
+    console.log('[保存权限] _permData:', JSON.stringify(_permData).substring(0,300));
+
+    // 收集角色（跳过空角色名）
+    if (_permData && _permData.roles) {
+      for (const [rn, rd] of Object.entries(_permData.roles)) {
+        if (!rn || !rn.trim()) continue;
+        if (!rd || !rd.databases) continue;
+        permObj.roles[rn] = { databases: {} };
+        for (const [dn, tables] of Object.entries(rd.databases)) {
+          if (!dn || !tables) continue;
+          permObj.roles[rn].databases[dn] = tables.map(t => ({
+            table: t.table || '', columns_allow: t.columns_allow||[],
+            row_filter: t.row_filter||'', allow_write: !!t.allow_write,
+            max_rows: t.max_rows||500
+          }));
+        }
+      }
+    }
+    // 收集用户（跳过空用户名）
+    if (_permData && _permData.users) {
+      for (const [un, ud] of Object.entries(_permData.users)) {
+        if (!un || !un.trim()) continue;
+        if (!ud) continue;
+        const userObj = { databases: {} };
+        if (ud.role) {
+          userObj.role = ud.role;
+        }
+        if (ud.databases) {
+          for (const [dn, tables] of Object.entries(ud.databases)) {
+            if (!dn || !tables) continue;
+            userObj.databases[dn] = tables.map(t => ({
+              table: t.table || '', columns_allow: t.columns_allow||[],
+              row_filter: t.row_filter||'', allow_write: !!t.allow_write,
+              max_rows: t.max_rows||500
+            }));
+          }
+        }
+        permObj.users[un] = userObj;
+      }
+    }
+
+    console.log('[保存权限] 发送数据:', JSON.stringify(permObj).substring(0,300));
     const saveResp = await fetch('/db/permissions', {
       method: 'PUT',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(permObj)  // 直接发送 JSON，不再嵌套
     });
+    console.log('[保存权限] 响应状态:', saveResp.status);
     const result = await saveResp.json();
+    console.log('[保存权限] 响应内容:', result);
     if (result.status === 'ok') {
       msgEl.style.color = '#30d158';
       msgEl.textContent = '✓ 保存成功！';
@@ -3638,9 +3655,15 @@ async function saveVisualPermissions() {
       alert('⚠️ 权限配置保存失败:\n\n' + errMsg);
     }
   } catch (e) {
-    msgEl.style.color = '#d70015';
-    msgEl.textContent = '网络错误: ' + e.message;
-    alert('⚠️ 保存请求失败:\n\n' + e.message);
+    console.error('[保存权限] 出错:', e);
+    try {
+      const msgEl = document.getElementById('perm-save-msg');
+      if (msgEl) {
+        msgEl.style.color = '#d70015';
+        msgEl.textContent = '保存出错: ' + e.message;
+      }
+    } catch (_) {}
+    alert('⚠️ 保存权限时出错:\n\n' + e.message + '\n\n请打开浏览器控制台(F12)查看详细错误');
   }
 }
 
