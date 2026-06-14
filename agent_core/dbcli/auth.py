@@ -390,6 +390,13 @@ def _get_checker() -> PermissionChecker:
     return _checker
 
 
+def reload_checker():
+    """重新加载权限配置（保存新配置后调用，热更新）"""
+    global _checker
+    if _checker is not None:
+        _checker.reload()
+
+
 def check_permission(
     sql: str,
     connection_name: str,

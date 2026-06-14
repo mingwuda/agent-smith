@@ -3620,11 +3620,10 @@ async function saveVisualPermissions() {
   }
 
   try {
-    // 直接发送 JSON 对象，后端负责生成 YAML
     const saveResp = await fetch('/db/permissions', {
       method: 'PUT',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({sql: JSON.stringify(permObj)})
+      body: JSON.stringify(permObj)  // 直接发送 JSON，不再嵌套
     });
     const result = await saveResp.json();
     if (result.status === 'ok') {
@@ -3633,12 +3632,15 @@ async function saveVisualPermissions() {
       setTimeout(() => { msgEl.style.display = 'none'; }, 3000);
       loadVisualPermissions(); // 重新加载确认
     } else {
+      const errMsg = (result.detail || result.message || '未知错误');
       msgEl.style.color = '#d70015';
-      msgEl.textContent = '保存失败: ' + (result.detail || '未知错误');
+      msgEl.textContent = '保存失败: ' + errMsg;
+      alert('⚠️ 权限配置保存失败:\n\n' + errMsg);
     }
   } catch (e) {
     msgEl.style.color = '#d70015';
     msgEl.textContent = '网络错误: ' + e.message;
+    alert('⚠️ 保存请求失败:\n\n' + e.message);
   }
 }
 

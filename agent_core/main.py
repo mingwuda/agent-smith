@@ -1733,6 +1733,13 @@ class DBQueryRequest(BaseModel):
     connection: str = "local_sqlite"
 
 
+class PermissionsSaveRequest(BaseModel):
+    """权限配置保存请求体（直接接收 JSON，不再嵌套）"""
+    global_defaults: dict = {}
+    roles: dict = {}
+    users: dict = {}
+
+
 @app.get("/db/default-connection")
 def db_get_default_connection(request: Request):
     """获取默认数据库连接名"""
@@ -1886,34 +1893,35 @@ def db_get_permissions(request: Request):
 
 
 @app.put("/db/permissions")
-def db_save_permissions(req: DBQueryRequest, request: Request):
-    """保存权限配置（接收 JSON 数据，后端生成 YAML）"""
+def db_save_permissions(req: PermissionsSaveRequest, request: Request):
+    """保存权限配置（后端生成 YAML）"""
     _require_admin(request)
     from dbcli.config import CONFIG_DIR
     import yaml
     try:
-        # 从前端 JSON 中提取权限数据（复用 sql 字段传输 JSON）
-        import json as json_lib
-        if req.sql.strip().startswith("{"):
-            data = json_lib.loads(req.sql)
-        else:
-            data = yaml.safe_load(req.sql)
-
-        # 清理空 key：删除空角色名
-        if "roles" in data and isinstance(data["roles"], dict):
-            data["roles"] = {k: v for k, v in data["roles"].items() if k and k.strip()}
-        if "users" in data and isinstance(data["users"], dict):
-            data["users"] = {k: v for k, v in data["users"].items() if k and k.strip()}
+        # 清理空 key
+        roles = {k: v for k, v in (req.roles or {}).items() if k and k.strip()}
+        users = {k: v for k, v in (req.users or {}).items() if k and k.strip()}
+        data = {
+            "global_defaults": req.global_defaults or {},
+            "roles": roles,
+            "users": users,
+        }
 
         from dbcli.config import _parse_permission_config, _serialize_permission_config_for_yaml
-        config = _parse_permission_config(data)  # 验证能正确解析
+        config = _parse_permission_config(data)
 
-        # 用 PyYAML 生成干净的 YAML（避免前端手写 YAML 的各种边界问题）
+        # 用 PyYAML 生成干净 YAML
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         yaml_path = CONFIG_DIR / "permissions.yaml"
         clean_data = _serialize_permission_config_for_yaml(config)
         with open(yaml_path, "w", encoding="utf-8") as f:
             yaml.safe_dump(clean_data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+
+        # 热更新权限检查器
+        from dbcli.auth import reload_checker
+        reload_checker()
+
         return {"status": "ok", "message": "权限配置已保存"}
     except Exception as e:
         raise HTTPException(400, f"权限配置格式错误: {e}")
