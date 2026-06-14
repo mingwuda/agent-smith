@@ -3105,7 +3105,7 @@ function buildEntityCard(name, type, entityData) {
       const tableRules = rules[dbName] || [];
       for (let i = 0; i < tableRules.length; i++) {
         const r = tableRules[i];
-        rulesHtml += buildRuleCard(dbName, r, i);
+        rulesHtml += buildRuleCard(dbName, r, i, type, name);
       }
     }
   } else {
@@ -3142,30 +3142,131 @@ function onUserRoleChange(userName, roleValue) {
   _permData.users[userName].role = roleValue;
 }
 
-function buildRuleCard(dbName, rule, idx) {
-  return `<div class="perm-rule-card">
-    <button class="perm-rule-delete" onclick="this.parentElement.remove()" title="删除规则">×</button>
+function buildRuleCard(dbName, rule, idx, type, name) {
+  return `<div class="perm-rule-card" data-db="${escAttr(dbName)}" data-idx="${idx}">
+    <div class="perm-rule-card-actions" style="position:absolute;top:6px;right:6px;display:flex;gap:4px;">
+      <button class="perm-rule-edit-btn" onclick="editRule('${type}','${escAttr(name)}','${escAttr(dbName)}',${idx})" title="编辑规则">✏️</button>
+      <button class="perm-rule-delete" onclick="deleteRule('${type}','${escAttr(name)}','${escAttr(dbName)}',${idx})" title="删除规则">×</button>
+    </div>
     <div class="perm-rule-fields">
       <div class="perm-rule-field"><label>数据库连接</label><input value="${escHtml(dbName)}" disabled /></div>
       <div class="perm-rule-field"><label>表名</label><input value="${escHtml(rule.table || '')}" disabled /></div>
-      <div class="perm-rule-field perm-rule-field-full"><label>允许的列（逗号分隔，空=全部）</label><input value="${escHtml((rule.columns_allow||[]).join(', '))}" disabled /></div>
-      <div class="perm-rule-field perm-rule-field-full"><label>行级过滤条件</label><input value="${escHtml(rule.row_filter || '')}" placeholder='如 dept_id={{user.dept_id}}' disabled /></div>
+      <div class="perm-rule-field perm-rule-field-full"><label>允许的列</label><input value="${escHtml((rule.columns_allow||[]).join(', '))}" disabled /></div>
+      <div class="perm-rule-field perm-rule-field-full"><label>行级过滤条件</label><input value="${escHtml(rule.row_filter || '')}" disabled /></div>
       <div class="perm-rule-field"><label>允许写操作</label><input value="${!!rule.allow_write ? '是' : '否'}" disabled /></div>
       <div class="perm-rule-field"><label>最大行数</label><input value="${rule.max_rows||1000}" disabled /></div>
     </div>
   </div>`;
 }
 
+function editRule(type, name, dbName, idx) {
+  const key = type === 'user' ? 'users' : 'roles';
+  const entity = _permData[key] && _permData[key][name];
+  if (!entity) return;
+  const rules = (entity.databases[dbName] || []);
+  const rule = rules[idx];
+  if (!rule) return;
+
+  // 替换卡片内容为编辑表单
+  const card = document.querySelector(
+    `#entity-${type}-${escapeId(name)} .perm-rule-card[data-db="${escAttr(dbName)}"][data-idx="${idx}"]`
+  );
+  if (!card) return;
+
+  const colsStr = (rule.columns_allow||[]).join(',');
+  card.innerHTML = `
+    <div class="perm-rule-fields" style="position:relative;">
+      <button class="perm-rule-delete" onclick="cancelRuleEdit('${type}','${escAttr(name)}','${escAttr(dbName)}',${idx})" title="取消编辑" style="position:absolute;top:0;right:0;">×</button>
+      <div class="perm-rule-field"><label>数据库连接</label>
+        <input id="erf-db-${type}-${escapeId(name)}-${idx}" value="${escHtml(dbName)}" disabled style="background:#f5f5f5;" /></div>
+      <div class="perm-rule-field"><label>表名 *</label>
+        <select id="erf-table-${type}-${escapeId(name)}-${idx}" onchange="onEditRuleTableChange('${type}','${escAttr(name)}','${escAttr(dbName)}',${idx})" style="padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:12px;width:100%;background:#fff;">
+          <option value="">选择表...</option></select></div>
+      <div class="perm-rule-field perm-rule-field-full"><label>允许列（勾选或逗号分隔，空=全部）</label>
+        <div id="erf-cols-checkboxes-${type}-${escapeId(name)}-${idx}" style="max-height:120px;overflow-y:auto;border:1px solid #eee;border-radius:6px;padding:6px 8px;margin-bottom:4px;display:none;"></div>
+        <input id="erf-cols-${type}-${escapeId(name)}-${idx}" value="${escHtml(colsStr)}" placeholder="id,amount,status" style="margin-top:4px;" oninput="onEditRuleColsInput('${type}','${escAttr(name)}','${escAttr(dbName)}',${idx})" /></div>
+      <div class="perm-rule-field perm-rule-field-full"><label>行级过滤（Jinja2模板）</label>
+        <input id="erf-filter-${type}-${escapeId(name)}-${idx}" value="${escHtml(rule.row_filter||'')}" placeholder='dept_id={{user.dept_id}}' /></div>
+      <div class="perm-rule-field"><label>允许写入</label>
+        <select id="erf-write-${type}-${escapeId(name)}-${idx}"><option value="false" ${!rule.allow_write?'selected':''}>否</option><option value="true" ${!!rule.allow_write?'selected':''}>是</option></select></div>
+      <div class="perm-rule-field"><label>最大返回行数</label>
+        <input type="number" id="erf-maxrows-${type}-${escapeId(name)}-${idx}" value="${rule.max_rows||500}" min="10" max="50000" /></div>
+      <div class="perm-rule-field perm-rule-field-full" style="margin-top:6px;display:flex;gap:8px;">
+        <button onclick="saveRuleEdit('${type}','${escAttr(name)}','${escAttr(dbName)}',${idx})" style="padding:5px 14px;border:1px solid #007aff;border-radius:6px;background:#007aff;color:#fff;cursor:pointer;font-size:12px;">💾 保存</button>
+        <button onclick="cancelRuleEdit('${type}','${escAttr(name)}','${escAttr(dbName)}',${idx})" style="padding:5px 14px;border:1px solid #ddd;border-radius:6px;background:#fff;cursor:pointer;font-size:12px;">取消</button>
+      </div>
+    </div>`;
+  card.classList.add('editing');
+
+  // 加载该连接的表列表
+  loadTablesForSelect(`erf-table-${type}-${escapeId(name)}-${idx}`, dbName, rule.table || '');
+  // 加载列勾选框
+  if (rule.table) {
+    loadColumnCheckboxes(
+      `erf-cols-checkboxes-${type}-${escapeId(name)}-${idx}`,
+      `erf-cols-${type}-${escapeId(name)}-${idx}`,
+      dbName, rule.table, rule.columns_allow || []
+    );
+  }
+}
+
+function saveRuleEdit(type, name, dbName, idx) {
+  const key = type === 'user' ? 'users' : 'roles';
+  const rules = (_permData[key][name] && _permData[key][name].databases[dbName]) || [];
+  if (!rules[idx]) return;
+
+  const tableName = document.getElementById(`erf-table-${type}-${escapeId(name)}-${idx}`).value.trim();
+  const colsStr = document.getElementById(`erf-cols-${type}-${escapeId(name)}-${idx}`).value.trim();
+  const rowFilter = document.getElementById(`erf-filter-${type}-${escapeId(name)}-${idx}`).value.trim();
+  const allowWrite = document.getElementById(`erf-write-${type}-${escapeId(name)}-${idx}`).value === 'true';
+  const maxRows = parseInt(document.getElementById(`erf-maxrows-${type}-${escapeId(name)}-${idx}`).value) || 500;
+
+  if (!tableName) { alert('请输入表名'); return; }
+  const cols = colsStr ? colsStr.split(',').map(c=>c.trim()).filter(c=>c) : [];
+
+  rules[idx] = {
+    table: tableName,
+    columns_allow: cols,
+    row_filter: rowFilter,
+    allow_write: allowWrite,
+    max_rows: maxRows
+  };
+  renderPermEntities();
+}
+
+function cancelRuleEdit(type, name, dbName, idx) {
+  // 直接重新渲染恢复原样
+  renderPermEntities();
+}
+
+function deleteRule(type, name, dbName, idx) {
+  if (!confirm('确定要删除此规则吗？')) return;
+  const key = type === 'user' ? 'users' : 'roles';
+  const entity = _permData[key] && _permData[key][name];
+  if (!entity) return;
+  const rules = entity.databases[dbName] || [];
+  rules.splice(idx, 1);
+  if (rules.length === 0) {
+    delete entity.databases[dbName];
+  }
+  renderPermEntities();
+}
+
 function buildRuleForm(type, name, dbName, existingRule) {
   const r = existingRule || {};
+  const colsStr = (r.columns_allow||[]).join(',');
   return `<div class="perm-rule-fields">
     <div class="perm-rule-field"><label>数据库连接 *</label>
-      <select id="rf-db-${type}-${escapeId(name)}" onchange="onPermDbChange('${type}','${escAttr(name)}')">
+      <select id="rf-db-${type}-${escapeId(name)}" onchange="onAddRuleDbChange('${type}','${escAttr(name)}')">
         <option value="">选择数据库...</option></select>
     </div>
-    <div class="perm-rule-field"><label>表名 *</label><input id="rf-table-${type}-${escapeId(name)}" value="${r.table||''}" placeholder="orders 或 * 表示所有表" /></div>
-    <div class="perm-rule-field perm-rule-field-full"><label>允许列（逗号分隔，空=全部允许）</label>
-      <input id="rf-cols-${type}-${escapeId(name)}" value="${(r.columns_allow||[]).join(',')}" placeholder="id,amount,status" />
+    <div class="perm-rule-field"><label>表名 *</label>
+      <select id="rf-table-${type}-${escapeId(name)}" onchange="onAddRuleTableChange('${type}','${escAttr(name)}')" style="padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:12px;width:100%;background:#fff;">
+        <option value="">先选择数据库...</option></select>
+    </div>
+    <div class="perm-rule-field perm-rule-field-full"><label>允许列（勾选或逗号分隔，空=全部允许）</label>
+      <div id="rf-cols-checkboxes-${type}-${escapeId(name)}" style="max-height:120px;overflow-y:auto;border:1px solid #eee;border-radius:6px;padding:6px 8px;margin-bottom:4px;display:none;"></div>
+      <input id="rf-cols-${type}-${escapeId(name)}" value="${escHtml(colsStr)}" placeholder="id,amount,status" oninput="onAddRuleColsInput('${type}','${escAttr(name)}')" />
     </div>
     <div class="perm-rule-field perm-rule-field-full"><label>行级过滤（Jinja2模板）</label>
       <input id="rf-filter-${type}-${escapeId(name)}" value="${escHtml(r.row_filter||'')}" placeholder='dept_id={{user.dept_id}}' />
@@ -3180,6 +3281,157 @@ function buildRuleForm(type, name, dbName, existingRule) {
       <button class="btn-secondary" onclick="hideAddRuleForm('${type}','${escAttr(name)}')" style="padding:5px 14px;border:1px solid #ddd;border-radius:6px;background:#fff;cursor:pointer;font-size:12px;">取消</button>
     </div>
   </div>`;
+}
+
+// ---- 数据库→表名→列联动 ----
+function loadTablesForSelect(selectId, dbName, selectedTable) {
+  const sel = document.getElementById(selectId);
+  if (!sel) return;
+  sel.innerHTML = '<option value="">加载中...</option>';
+  sel.disabled = true;
+  fetch(`/db/schema/${encodeURIComponent(dbName)}`)
+    .then(r => { if (!r.ok) throw new Error('连接失败'); return r.json(); })
+    .then(tables => {
+      sel.innerHTML = '<option value="">选择表...</option>';
+      if (tables.length === 0) {
+        sel.innerHTML = '<option value="">（该数据库无表）</option>';
+        return;
+      }
+      for (const t of tables) {
+        const opt = document.createElement('option');
+        opt.value = t.name;
+        opt.textContent = t.name;
+        if (t.name === selectedTable) opt.selected = true;
+        sel.appendChild(opt);
+      }
+      sel.disabled = false;
+    })
+    .catch(err => {
+      sel.innerHTML = `<option value="">⚠️ ${err.message}</option>`;
+      sel.disabled = false;
+    });
+}
+
+function loadColumnCheckboxes(containerId, inputId, dbName, tableName, selectedCols) {
+  const container = document.getElementById(containerId);
+  const input = document.getElementById(inputId);
+  if (!container || !input) return;
+
+  if (!tableName) {
+    container.style.display = 'none';
+    return;
+  }
+
+  selectedCols = selectedCols || [];
+  container.style.display = 'block';
+  container.innerHTML = '<span style="font-size:11px;color:#999;">加载列...</span>';
+
+  fetch(`/db/schema/${encodeURIComponent(dbName)}?table=${encodeURIComponent(tableName)}`)
+    .then(r => { if (!r.ok) throw new Error('获取列失败'); return r.json(); })
+    .then(tables => {
+      const tableInfo = tables.find(t => t.name === tableName);
+      if (!tableInfo || !tableInfo.columns || tableInfo.columns.length === 0) {
+        container.innerHTML = '<span style="font-size:11px;color:#999;">无可用列</span>';
+        return;
+      }
+      let html = '<div style="display:flex;flex-wrap:wrap;gap:4px;">';
+      const selSet = new Set(selectedCols.map(c => c.toLowerCase()));
+      for (const col of tableInfo.columns) {
+        const checked = selSet.has(col.name.toLowerCase()) ? 'checked' : '';
+        html += `<label style="font-size:11px;display:inline-flex;align-items:center;gap:3px;padding:2px 6px;border:1px solid #e0e0e6;border-radius:4px;background:#fff;cursor:pointer;">
+          <input type="checkbox" value="${escAttr(col.name)}" ${checked} onchange="onColumnCheckboxChange('${inputId}')" style="width:auto;height:auto;" />
+          ${escHtml(col.name)}</label>`;
+      }
+      html += '</div>';
+      container.innerHTML = html;
+      // 同步已有勾选状态到输入框
+      syncColsCheckboxesToInput(inputId, container);
+    })
+    .catch(err => {
+      container.innerHTML = `<span style="font-size:11px;color:#999;">⚠️ ${err.message}</span>`;
+    });
+}
+
+function onColumnCheckboxChange(inputId) {
+  const input = document.getElementById(inputId);
+  if (!input) return;
+  // 收集所有选中的列
+  const container = input.parentElement.querySelector('div[id$="-checkboxes-"]') ||
+    input.closest('.perm-rule-fields')?.querySelector('div[id$="-checkboxes-"]');
+  syncColsCheckboxesToInput(inputId, container);
+}
+
+function syncColsCheckboxesToInput(inputId, container) {
+  const input = document.getElementById(inputId);
+  if (!input || !container) return;
+  const checked = container.querySelectorAll('input[type="checkbox"]:checked');
+  const vals = Array.from(checked).map(cb => cb.value).join(',');
+  input.value = vals;
+}
+
+function onAddRuleColsInput(type, name) {
+  const input = document.getElementById(`rf-cols-${type}-${escapeId(name)}`);
+  const container = document.getElementById(`rf-cols-checkboxes-${type}-${escapeId(name)}`);
+  if (input && container) {
+    syncColsInputToCheckboxes(input, container);
+  }
+}
+
+function onEditRuleColsInput(type, name, dbName, idx) {
+  const input = document.getElementById(`erf-cols-${type}-${escapeId(name)}-${idx}`);
+  const container = document.getElementById(`erf-cols-checkboxes-${type}-${escapeId(name)}-${idx}`);
+  if (input && container) {
+    syncColsInputToCheckboxes(input, container);
+  }
+}
+
+function syncColsInputToCheckboxes(input, container) {
+  const vals = input.value.split(',').map(v => v.trim().toLowerCase()).filter(v => v);
+  const cbs = container.querySelectorAll('input[type="checkbox"]');
+  for (const cb of cbs) {
+    cb.checked = vals.includes(cb.value.toLowerCase());
+  }
+}
+
+function onAddRuleDbChange(type, name) {
+  const dbSel = document.getElementById(`rf-db-${type}-${escapeId(name)}`);
+  const dbName = dbSel ? dbSel.value : '';
+  // 重置并加载表列表
+  const tableSel = document.getElementById(`rf-table-${type}-${escapeId(name)}`);
+  if (tableSel) tableSel.innerHTML = '<option value="">先选择数据库...</option>';
+  const colsContainer = document.getElementById(`rf-cols-checkboxes-${type}-${escapeId(name)}`);
+  if (colsContainer) { colsContainer.style.display = 'none'; colsContainer.innerHTML = ''; }
+  if (dbName) {
+    loadTablesForSelect(`rf-table-${type}-${escapeId(name)}`, dbName, '');
+  }
+}
+
+function onAddRuleTableChange(type, name) {
+  const tableSel = document.getElementById(`rf-table-${type}-${escapeId(name)}`);
+  const dbSel = document.getElementById(`rf-db-${type}-${escapeId(name)}`);
+  const tableName = tableSel ? tableSel.value : '';
+  const dbName = dbSel ? dbSel.value : '';
+  const containerId = `rf-cols-checkboxes-${type}-${escapeId(name)}`;
+  const inputId = `rf-cols-${type}-${escapeId(name)}`;
+  if (dbName && tableName) {
+    loadColumnCheckboxes(containerId, inputId, dbName, tableName, []);
+  } else {
+    const container = document.getElementById(containerId);
+    if (container) { container.style.display = 'none'; container.innerHTML = ''; }
+  }
+}
+
+function onEditRuleTableChange(type, name, dbName, idx) {
+  const tableSel = document.getElementById(`erf-table-${type}-${escapeId(name)}-${idx}`);
+  const tableName = tableSel ? tableSel.value : '';
+  const containerId = `erf-cols-checkboxes-${type}-${escapeId(name)}-${idx}`;
+  const inputId = `erf-cols-${type}-${escapeId(name)}-${idx}`;
+  if (dbName && tableName) {
+    loadColumnCheckboxes(containerId, inputId, dbName, tableName, []);
+  } else {
+    const container = document.getElementById(containerId);
+    if (container) { container.style.display = 'none'; container.innerHTML = ''; }
+  }
 }
 
 // ---- 实体操作 ----
@@ -3253,10 +3505,6 @@ function showAddRuleForm(type, name) {
 function hideAddRuleForm(type, name) {
   const form = document.getElementById(`addrule-form-${type}-${escapeId(name)}`);
   if (form) form.style.display = 'none';
-}
-
-function onPermDbChange(type, name) {
-  // 可以在这里联动获取表名列表（暂不实现）
 }
 
 function populateDbSelectForRule(type, name) {
