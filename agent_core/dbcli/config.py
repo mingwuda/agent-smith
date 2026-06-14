@@ -229,11 +229,14 @@ def _parse_permission_config(data: dict) -> PermissionConfig:
             dbs[db_name] = [TablePermission(**t) if isinstance(t, dict) else t for t in tables]
         roles[role_name] = RolePermission(role=role_name, databases=dbs)
     users = {}
-    for user_id, user_data in data.get("users", {}).items():
+    for user_key, user_data in data.get("users", {}).items():
+        # 支持逗号分隔的多用户 key: "alice,bob" → ["alice", "bob"]
+        user_ids = [u.strip() for u in user_key.split(",") if u.strip()]
         dbs = {}
         for db_name, tables in user_data.get("databases", {}).items():
             dbs[db_name] = [TablePermission(**t) if isinstance(t, dict) else t for t in tables]
-        users[user_id] = UserPermission(user_id=user_id, databases=dbs)
+        for uid in user_ids:
+            users[uid] = UserPermission(user_id=uid, databases=dbs)
     return PermissionConfig(
         roles=roles,
         users=users,

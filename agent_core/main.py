@@ -1869,13 +1869,17 @@ def db_get_permissions(request: Request):
 def db_save_permissions(req: DBQueryRequest, request: Request):
     """保存权限配置（req.sql 为权限 YAML 文本，复用 DBQueryRequest 结构）"""
     _require_admin(request)
-    from dbcli.config import save_permission_config
+    from dbcli.config import CONFIG_DIR
     import yaml
     try:
+        # 验证 YAML 格式
         data = yaml.safe_load(req.sql)
         from dbcli.config import _parse_permission_config
-        config = _parse_permission_config(data)
-        save_permission_config(config)
+        config = _parse_permission_config(data)  # 验证能正确解析
+        # 直接保存原始 YAML 文本（保留用户格式，包括逗号分隔的用户组、注释等）
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        yaml_path = CONFIG_DIR / "permissions.yaml"
+        yaml_path.write_text(req.sql, encoding="utf-8")
         return {"status": "ok", "message": "权限配置已保存"}
     except Exception as e:
         raise HTTPException(400, f"权限配置格式错误: {e}")
