@@ -1536,12 +1536,18 @@ def save_settings(req: SettingsRequest, request: Request):
 class UserInfo(BaseModel):
     id: str
     name: str
+    role: str = ""
     created_at: str
 
 
 class CreateUserRequest(BaseModel):
     user_id: str
     name: str = ""
+    role: str = ""
+
+
+class UpdateUserRoleRequest(BaseModel):
+    role: str = ""
 
 
 @app.get("/users", response_model=list[UserInfo])
@@ -1554,10 +1560,24 @@ def list_users():
 def create_user(req: CreateUserRequest):
     """创建新用户"""
     try:
-        user = user_manager.create_user(req.user_id, req.name)
+        user = user_manager.create_user(req.user_id, req.name, req.role)
         return UserInfo(**user)
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+
+@app.put("/users/{user_id}/role")
+def update_user_role(user_id: str, req: UpdateUserRoleRequest):
+    """更新用户角色"""
+    import json
+    from user_manager import _all_users, _write_users, get_user
+    users = _all_users()
+    if user_id not in users:
+        raise HTTPException(404, "用户不存在")
+    users[user_id]["role"] = req.role
+    _write_users(users)
+    updated = get_user(user_id)
+    return UserInfo(**updated) if updated else {"status": "ok"}
 
 
 @app.delete("/users/{user_id}")
@@ -1592,7 +1612,7 @@ def _init_default_users():
     users = auth.get("users", {})
     for uid in users:
         if not user_manager.get_user(uid):
-            user_manager.create_user(uid, uid)
+            user_manager.create_user(uid, uid, role="")
             logger.info("  👤 创建用户: %s", uid)
 
 
@@ -1845,7 +1865,7 @@ def db_get_permissions(request: Request):
             for db, tables in role.databases.items()
         }}
     for user_id, user in perm.users.items():
-        output["users"][user_id] = {"databases": {
+        output["users"][user_id] = {"role": user.role, "databases": {
             db: [{"table": t.table, "columns_allow": t.columns_allow,
                    "row_filter": t.row_filter, "allow_write": t.allow_write,
                    "max_rows": t.max_rows} for t in tables]

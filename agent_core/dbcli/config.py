@@ -157,6 +157,7 @@ class TablePermission:
 class UserPermission:
     """用户权限定义（用户白名单，优先于角色权限）"""
     user_id: str                                  # 用户ID
+    role: str = ""                                # 绑定的角色名（用户继承该角色的权限）
     databases: dict[str, list[TablePermission]] = field(default_factory=dict)
     # databases: { "prod_db": [TablePermission, ...], "analytics": [...] }
 
@@ -235,8 +236,9 @@ def _parse_permission_config(data: dict) -> PermissionConfig:
         dbs = {}
         for db_name, tables in user_data.get("databases", {}).items():
             dbs[db_name] = [TablePermission(**t) if isinstance(t, dict) else t for t in tables]
+        role = user_data.get("role", "")
         for uid in user_ids:
-            users[uid] = UserPermission(user_id=uid, databases=dbs)
+            users[uid] = UserPermission(user_id=uid, role=role, databases=dbs)
     return PermissionConfig(
         roles=roles,
         users=users,
@@ -257,7 +259,10 @@ def _serialize_permission_config(config: PermissionConfig) -> dict:
         dbs_out = {}
         for db_name, tables in user.databases.items():
             dbs_out[db_name] = [asdict(t) for t in tables]
-        users_out[user_id] = {"databases": dbs_out}
+        user_entry = {"databases": dbs_out}
+        if user.role:
+            user_entry["role"] = user.role
+        users_out[user_id] = user_entry
     result = {"roles": roles_out}
     if users_out:
         result["users"] = users_out

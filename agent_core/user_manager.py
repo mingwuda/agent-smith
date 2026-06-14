@@ -45,7 +45,7 @@ def get_user(user_id: str) -> Optional[dict]:
     return {"id": user_id, **info}
 
 
-def create_user(user_id: str, name: str = "") -> dict:
+def create_user(user_id: str, name: str = "", role: str = "") -> dict:
     """创建用户及其隔离目录"""
     _ensure()
     users = _all_users()
@@ -54,7 +54,7 @@ def create_user(user_id: str, name: str = "") -> dict:
 
     from datetime import datetime
     now = datetime.now().isoformat()
-    info = {"name": name or user_id, "created_at": now}
+    info = {"name": name or user_id, "created_at": now, "role": role}
     users[user_id] = info
     _write_users(users)
 

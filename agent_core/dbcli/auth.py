@@ -103,6 +103,34 @@ class PermissionChecker:
                 return tp
         return None
 
+    def resolve_permission(
+        self, user_id: str, role: str, connection_name: str, table_name: str
+    ) -> Optional[TablePermission]:
+        """合并用户白名单与角色权限，返回最终的权限规则
+
+        优先级：用户白名单中的表规则 > 用户绑定的角色的表规则
+        如果用户白名单有覆盖规则，直接返回用户规则；
+        否则查找用户绑定的角色规则。
+        """
+        # 1. 先查用户白名单中的表规则（覆盖规则）
+        utp = self.get_user_table_permission(user_id, connection_name, table_name)
+        if utp:
+            return utp
+
+        # 2. 查用户绑定的角色
+        if user_id:
+            user_perm = self.get_user(user_id)
+            if user_perm and user_perm.role:
+                role_perm = self.get_role(user_perm.role)
+                if role_perm:
+                    db_tables = role_perm.databases.get(connection_name, [])
+                    for tp in db_tables:
+                        if tp.table == table_name or tp.table == "*":
+                            return tp
+
+        # 3. 最后回退到传入的角色参数
+        return self.get_table_permission(role, connection_name, table_name)
+
     def _extract_tables(self, sql: str) -> list[str]:
         """从 SQL 语句中提取涉及的表名"""
         sql_upper = sql.upper()
@@ -159,21 +187,12 @@ class PermissionChecker:
         # ── 2. 提取表名 ──
         tables = self._extract_tables(sql_stripped)
 
-        # ── 3. 获取权限规则 ──
-        # 优先使用用户白名单权限，其次使用角色权限
+        # ── 3. 获取权限规则（用户继承角色 + 用户覆盖规则）──
         user_id = user_context.get("user_id", "") if user_context else ""
         table_perm = None
         for t in tables:
-            # 先查用户白名单
-            if user_id:
-                utp = self.get_user_table_permission(user_id, connection_name, t)
-                if utp:
-                    table_perm = utp
-                    break
-            # 再查角色权限
-            rtp = self.get_table_permission(role, connection_name, t)
-            if rtp:
-                table_perm = rtp
+            table_perm = self.resolve_permission(user_id, role, connection_name, t)
+            if table_perm:
                 break
 
         if table_perm is None:

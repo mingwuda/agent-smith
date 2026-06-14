@@ -3078,6 +3078,26 @@ function buildEntityCard(name, type, entityData) {
   const rules = entityData.databases || {};
   const dbNames = Object.keys(rules);
 
+  // 用户白名单：显示角色选择器和覆盖规则
+  let roleSelectorHtml = '';
+  if (type === 'user') {
+    const currentRole = entityData.role || '';
+    const roleNames = Object.keys(_permData.roles || {});
+    let roleOptions = '<option value="">无角色（独立权限）</option>';
+    for (const rn of roleNames) {
+      const sel = rn === currentRole ? 'selected' : '';
+      roleOptions += `<option value="${escAttr(rn)}" ${sel}>${escHtml(rn)}</option>`;
+    }
+    roleSelectorHtml = `
+      <div class="perm-rule-field perm-rule-field-full" style="margin-bottom:10px;">
+        <label>绑定角色（继承角色权限）</label>
+        <select id="user-role-sel-${escapeId(name)}" onchange="onUserRoleChange('${escAttr(name)}', this.value)" style="padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:12px;width:100%;background:#fff;">
+          ${roleOptions}
+        </select>
+        <div style="font-size:10px;color:#888;margin-top:3px;">选择角色后，用户自动继承该角色的表权限；下方规则可覆盖或补充角色规则。</div>
+      </div>`;
+  }
+
   // 构建每个数据库的规则HTML
   let rulesHtml = '';
   if (dbNames.length > 0) {
@@ -3103,6 +3123,7 @@ function buildEntityCard(name, type, entityData) {
       </div>
     </div>
     <div class="perm-entity-body" id="body-${type}-${escapeId(name)}">
+      ${roleSelectorHtml}
       <div class="perm-rules-header">
         <span class="perm-rules-label">${dbNames.length} 个数据库的规则</span>
         <button class="perm-rule-add-btn" onclick="showAddRuleForm('${type}','${escAttr(name)}')">+ 添加规则</button>
@@ -3114,6 +3135,11 @@ function buildEntityCard(name, type, entityData) {
       </div>
     </div>
   </div>`;
+}
+
+function onUserRoleChange(userName, roleValue) {
+  if (!_permData.users[userName]) return;
+  _permData.users[userName].role = roleValue;
 }
 
 function buildRuleCard(dbName, rule, idx) {
@@ -3176,7 +3202,15 @@ function showAddPermEntity(type) {
       alert(`${n} 已存在，请勿重复添加`);
       continue;
     }
-    _permData[key][n] = { databases: {} };
+    // 如果是添加用户，如果有已定义的角色，让用户选择绑定角色
+    let role = '';
+    if (type === 'user') {
+      const roleNames = Object.keys(_permData.roles || {});
+      if (roleNames.length > 0) {
+        role = prompt(`为用户 "${n}" 选择绑定的角色（留空则不绑定）:\n可用角色: ${roleNames.join(', ')}`) || '';
+      }
+    }
+    _permData[key][n] = { databases: {}, role: role };
   }
   renderPermEntities();
 }
@@ -3300,16 +3334,20 @@ async function saveVisualPermissions() {
       }));
     }
   }
-  // 收集用户
+  // 收集用户（包含角色绑定和覆盖规则）
   for (const [un, ud] of Object.entries(_permData.users || {})) {
-    yamlObj.users[un] = { databases: {} };
+    const userObj = { databases: {} };
+    if (ud.role) {
+      userObj.role = ud.role;
+    }
     for (const [dn, tables] of Object.entries(ud.databases || {})) {
-      yamlObj.users[un].databases[dn] = tables.map(t => ({
+      userObj.databases[dn] = tables.map(t => ({
         table: t.table, columns_allow: t.columns_allow||[],
         row_filter: t.row_filter||'', allow_write: !!t.allow_write,
         max_rows: t.max_rows||500
       }));
     }
+    yamlObj.users[un] = userObj;
   }
 
   try {
