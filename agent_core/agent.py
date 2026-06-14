@@ -333,16 +333,30 @@ def _drop_dangling_tool_call_messages(messages: list) -> tuple[list, bool]:
 
 
 def session_messages_to_langchain(messages: list[dict]) -> list:
-    """Convert persisted chat messages into LangChain messages."""
+    """Convert persisted chat messages into LangChain messages.
+    保留用户消息中的图片，让 LLM 能在后续轮次中看到历史图片。
+    """
     converted = []
     for msg in messages:
         role = msg.get("role")
         content = msg.get("content") or ""
-        if not content:
-            continue
+        images = msg.get("images") or []
         if role == "user":
-            converted.append(HumanMessage(content=content))
-        elif role == "assistant":
+            if images:
+                # 多模态：图片 + 文本
+                multimodal = []
+                for url in images:
+                    if isinstance(url, str) and url.startswith("data:image/"):
+                        multimodal.append({"type": "image_url", "image_url": {"url": url}})
+                if content:
+                    multimodal.append({"type": "text", "text": content})
+                if multimodal:
+                    converted.append(HumanMessage(content=multimodal))
+                    continue
+            # 无图或图片格式无效：回退到纯文本
+            if content:
+                converted.append(HumanMessage(content=content))
+        elif role == "assistant" and content:
             converted.append(AIMessage(content=content))
     return converted
 
