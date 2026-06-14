@@ -109,8 +109,18 @@ def _path_error(exc: ValueError) -> str:
     return f"❌ {exc}"
 
 @tool
-def read_file(path: str) -> str:
-    """读取文件内容。path 可为工作区相对路径，也可为绝对路径。"""
+def read_file(path: str, start_line: int = 0, max_lines: int = 200) -> str:
+    """读取文件内容（支持分段）。path 可为工作区相对路径，也可为绝对路径。
+
+    参数:
+      - start_line: 从第几行开始读（默认 0）
+      - max_lines: 一次最多读多少行（默认 200，避免大文件塞爆上下文）
+
+    示例:
+      - read_file("agent.py")  → 读前 200 行
+      - read_file("agent.py", 200, 300)  → 读 200-500 行
+      - read_file("agent.py", 0, 1000)  → 读前 1000 行（显式大窗口）
+    """
     try:
         full = _resolve(path, allow_outside=True)
     except ValueError as exc:
@@ -119,21 +129,59 @@ def read_file(path: str) -> str:
         return f"❌ 文件不存在: {path}"
     if not full.is_file():
         return f"❌ 不是文件: {path}"
-    content = full.read_text(encoding="utf-8")
-    if len(content) <= MAX_FILE_RETURN_CHARS:
-        return content
+
     rel = _display_path(full)
-    return (
-        "⚠️ 文件较大，未将全文放入模型上下文。\n"
-        f"路径: {rel}\n"
-        f"字符数: {len(content)}\n"
-        f"字节数: {full.stat().st_size}\n"
-        "如需精确处理，请针对具体片段、关键词或行号继续读取。\n\n"
-        f"--- 文件开头 {FILE_HEAD_CHARS} 字符 ---\n"
-        f"{content[:FILE_HEAD_CHARS]}\n\n"
-        f"--- 文件结尾 {FILE_TAIL_CHARS} 字符 ---\n"
-        f"{content[-FILE_TAIL_CHARS:]}"
+    file_size = full.stat().st_size
+
+    # 1. 文件总行数（用二分文件估计，避免大文件开销）
+    try:
+        with full.open("rb") as f:
+            total_lines = sum(1 for _ in f)
+    except Exception as e:
+        return f"❌ 读取失败: {e}"
+
+    # 2. 规范化参数
+    start_line = max(0, int(start_line or 0))
+    max_lines = max(1, min(int(max_lines or 200), 5000))  # 单次最多 5000 行
+    end_line = min(start_line + max_lines, total_lines)
+
+    if start_line >= total_lines:
+        return f"❌ 起始行 {start_line} 超出文件总行数 {total_lines}"
+
+    # 3. 用 seek 高效定位 + 逐行读区间
+    try:
+        lines = []
+        with full.open("rb") as f:
+            for lineno in range(start_line):
+                f.readline()  # 跳过
+            for lineno in range(start_line, end_line):
+                line = f.readline()
+                if not line:
+                    break
+                lines.append(line.decode("utf-8", errors="replace").rstrip("\n"))
+    except Exception as e:
+        return f"❌ 读取失败: {e}"
+
+    header = (
+        f"📄 {rel}\n"
+        f"行范围: {start_line}–{end_line} / {total_lines} 行 | "
+        f"字符数: {sum(len(l) for l in lines)} | 字节数: {file_size}\n"
+        f"{'─' * 60}\n"
     )
+    body = "\n".join(lines)
+
+    # 4. 区间内有更多行时给出提示
+    footer = ""
+    if end_line < total_lines:
+        footer = (
+            f"\n{'─' * 60}\n"
+            f"💡 仍有 {total_lines - end_line} 行未读，"
+            f"可调用 read_file(\"{path}\", start_line={end_line}, max_lines={max_lines}) 继续"
+        )
+    elif start_line > 0:
+        footer = f"\n{'─' * 60}\n💡 已读至文件末尾"
+
+    return header + body + footer
 
 @tool
 def write_file(path: str, content: str) -> str:
