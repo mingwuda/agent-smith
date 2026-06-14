@@ -3193,8 +3193,12 @@ function showAddPermEntity(type) {
   const label = type === 'role' ? '角色名称' : '用户ID';
   const hint = type === 'role' ? '如 analyst, admin, viewer' : '如 alice, bob (支持逗号分隔多个用户)';
   const val = prompt(`请输入${label}:\n提示：${hint}`);
-  if (!val || !val.trim()) return;
-  const names = val.split(',').map(s => s.trim()).filter(s => s);
+  // 严格校验空值、纯空格、过短值
+  if (!val || !val.trim() || val.trim().length < 1) {
+    return;
+  }
+  const names = val.split(',').map(s => s.trim()).filter(s => s && s.length > 0);
+  if (names.length === 0) return;
   for (const n of names) {
     const key = type;
     if (!_permData[key]) _permData[key] = {};
@@ -3205,7 +3209,7 @@ function showAddPermEntity(type) {
     // 如果是添加用户，如果有已定义的角色，让用户选择绑定角色
     let role = '';
     if (type === 'user') {
-      const roleNames = Object.keys(_permData.roles || {});
+      const roleNames = Object.keys(_permData.roles || {}).filter(rn => rn && rn.trim());
       if (roleNames.length > 0) {
         role = prompt(`为用户 "${n}" 选择绑定的角色（留空则不绑定）:\n可用角色: ${roleNames.join(', ')}`) || '';
       }
@@ -3313,7 +3317,7 @@ async function saveVisualPermissions() {
   msgEl.style.display = 'inline';msgEl.style.color = '#666';msgEl.textContent = '正在保存...';
 
   // 收集全局默认值
-  const yamlObj = {
+  const permObj = {
     global_defaults: {
       max_query_rows: parseInt(document.getElementById('g-max-rows').value) || 500,
       default_readonly: document.getElementById('g-default-readonly').checked,
@@ -3323,19 +3327,21 @@ async function saveVisualPermissions() {
     users: {}
   };
 
-  // 收集角色
+  // 收集角色（跳过空角色名）
   for (const [rn, rd] of Object.entries(_permData.roles || {})) {
-    yamlObj.roles[rn] = { databases: {} };
+    if (!rn || !rn.trim()) continue;
+    permObj.roles[rn] = { databases: {} };
     for (const [dn, tables] of Object.entries(rd.databases || {})) {
-      yamlObj.roles[rn].databases[dn] = tables.map(t => ({
+      permObj.roles[rn].databases[dn] = tables.map(t => ({
         table: t.table, columns_allow: t.columns_allow||[],
         row_filter: t.row_filter||'', allow_write: !!t.allow_write,
         max_rows: t.max_rows||500
       }));
     }
   }
-  // 收集用户（包含角色绑定和覆盖规则）
+  // 收集用户（跳过空用户名）
   for (const [un, ud] of Object.entries(_permData.users || {})) {
+    if (!un || !un.trim()) continue;
     const userObj = { databases: {} };
     if (ud.role) {
       userObj.role = ud.role;
@@ -3347,20 +3353,15 @@ async function saveVisualPermissions() {
         max_rows: t.max_rows||500
       }));
     }
-    yamlObj.users[un] = userObj;
+    permObj.users[un] = userObj;
   }
 
   try {
-    // 转换为 YAML 文本
-    const resp = await fetch('/db/permissions');
-    const existing = await resp.json();
-    // 使用已有的yaml库或手动构建简单YAML格式
-    const yamlText = objToYaml(yamlObj);
-
+    // 直接发送 JSON 对象，后端负责生成 YAML
     const saveResp = await fetch('/db/permissions', {
       method: 'PUT',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({sql: yamlText})
+      body: JSON.stringify({sql: JSON.stringify(permObj)})
     });
     const result = await saveResp.json();
     if (result.status === 'ok') {

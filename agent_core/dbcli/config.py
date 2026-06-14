@@ -194,7 +194,21 @@ def get_permission_config() -> PermissionConfig:
                 data = yaml.safe_load(f) or {}
             return _parse_permission_config(data)
         except Exception:
-            pass
+            # 文件损坏：尝试用原始文本修复后再解析
+            try:
+                raw = config_file.read_text(encoding="utf-8")
+                # 尝试修复常见问题：移除空 key 行（如 "  :"）
+                import re
+                fixed = re.sub(r'^\s*:\s*$', '', raw, flags=re.MULTILINE)
+                fixed = re.sub(r'^\s+:\s*$', '', fixed, flags=re.MULTILINE)
+                data = yaml.safe_load(fixed) or {}
+                if data:
+                    cfg = _parse_permission_config(data)
+                    # 用干净数据覆盖损坏文件
+                    save_permission_config(cfg)
+                    return cfg
+            except Exception:
+                pass
 
     # 回退：包内模板（首次运行或用户删除了配置）
     template = Path(__file__).parent / "permissions.yaml"
@@ -203,7 +217,7 @@ def get_permission_config() -> PermissionConfig:
             with open(template, "r", encoding="utf-8") as f:
                 data = yaml.safe_load(f) or {}
             cfg = _parse_permission_config(data)
-            # 将模板写入用户目录（供后续编辑）
+            # 将模板写入用户目录（覆盖损坏文件）
             save_permission_config(cfg)
             return cfg
         except Exception:
@@ -225,16 +239,32 @@ def _parse_permission_config(data: dict) -> PermissionConfig:
     """从 YAML 字典解析权限配置"""
     roles = {}
     for role_name, role_data in data.get("roles", {}).items():
+        # 跳过空角色名（可能由旧版本 bug 产生）
+        if not role_name or not role_name.strip():
+            continue
+        if not isinstance(role_data, dict):
+            continue
         dbs = {}
         for db_name, tables in role_data.get("databases", {}).items():
+            if not db_name:
+                continue
             dbs[db_name] = [TablePermission(**t) if isinstance(t, dict) else t for t in tables]
         roles[role_name] = RolePermission(role=role_name, databases=dbs)
     users = {}
     for user_key, user_data in data.get("users", {}).items():
+        # 跳过空 user key
+        if not user_key or not user_key.strip():
+            continue
+        if not isinstance(user_data, dict):
+            continue
         # 支持逗号分隔的多用户 key: "alice,bob" → ["alice", "bob"]
         user_ids = [u.strip() for u in user_key.split(",") if u.strip()]
+        if not user_ids:
+            continue
         dbs = {}
         for db_name, tables in user_data.get("databases", {}).items():
+            if not db_name:
+                continue
             dbs[db_name] = [TablePermission(**t) if isinstance(t, dict) else t for t in tables]
         role = user_data.get("role", "")
         for uid in user_ids:
@@ -258,6 +288,38 @@ def _serialize_permission_config(config: PermissionConfig) -> dict:
     for user_id, user in config.users.items():
         dbs_out = {}
         for db_name, tables in user.databases.items():
+            dbs_out[db_name] = [asdict(t) for t in tables]
+        user_entry = {"databases": dbs_out}
+        if user.role:
+            user_entry["role"] = user.role
+        users_out[user_id] = user_entry
+    result = {"roles": roles_out}
+    if users_out:
+        result["users"] = users_out
+    result["global_defaults"] = config.global_defaults
+    return result
+
+
+def _serialize_permission_config_for_yaml(config: PermissionConfig) -> dict:
+    """序列化为干净的 dict（供 PyYAML 安全导出，确保无空 key）"""
+    roles_out = {}
+    for role_name, role in config.roles.items():
+        if not role_name or not role_name.strip():
+            continue
+        dbs_out = {}
+        for db_name, tables in role.databases.items():
+            if not db_name:
+                continue
+            dbs_out[db_name] = [asdict(t) for t in tables]
+        roles_out[role_name] = {"databases": dbs_out}
+    users_out = {}
+    for user_id, user in config.users.items():
+        if not user_id or not user_id.strip():
+            continue
+        dbs_out = {}
+        for db_name, tables in user.databases.items():
+            if not db_name:
+                continue
             dbs_out[db_name] = [asdict(t) for t in tables]
         user_entry = {"databases": dbs_out}
         if user.role:
