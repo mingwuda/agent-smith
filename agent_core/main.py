@@ -1351,11 +1351,16 @@ def get_skill_file(name: str, path: str = ""):
             name=skill.name, file_path=path, content=text, size=len(raw), truncated=truncated
         )
 
+    try:
+        file_size = target.stat().st_size
+    except OSError:
+        file_size = len(raw)
+
     return SkillFileContent(
         name=skill.name,
         file_path=path,
         content=text,
-        size=len(target.stat().st_size and target.stat().st_size or 0) or len(raw),
+        size=file_size,
         truncated=truncated,
     )
 
