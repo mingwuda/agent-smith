@@ -334,10 +334,10 @@
   .artifact-preview-body img { max-width:100%; height:auto; border-radius:6px; margin:8px 0; }
 
   /* 技能详情弹窗 */
-  .skill-detail-meta { color:#8e8e93; font-size:12px; margin:-12px 0 10px; display:flex; flex-direction:column; gap:6px; }
+  .skill-detail-meta { color:#8e8e93; font-size:12px; margin:-12px 0 10px; display:flex; flex-direction:column; gap:6px; flex-shrink:0; }
   .skill-detail-desc { color:#3a3a3c; font-size:13px; line-height:1.5; }
-  .skill-detail-triggers { font-size:12px; color:#6e6e73; max-height:72px; overflow:hidden; transition:max-height .25s ease; }
-  .skill-detail-triggers.expanded { max-height:none; }
+  .skill-detail-triggers { font-size:12px; color:#6e6e73; max-height:48px; overflow:hidden; transition:max-height .2s ease; flex-shrink:0; }
+  .skill-detail-triggers.expanded { max-height:35vh; overflow-y:auto; }
   .skill-detail-triggers .chip { display:inline-block; background:#e0e8ff; color:#0062cc; border-radius:10px; padding:1px 8px; margin:0 4px 2px 0; font-size:11px; }
   .skill-detail-triggers .trigger-toggle { display:inline-block; font-size:11px; color:#007aff; cursor:pointer; margin-left:4px; user-select:none; }
   .skill-detail-triggers .trigger-toggle:hover { text-decoration:underline; }
@@ -2807,35 +2807,12 @@ async function openSkillDetail(name) {
     const data = await res.json();
     descEl.textContent = data.description || t('noDescription');
     if (data.triggers && data.triggers.length) {
-      const maxVisible = 10;
-      const chips = data.triggers.map(x => `<span class="chip">${escapeHtml(x)}</span>`);
-      if (chips.length <= maxVisible) {
-        triggersEl.innerHTML = t('triggersLabel') + chips.join('');
-      } else {
-        const visible = chips.slice(0, maxVisible).join('');
-        const hidden = chips.slice(maxVisible).join('');
-        let expanded = false;
-        triggersEl.innerHTML = t('triggersLabel') + visible
-          + `<span class="chip-more">…</span>`
-          + `<span class="hidden-chips" style="display:none">${hidden}</span>`
-          + `<span class="trigger-toggle" data-i18n="expandTriggers">展开全部 ${chips.length} 个</span>`;
-        triggersEl.querySelector('.trigger-toggle').onclick = () => {
-          expanded = !expanded;
-          triggersEl.classList.toggle('expanded', expanded);
-          const more = triggersEl.querySelector('.chip-more');
-          const hiddenEl = triggersEl.querySelector('.hidden-chips');
-          const toggle = triggersEl.querySelector('.trigger-toggle');
-          if (expanded) {
-            if (more) more.style.display = 'none';
-            if (hiddenEl) hiddenEl.style.display = 'inline';
-            toggle.textContent = '收起';
-          } else {
-            if (more) more.style.display = 'inline';
-            if (hiddenEl) hiddenEl.style.display = 'none';
-            toggle.textContent = '展开全部 ' + chips.length + ' 个';
-          }
-        };
-      }
+      const chips = data.triggers.map(x => `<span class="chip">${escapeHtml(x)}</span>`).join('');
+      triggersEl.innerHTML = t('triggersLabel') + chips + `<span class="trigger-toggle">展开全部 ${data.triggers.length} 个</span>`;
+      triggersEl.querySelector('.trigger-toggle').onclick = () => {
+        const expanded = triggersEl.classList.toggle('expanded');
+        triggersEl.querySelector('.trigger-toggle').textContent = expanded ? '收起' : `展开全部 ${data.triggers.length} 个`;
+      };
     } else {
       triggersEl.textContent = t('triggersLabel') + t('noTriggers');
     }
