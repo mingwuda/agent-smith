@@ -331,6 +331,18 @@
   .artifact-preview-body pre { background:#1c1c1e; color:#f5f5f7; padding:14px 16px; border-radius:8px; overflow:auto; margin:12px 0; }
   .artifact-preview-body pre code { background:transparent; color:inherit; padding:0; border-radius:0; font-size:13px; line-height:1.6; }
 
+  /* 技能详情弹窗 */
+  .skill-detail-meta { color:#8e8e93; font-size:12px; margin:-12px 0 10px; display:flex; flex-wrap:wrap; gap:8px 14px; }
+  .skill-detail-desc { color:#3a3a3c; font-size:13px; line-height:1.5; }
+  .skill-detail-triggers { font-size:12px; color:#6e6e73; }
+  .skill-detail-triggers .chip { display:inline-block; background:#e0e8ff; color:#0062cc; border-radius:10px; padding:1px 8px; margin:0 4px 2px 0; font-size:11px; }
+  .skill-detail-files { display:flex; flex-wrap:wrap; gap:6px; padding:8px 0; border-bottom:1px solid #e5e5ea; margin-bottom:10px; max-height:120px; overflow-y:auto; }
+  .skill-file-chip { font-size:12px; padding:4px 10px; background:#f0f0f3; border:1px solid #ddd; border-radius:14px; cursor:pointer; user-select:none; }
+  .skill-file-chip:hover { background:#e5e5ea; }
+  .skill-file-chip.active { background:#007aff; color:#fff; border-color:#007aff; }
+  .skill-file-chip.dir { background:#fff8e1; color:#7a5a00; border-color:#ffe082; cursor:default; }
+  .skill-file-chip.dir.active { background:#7a5a00; color:#fff; border-color:#7a5a00; }
+
   /* 会话列表 */
   #session-header { display:flex; align-items:center; justify-content:space-between; padding:12px 16px 4px; }
   #session-header h2 { font-size:15px; color:#8e8e93; text-transform:uppercase; letter-spacing:1px; padding:0; }
@@ -825,6 +837,22 @@
     <div class="modal-actions">
       <a class="btn-secondary" id="artifact-preview-download" href="#" download data-i18n="downloadButton">下载</a>
       <button class="btn-secondary" onclick="closeArtifactPreview()" data-i18n="closeButton">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- 技能详情弹窗（点击技能项触发） -->
+<div class="modal-overlay" id="skill-detail-modal">
+  <div class="modal artifact-preview-modal">
+    <h2 id="skill-detail-title">🧩 技能详情</h2>
+    <div class="skill-detail-meta">
+      <div class="skill-detail-desc" id="skill-detail-desc"></div>
+      <div class="skill-detail-triggers" id="skill-detail-triggers"></div>
+    </div>
+    <div class="skill-detail-files" id="skill-detail-files"></div>
+    <div class="artifact-preview-body" id="skill-detail-body"></div>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="closeSkillDetail()" data-i18n="closeButton">关闭</button>
     </div>
   </div>
 </div>
@@ -2746,6 +2774,120 @@ async function refreshStats() {
   } catch {}
 }
 
+// ── 技能详情弹窗 ──
+let _skillDetailCurrent = null;   // { name, files: [{path, size, kind}], basePath }
+
+async function openSkillDetail(name) {
+  const modal = document.getElementById('skill-detail-modal');
+  const titleEl = document.getElementById('skill-detail-title');
+  const descEl = document.getElementById('skill-detail-desc');
+  const triggersEl = document.getElementById('skill-detail-triggers');
+  const filesEl = document.getElementById('skill-detail-files');
+  const bodyEl = document.getElementById('skill-detail-body');
+  titleEl.textContent = '🧩 ' + name;
+  descEl.textContent = t('loading');
+  triggersEl.innerHTML = '';
+  filesEl.innerHTML = '';
+  bodyEl.innerHTML = t('loading');
+  modal.classList.add('active');
+
+  try {
+    const res = await fetch(`/skills/${encodeURIComponent(name)}`);
+    if (!res.ok) {
+      const detail = await res.json().catch(() => ({}));
+      bodyEl.textContent = (detail.detail || res.statusText) + ' (' + res.status + ')';
+      return;
+    }
+    const data = await res.json();
+    descEl.textContent = data.description || t('noDescription');
+    if (data.triggers && data.triggers.length) {
+      triggersEl.innerHTML = t('triggersLabel') + data.triggers.map(x => `<span class="chip">${escapeHtml(x)}</span>`).join('');
+    } else {
+      triggersEl.textContent = t('triggersLabel') + t('noTriggers');
+    }
+
+    // 渲染文件清单
+    const files = data.files || [];
+    _skillDetailCurrent = { name, files };
+
+    // 把 SKILL.md 放在最前
+    filesEl.innerHTML = '';
+    const sorted = files.slice().sort((a, b) => {
+      if (a.path.toLowerCase().endsWith('skill.md')) return -1;
+      if (b.path.toLowerCase().endsWith('skill.md')) return 1;
+      if (a.kind !== b.kind) return a.kind === 'dir' ? -1 : 1;
+      return a.path.localeCompare(b.path);
+    });
+    sorted.forEach(f => {
+      const chip = document.createElement('div');
+      chip.className = 'skill-file-chip' + (f.kind === 'dir' ? ' dir' : '');
+      chip.textContent = f.path;
+      chip.dataset.path = f.path;
+      if (f.kind !== 'dir' && f.path.toLowerCase().endsWith('skill.md')) {
+        chip.classList.add('active');
+      }
+      if (f.kind !== 'dir') {
+        chip.onclick = () => {
+          filesEl.querySelectorAll('.skill-file-chip').forEach(c => c.classList.remove('active'));
+          chip.classList.add('active');
+          _loadSkillFile(name, f.path);
+        };
+      }
+      filesEl.appendChild(chip);
+    });
+
+    // 默认显示 SKILL.md
+    const skillMd = sorted.find(f => f.path.toLowerCase().endsWith('skill.md') && f.kind === 'file');
+    if (skillMd) {
+      _loadSkillFile(name, skillMd.path);
+    } else if (sorted.length === 0) {
+      bodyEl.textContent = '（该技能没有文件）';
+    } else {
+      bodyEl.textContent = '（无 SKILL.md，请选择上方文件查看）';
+    }
+  } catch (e) {
+    bodyEl.textContent = String(e);
+  }
+}
+
+async function _loadSkillFile(name, path) {
+  const bodyEl = document.getElementById('skill-detail-body');
+  bodyEl.innerHTML = t('artifactLoading');
+  try {
+    const res = await fetch(`/skills/${encodeURIComponent(name)}/files?path=${encodeURIComponent(path)}`);
+    if (!res.ok) {
+      const detail = await res.json().catch(() => ({}));
+      bodyEl.textContent = (detail.detail || res.statusText) + ' (' + res.status + ')';
+      return;
+    }
+    const data = await res.json();
+    if (data.truncated) {
+      bodyEl.innerHTML = `<p style="color:#ff9500;font-size:12px;">⚠️ 文件超过 256KB，仅展示前 256KB</p>` + renderMarkdown(data.content || '');
+    } else {
+      bodyEl.innerHTML = renderMarkdown(data.content || '');
+    }
+  } catch (e) {
+    bodyEl.textContent = String(e);
+  }
+}
+
+function closeSkillDetail() {
+  document.getElementById('skill-detail-modal').classList.remove('active');
+}
+
+// 技能项点击：打开详情
+document.addEventListener('click', (e) => {
+  const item = e.target.closest('.skill-item[data-name]');
+  if (item) {
+    openSkillDetail(item.dataset.name);
+  }
+});
+
+// 技能详情弹窗点击遮罩关闭
+document.getElementById('skill-detail-modal').addEventListener('click', function(e) {
+  if (e.target === this) closeSkillDetail();
+});
+
 async function refreshSkills() {
   try {
     const res = await fetch(`/skills`);
@@ -2755,7 +2897,7 @@ async function refreshSkills() {
       if (data.length === 0) {
         container.innerHTML = `<div class="skill-item" style="color:#8e8e93;">${escapeHtml(t('noSkills'))}</div>`;
       } else {
-        container.innerHTML = data.map(s => 
+        container.innerHTML = data.map(s =>
           `<div class="skill-item" title="${escapeHtml(s.description || t('noDescription'))}" data-name="${escapeHtml(s.name)}" data-description="${escapeHtml(s.description || t('noDescription'))}" data-triggers="${escapeHtml((s.triggers || []).join('、') || t('noTriggers'))}">📌 ${escapeHtml(s.name)}</div>`
         ).join('');
       }
