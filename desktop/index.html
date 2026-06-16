@@ -334,6 +334,7 @@
   .artifact-preview-body img { max-width:100%; height:auto; border-radius:6px; margin:8px 0; }
 
   /* 技能详情弹窗 */
+  .skill-detail-modal { width:min(960px, calc(100vw - 32px)); max-height:88vh; display:flex; flex-direction:column; }
   .skill-detail-meta { color:#8e8e93; font-size:12px; margin:-12px 0 10px; display:flex; flex-direction:column; gap:6px; flex-shrink:0; }
   .skill-detail-desc { color:#3a3a3c; font-size:13px; line-height:1.5; }
   .skill-detail-triggers { font-size:12px; color:#6e6e73; max-height:48px; overflow:hidden; transition:max-height .2s ease; flex-shrink:0; }
@@ -341,12 +342,16 @@
   .skill-detail-triggers .chip { display:inline-block; background:#e0e8ff; color:#0062cc; border-radius:10px; padding:1px 8px; margin:0 4px 2px 0; font-size:11px; }
   .skill-detail-triggers .trigger-toggle { display:inline-block; font-size:11px; color:#007aff; cursor:pointer; margin-left:4px; user-select:none; }
   .skill-detail-triggers .trigger-toggle:hover { text-decoration:underline; }
-  .skill-detail-files { display:flex; flex-wrap:wrap; gap:6px; padding:8px 0; border-bottom:1px solid #e5e5ea; margin-bottom:10px; max-height:160px; overflow-y:auto; }
-  .skill-file-chip { font-size:12px; padding:4px 10px; background:#f0f0f3; border:1px solid #ddd; border-radius:14px; cursor:pointer; user-select:none; }
+  .skill-detail-body { display:flex; gap:14px; flex:1; min-height:0; }
+  .skill-detail-sidebar { width:200px; flex-shrink:0; display:flex; flex-direction:column; min-height:0; }
+  .skill-sidebar-label { font-size:12px; color:#6e6e73; padding:0 0 8px; font-weight:500; }
+  .skill-detail-files { display:flex; flex-direction:column; gap:4px; padding-right:4px; overflow-y:auto; min-height:0; }
+  .skill-file-chip { font-size:12px; padding:6px 10px; background:#f0f0f3; border:1px solid #ddd; border-radius:6px; cursor:pointer; user-select:none; word-break:break-all; }
   .skill-file-chip:hover { background:#e5e5ea; }
   .skill-file-chip.active { background:#007aff; color:#fff; border-color:#007aff; }
   .skill-file-chip.dir { background:#fff8e1; color:#7a5a00; border-color:#ffe082; cursor:default; }
   .skill-file-chip.dir.active { background:#7a5a00; color:#fff; border-color:#7a5a00; }
+  .skill-preview-body { flex:1; min-width:0; }
 
   /* 会话列表 */
   #session-header { display:flex; align-items:center; justify-content:space-between; padding:12px 16px 4px; }
@@ -848,14 +853,19 @@
 
 <!-- 技能详情弹窗（点击技能项触发） -->
 <div class="modal-overlay" id="skill-detail-modal">
-  <div class="modal artifact-preview-modal">
+  <div class="modal skill-detail-modal">
     <h2 id="skill-detail-title">🧩 技能详情</h2>
     <div class="skill-detail-meta">
       <div class="skill-detail-desc" id="skill-detail-desc"></div>
       <div class="skill-detail-triggers" id="skill-detail-triggers"></div>
     </div>
-    <div class="skill-detail-files" id="skill-detail-files"></div>
-    <div class="artifact-preview-body" id="skill-detail-body"></div>
+    <div class="skill-detail-body">
+      <div class="skill-detail-sidebar">
+        <div class="skill-sidebar-label" data-i18n="skillFilesLabel">📁 文件</div>
+        <div class="skill-detail-files" id="skill-detail-files"></div>
+      </div>
+      <div class="artifact-preview-body skill-preview-body" id="skill-detail-body"></div>
+    </div>
     <div class="modal-actions">
       <button class="btn-secondary" onclick="closeSkillDetail()" data-i18n="closeButton">关闭</button>
     </div>
