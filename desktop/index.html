@@ -6,6 +6,9 @@
 <title>Desktop Agent</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤖</text></svg>">
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<!-- KaTeX 数学公式渲染 -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
 <style>
   * { margin:0; padding:0; box-sizing:border-box; }
   body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; background:#f5f5f7; height:100vh; display:flex; }
@@ -88,6 +91,10 @@
   .msg.bot th { background:#d0d0d5; font-weight:600; }
   .msg.bot hr { border:none; border-top:1px solid #ccc; margin:12px 0; }
   .msg.bot a { color:#007aff; text-decoration:underline; }
+  /* KaTeX 公式样式 */
+  .msg.bot .katex-display { margin:12px 0; overflow-x:auto; overflow-y:hidden; padding:4px 0; text-align:center; }
+  .msg.bot .katex { font-size:1.15em; }
+  .msg.bot .katex-error { color:#ff453a; font-style:italic; background:#fff0f0; padding:2px 8px; border-radius:4px; }
   .msg.system { background:transparent; color:#8e8e93; font-size:12px; text-align:center; max-width:100%; }
   .msg .msg-time { font-size:10px; opacity:0.6; margin-top:4px; }
   
@@ -1189,9 +1196,50 @@ marked.setOptions({
 });
 
 function renderMarkdown(text) {
-  // 基本 XSS 防护：只允许安全的标签
-  const raw = marked.parse(text);
-  const safe = raw
+  // ----- 数学公式渲染（KaTeX）-----
+  // 先于 marked 处理，避免 LaTeX 语法被 marked 错误转义
+  const mathHtmlPieces = [];
+
+  // 1) 处理显示公式 $$...$$（块级）
+  text = text.replace(/\$\$([\s\S]*?)\$\$/g, function(m, formula) {
+    try {
+      var html = katex.renderToString(formula.trim(), { displayMode: true, throwOnError: false });
+      var key = '%%MATH_BLOCK_' + mathHtmlPieces.length + '%%';
+      mathHtmlPieces.push(html);
+      return key;
+    } catch (e) {
+      // KaTeX 解析失败时保留原始文本
+      return '<div class="katex-error">公式解析错误: ' + e.message + '</div>';
+    }
+  });
+
+  // 2) 处理行内公式 $...$（单行范围）
+  text = text.replace(/\$([^\n$]+?)\$/g, function(m, formula) {
+    // 跳过纯数字 + 单位（如 $10 美元），避免误伤
+    if (/^\d+(\.\d+)?\s*[a-zA-Z%‰℃℉¥€£$]/.test(formula)) return m;
+    try {
+      var html = katex.renderToString(formula.trim(), { displayMode: false, throwOnError: false });
+      var key = '%%MATH_INLINE_' + mathHtmlPieces.length + '%%';
+      mathHtmlPieces.push(html);
+      return key;
+    } catch (e) {
+      return m;
+    }
+  });
+
+  // 3) marked 渲染（开启 GFM + 换行）
+  var raw = marked.parse(text);
+
+  // 4) 将 KaTeX 还原回去
+  raw = raw.replace(/%%MATH_BLOCK_(\d+)%%/g, function(m, idx) {
+    return mathHtmlPieces[parseInt(idx, 10)] || m;
+  });
+  raw = raw.replace(/%%MATH_INLINE_(\d+)%%/g, function(m, idx) {
+    return mathHtmlPieces[parseInt(idx, 10)] || m;
+  });
+
+  // 5) XSS 安全过滤
+  var safe = raw
     .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
     .replace(/on\w+="[^"]*"/gi, '')
     .replace(/on\w+='[^']*'/gi, '')
