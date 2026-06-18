@@ -91,8 +91,8 @@
   .msg.bot th { background:#d0d0d5; font-weight:600; }
   .msg.bot hr { border:none; border-top:1px solid #ccc; margin:12px 0; }
   .msg.bot a { color:#007aff; text-decoration:underline; }
-  /* KaTeX 公式样式 */
-  .msg.bot .katex-display { margin:12px 0; overflow-x:auto; overflow-y:hidden; padding:4px 0; text-align:center; }
+  /* KaTeX 公式样式 — 不用 overflow-x:auto，避免在气泡内产生嵌套滚动条 */
+  .msg.bot .katex-display { margin:12px 0; padding:4px 0; text-align:center; max-width:100%; overflow-wrap:break-word; }
   .msg.bot .katex { font-size:1.15em; }
   .msg.bot .katex-error { color:#ff453a; font-style:italic; background:#fff0f0; padding:2px 8px; border-radius:4px; }
   .msg.system { background:transparent; color:#8e8e93; font-size:12px; text-align:center; max-width:100%; }
