@@ -1214,12 +1214,16 @@ function renderMarkdown(text) {
     }
   });
 
-  // 2) 处理行内公式 $...$（单行范围）
-  text = text.replace(/\$([^\n$]+?)\$/g, function(m, formula) {
+  // 2) 处理行内公式 $...$
+  text = text.replace(/(?<!\$)\$([^$\n]+?)\$(?!\$)/g, function(m, formula) {
+    var f = formula.trim();
     // 跳过纯数字 + 单位（如 $10 美元），避免误伤
-    if (/^\d+(\.\d+)?\s*[a-zA-Z%‰℃℉¥€£$]/.test(formula)) return m;
+    if (/^\d+(\.\d+)?\s*[a-zA-Z%‰℃℉¥€£$]/.test(f)) return m;
+    // 跳过纯数字 + 常见货币占位符
+    if (/^\d+(\.\d{1,2})?$/.test(f)) return m;
+    if (!f) return m;
     try {
-      var html = katex.renderToString(formula.trim(), { displayMode: false, throwOnError: false });
+      var html = katex.renderToString(f, { displayMode: false, throwOnError: false });
       var key = '%%MATH_INLINE_' + mathHtmlPieces.length + '%%';
       mathHtmlPieces.push(html);
       return key;
