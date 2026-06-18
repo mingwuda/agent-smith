@@ -1198,80 +1198,48 @@ marked.setOptions({
 });
 
 function renderMarkdown(text) {
-  // ----- 调试：打印原始文本前 500 字符，检查 $ 是否存在
+  // ----- 调试：打印原始文本前 200 字符，检查 $ 是否存在
   var hasDollar = text.indexOf('$') >= 0;
   if (hasDollar) {
     console.log('[renderMarkdown] 文本中包含 $ 符号，前 200 字:', text.slice(0, 200));
   }
 
   // ----- 数学公式渲染（KaTeX）-----
-  // 先于 marked 处理，避免 LaTeX 语法被 marked 错误转义
-  const mathHtmlPieces = [];
+  // 直接嵌入 KaTeX HTML，不使用占位符方案。
+  // marked 的 GFM 模式会保留 inline HTML，因此 KaTeX <span>/<div> 能原样通过。
   const katexAvailable = typeof katex !== 'undefined' && typeof katex.renderToString === 'function';
 
-  // 1) 处理显示公式 $$...$$（块级）
-  var displayCount = 0;
-  text = text.replace(/\$\$([\s\S]*?)\$\$/g, function(m, formula) {
-    displayCount++;
-    if (!katexAvailable) {
-      // KaTeX 未加载时直接剥离 $$ 以显示干净文本
-      console.warn('[KaTeX] katex 未加载，公式不会被渲染');
-      return '<span class="katex-error">⚠️ 公式加载失败</span>';
-    }
-    try {
-      var html = katex.renderToString(formula.trim(), { displayMode: true, throwOnError: false });
-      var key = '%%MATH_BLOCK_' + mathHtmlPieces.length + '%%';
-      mathHtmlPieces.push(html);
-      return key;
-    } catch (e) {
-      console.warn('[KaTeX] 显示公式解析失败:', formula.trim().slice(0, 50), e.message);
-      return '<div class="katex-error">公式解析错误: ' + e.message + '</div>';
-    }
-  });
-  if (hasDollar && displayCount) console.log('[renderMarkdown] 显示公式匹配数:', displayCount);
+  if (katexAvailable && hasDollar) {
+    // 1) 处理显示公式 $$...$$（块级）→ 直接替换为 KaTeX HTML
+    text = text.replace(/\$\$([\s\S]*?)\$\$/g, function(m, formula) {
+      try {
+        return katex.renderToString(formula.trim(), { displayMode: true, throwOnError: false });
+      } catch (e) {
+        console.warn('[KaTeX] 显示公式解析失败:', formula.trim().slice(0, 50), e.message);
+        return '<div class="katex-error">公式解析错误: ' + e.message + '</div>';
+      }
+    });
 
-  // 2) 处理行内公式 $...$
-  var inlineCount = 0;
-  text = text.replace(/(?<!\$)\$([^$\n]+?)\$(?!\$)/g, function(m, formula) {
-    var f = formula.trim();
-    // 跳过纯数字 + 单位（如 $10 美元），避免误伤
-    if (/^\d+(\.\d+)?\s*[a-zA-Z%‰℃℉¥€£$]/.test(f)) return m;
-    // 跳过纯数字 + 常见货币占位符
-    if (/^\d+(\.\d{1,2})?$/.test(f)) return m;
-    if (!f) return m;
-    if (!katexAvailable) {
-      // KaTeX 未加载时直接返回剥离 $ 的文本
-      return '<span class="katex-plain">' + escapeHtml(f) + '</span>';
-    }
-    inlineCount++;
-    try {
-      var html = katex.renderToString(f, { displayMode: false, throwOnError: false });
-      var key = '%%MATH_INLINE_' + mathHtmlPieces.length + '%%';
-      mathHtmlPieces.push(html);
-      return key;
-    } catch (e) {
-      console.warn('[KaTeX] 行内公式解析失败:', f, e.message);
-      return m;
-    }
-  });
-  if (hasDollar) console.log('[renderMarkdown] 行内公式匹配数:', inlineCount, '总 HTML 片段数:', mathHtmlPieces.length);
+    // 2) 处理行内公式 $...$ → 直接替换为 KaTeX HTML
+    text = text.replace(/(?<!\$)\$([^$\n]+?)\$(?!\$)/g, function(m, formula) {
+      var f = formula.trim();
+      // 跳过纯数字 + 单位（如 $10 美元），避免误伤
+      if (/^\d+(\.\d+)?\s*[a-zA-Z%‰℃℉¥€£$]/.test(f)) return m;
+      if (/^\d+(\.\d{1,2})?$/.test(f)) return m;
+      if (!f) return m;
+      try {
+        return katex.renderToString(f, { displayMode: false, throwOnError: false });
+      } catch (e) {
+        console.warn('[KaTeX] 行内公式解析失败:', f, e.message);
+        return m;
+      }
+    });
+  }
 
   // 3) marked 渲染（开启 GFM + 换行）
   var raw = marked.parse(text);
-  // 检查 marked 输出中是否还有占位符
-  var blockPlaceholdersInRaw = (raw.match(/%%MATH_BLOCK_\d+%%/g) || []).length;
-  var inlinePlaceholdersInRaw = (raw.match(/%%MATH_INLINE_\d+%%/g) || []).length;
-  if (hasDollar) console.log('[renderMarkdown] marked 输出中残留占位符 — 块:', blockPlaceholdersInRaw, '行内:', inlinePlaceholdersInRaw);
 
-  // 4) 将 KaTeX 还原回去
-  raw = raw.replace(/%%MATH_BLOCK_(\d+)%%/g, function(m, idx) {
-    return mathHtmlPieces[parseInt(idx, 10)] || m;
-  });
-  raw = raw.replace(/%%MATH_INLINE_(\d+)%%/g, function(m, idx) {
-    return mathHtmlPieces[parseInt(idx, 10)] || m;
-  });
-
-  // 5) XSS 安全过滤
+  // 4) XSS 安全过滤
   var safe = raw
     .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
     .replace(/on\w+="[^"]*"/gi, '')
