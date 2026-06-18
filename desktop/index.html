@@ -1198,13 +1198,11 @@ marked.setOptions({
 });
 
 function renderMarkdown(text) {
-  // ----- 调试：打印原始文本前 200 字符，检查 $ 是否存在
-  var hasDollar = text.indexOf('$') >= 0;
-
   // ----- 数学公式渲染（KaTeX）-----
   // 直接嵌入 KaTeX HTML，不使用占位符方案。
   // marked 的 GFM 模式会保留 inline HTML，因此 KaTeX <span>/<div> 能原样通过。
   const katexAvailable = typeof katex !== 'undefined' && typeof katex.renderToString === 'function';
+  var hasDollar = text.indexOf('$') >= 0;
 
   if (katexAvailable && hasDollar) {
     // 1) 处理显示公式 $$...$$（块级）→ 直接替换为 KaTeX HTML
@@ -1212,7 +1210,6 @@ function renderMarkdown(text) {
       try {
         return katex.renderToString(formula.trim(), { displayMode: true, throwOnError: false });
       } catch (e) {
-        console.warn('[KaTeX] 显示公式解析失败:', formula.trim().slice(0, 50), e.message);
         return '<div class="katex-error">公式解析错误: ' + e.message + '</div>';
       }
     });
@@ -1220,37 +1217,20 @@ function renderMarkdown(text) {
     // 2) 处理行内公式 $...$ → 直接替换为 KaTeX HTML
     text = text.replace(/(?<!\$)\$([^$\n]+?)\$(?!\$)/g, function(m, formula) {
       var f = formula.trim();
-      // 跳过纯数字 + 单位（如 $10 美元），避免误伤
-      if (/^\d+(\.\d+)?\s*[a-zA-Z%‰℃℉¥€£$]/.test(f)) return m;
-      if (/^\d+(\.\d{1,2})?$/.test(f)) return m;
       if (!f) return m;
+      // 仅跳过纯货币金额：$10 / $10.50 / $10 USD（数字+可选小数+可选空格+可选货币单位）
+      // 但不跳过含数学运算符的公式（^ _ \ { } + - * / 等）
+      if (/^\d+(\.\d+)?\s*(USD|CNY|EUR|美元|元|块)?$/.test(f) && !/[\\\^_{}]/.test(f)) return m;
       try {
         return katex.renderToString(f, { displayMode: false, throwOnError: false });
       } catch (e) {
-        console.warn('[KaTeX] 行内公式解析失败:', f, e.message);
         return m;
       }
     });
-
-    // 调试: 检查替换后是否还有 $ 残留
-    var remainingDollar = text.indexOf('$');
-    if (remainingDollar >= 0) {
-      var contextStart = Math.max(0, remainingDollar - 20);
-      console.warn('[renderMarkdown] ⚠️ KaTeX 替换后仍有 $ 残留! 附近文本:',
-        text.slice(contextStart, remainingDollar + 40));
-    }
   }
 
   // 3) marked 渲染（开启 GFM + 换行）
   var raw = marked.parse(text);
-
-  // 调试: marked 输出中是否还有 $
-  if (hasDollar) {
-    var dollarInRaw = raw.indexOf('$');
-    if (dollarInRaw >= 0) {
-      console.warn('[renderMarkdown] ⚠️ marked 输出中仍有 $ ! 附近:', raw.slice(Math.max(0,dollarInRaw-20), dollarInRaw+40));
-    }
-  }
 
   // 4) XSS 安全过滤
   var safe = raw
@@ -1258,17 +1238,6 @@ function renderMarkdown(text) {
     .replace(/on\w+="[^"]*"/gi, '')
     .replace(/on\w+='[^']*'/gi, '')
     .replace(/javascript:/gi, '');
-
-  // 调试: 最终输出中是否还有 $
-  if (hasDollar) {
-    var dollarInSafe = safe.indexOf('$');
-    if (dollarInSafe >= 0) {
-      console.warn('[renderMarkdown] ⚠️ 最终输出中仍有 $ ! 附近:', safe.slice(Math.max(0,dollarInSafe-20), dollarInSafe+40));
-    } else {
-      console.log('[renderMarkdown] ✅ 最终输出中已无 $ 符号，公式应已渲染');
-    }
-  }
-
   return safe;
 }
 
