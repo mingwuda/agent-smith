@@ -1200,9 +1200,6 @@ marked.setOptions({
 function renderMarkdown(text) {
   // ----- 调试：打印原始文本前 200 字符，检查 $ 是否存在
   var hasDollar = text.indexOf('$') >= 0;
-  if (hasDollar) {
-    console.log('[renderMarkdown] 文本中包含 $ 符号，前 200 字:', text.slice(0, 200));
-  }
 
   // ----- 数学公式渲染（KaTeX）-----
   // 直接嵌入 KaTeX HTML，不使用占位符方案。
@@ -1234,10 +1231,26 @@ function renderMarkdown(text) {
         return m;
       }
     });
+
+    // 调试: 检查替换后是否还有 $ 残留
+    var remainingDollar = text.indexOf('$');
+    if (remainingDollar >= 0) {
+      var contextStart = Math.max(0, remainingDollar - 20);
+      console.warn('[renderMarkdown] ⚠️ KaTeX 替换后仍有 $ 残留! 附近文本:',
+        text.slice(contextStart, remainingDollar + 40));
+    }
   }
 
   // 3) marked 渲染（开启 GFM + 换行）
   var raw = marked.parse(text);
+
+  // 调试: marked 输出中是否还有 $
+  if (hasDollar) {
+    var dollarInRaw = raw.indexOf('$');
+    if (dollarInRaw >= 0) {
+      console.warn('[renderMarkdown] ⚠️ marked 输出中仍有 $ ! 附近:', raw.slice(Math.max(0,dollarInRaw-20), dollarInRaw+40));
+    }
+  }
 
   // 4) XSS 安全过滤
   var safe = raw
@@ -1245,6 +1258,17 @@ function renderMarkdown(text) {
     .replace(/on\w+="[^"]*"/gi, '')
     .replace(/on\w+='[^']*'/gi, '')
     .replace(/javascript:/gi, '');
+
+  // 调试: 最终输出中是否还有 $
+  if (hasDollar) {
+    var dollarInSafe = safe.indexOf('$');
+    if (dollarInSafe >= 0) {
+      console.warn('[renderMarkdown] ⚠️ 最终输出中仍有 $ ! 附近:', safe.slice(Math.max(0,dollarInSafe-20), dollarInSafe+40));
+    } else {
+      console.log('[renderMarkdown] ✅ 最终输出中已无 $ 符号，公式应已渲染');
+    }
+  }
+
   return safe;
 }
 
