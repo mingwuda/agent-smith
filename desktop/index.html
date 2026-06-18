@@ -1198,6 +1198,12 @@ marked.setOptions({
 });
 
 function renderMarkdown(text) {
+  // ----- 调试：打印原始文本前 500 字符，检查 $ 是否存在
+  var hasDollar = text.indexOf('$') >= 0;
+  if (hasDollar) {
+    console.log('[renderMarkdown] 文本中包含 $ 符号，前 200 字:', text.slice(0, 200));
+  }
+
   // ----- 数学公式渲染（KaTeX）-----
   // 先于 marked 处理，避免 LaTeX 语法被 marked 错误转义
   const mathHtmlPieces = [];
