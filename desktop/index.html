@@ -2003,14 +2003,29 @@ function handleStreamEvent(data) {
 
           // web_search 特殊处理：从结果中提取搜索来源并显示 badge
           if (data.tool === 'web_search') {
-            var srcMatch = String(fullResult).match(/[（(]来源[:：]\s*([^）)]+)[）)]/);
+            var resultStr = String(fullResult);
+            var sourceName = '';
+            // 尝试正则匹配（来源: Xxx）
+            var srcMatch = resultStr.match(/[（(]来源\s*[:：]\s*([^）)\]]+)/);
             if (srcMatch) {
+              sourceName = srcMatch[1].trim();
+            } else {
+              // 降级：直接搜索 "来源:" 文本
+              var idx = resultStr.indexOf('来源');
+              if (idx >= 0) {
+                var after = resultStr.slice(idx + 3);
+                var colonIdx = after.search(/[:：]/);
+                if (colonIdx >= 0) {
+                  var endIdx = after.slice(colonIdx + 1).search(/[）)\]）]/);
+                  sourceName = endIdx >= 0 ? after.slice(colonIdx + 1, colonIdx + 1 + endIdx).trim() : after.slice(colonIdx + 1).trim();
+                }
+              }
+            }
+            if (sourceName) {
               var badge = document.getElementById('src-badge-' + trStep);
               if (badge) {
-                var sourceName = srcMatch[1].trim();
                 badge.textContent = sourceName;
                 badge.style.display = 'inline';
-                // 不同搜索引擎显示不同颜色
                 var colorMap = {
                   'AnySearch': { bg: '#e8f5e9', color: '#2e7d32' },
                   'Tavily': { bg: '#e3f2fd', color: '#1565c0' },
