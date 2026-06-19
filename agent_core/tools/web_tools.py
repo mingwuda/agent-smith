@@ -1,5 +1,4 @@
 """网页搜索与抓取工具"""
-import json
 from datetime import date, timedelta
 import time
 import re
@@ -374,20 +373,25 @@ def _search_anysearch(query: str, max_results: int) -> list[dict]:
     """使用 AnySearch 搜索引擎。"""
     result = _call_anysearch("search", {"query": query, "max_results": min(max_results, 10)})
     content = result.get("content", [])
-    results = []
+    text = ""
     for item in content:
         if item.get("type") == "text":
-            raw = json.loads(item["text"]) if isinstance(item["text"], str) else item["text"]
+            text = item.get("text", "")
             break
-    else:
+    if not text:
         return []
 
-    for entry in (raw if isinstance(raw, list) else [raw]):
-        if not isinstance(entry, dict):
-            continue
-        title = str(entry.get("title") or "").strip()
-        href = str(entry.get("url") or entry.get("link") or "").strip()
-        body = str(entry.get("snippet") or entry.get("content") or entry.get("body") or "").strip()
+    # AnySearch MCP 返回 Markdown 格式，解析之
+    results = []
+    # 匹配 ### N. title\n- **URL**: url\n- description
+    pattern = re.compile(
+        r"###\s+\d+\.\s*(.+?)\s*\n\s*-\s*\*\*URL\*\*:\s*(\S+)\s*\n\s*-\s*(.+?)(?=\n###|\Z)",
+        re.DOTALL,
+    )
+    for match in pattern.finditer(text):
+        title = match.group(1).strip()
+        href = match.group(2).strip()
+        body = match.group(3).strip()
         if title and href:
             results.append({"title": title, "href": href, "body": body})
         if len(results) >= max_results:
