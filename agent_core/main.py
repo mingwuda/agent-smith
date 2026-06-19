@@ -231,6 +231,7 @@ def init_agent():
         tavily_search_enabled=config.tavily_search_enabled,
         tavily_api_key=config.tavily_api_key,
         tavily_search_url=config.tavily_search_url,
+        anysearch_api_key=config.anysearch_api_key,
     )
     
     # 注册所有工具

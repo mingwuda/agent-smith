@@ -1,4 +1,5 @@
 """网页搜索与抓取工具"""
+import json
 from datetime import date, timedelta
 import time
 import re
@@ -12,6 +13,8 @@ import urllib3.util.connection
 from langchain_core.tools import tool
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+
+ANYSEARCH_ENDPOINT = "https://api.anysearch.com/mcp"
 
 HEADERS = {
     "User-Agent": (
@@ -28,6 +31,7 @@ RETRY_TOTAL = 1
 _TAVILY_SEARCH_ENABLED = False
 _TAVILY_API_KEY = ""
 _TAVILY_SEARCH_URL = "https://api.tavily.com/search"
+_ANYSEARCH_API_KEY = ""
 _search_attempt_start = 0.0
 
 _RELATIVE_DATE_RE = re.compile(
@@ -74,11 +78,13 @@ def configure_search(
     tavily_search_enabled: bool = False,
     tavily_api_key: str = "",
     tavily_search_url: str = "https://api.tavily.com/search",
+    anysearch_api_key: str = "",
 ):
-    global _TAVILY_SEARCH_ENABLED, _TAVILY_API_KEY, _TAVILY_SEARCH_URL
+    global _TAVILY_SEARCH_ENABLED, _TAVILY_API_KEY, _TAVILY_SEARCH_URL, _ANYSEARCH_API_KEY
     _TAVILY_SEARCH_ENABLED = bool(tavily_search_enabled)
     _TAVILY_API_KEY = str(tavily_api_key or "").strip()
     _TAVILY_SEARCH_URL = str(tavily_search_url or "https://api.tavily.com/search").strip()
+    _ANYSEARCH_API_KEY = str(anysearch_api_key or "").strip()
 
 
 class _SimpleResponse:
@@ -345,6 +351,63 @@ def _search_tavily(query: str, max_results: int, recency_days: int = 0) -> list[
     return results
 
 
+def _call_anysearch(tool_name: str, arguments: dict) -> dict:
+    """通过 JSON-RPC 调用 AnySearch MCP API。"""
+    payload = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {"name": tool_name, "arguments": arguments},
+    }
+    headers = {"Content-Type": "application/json", "User-Agent": HEADERS["User-Agent"]}
+    if _ANYSEARCH_API_KEY:
+        headers["Authorization"] = f"Bearer {_ANYSEARCH_API_KEY}"
+    resp = _SESSION.post(ANYSEARCH_ENDPOINT, json=payload, timeout=(5, 30), headers=headers)
+    resp.raise_for_status()
+    data = resp.json()
+    if "error" in data:
+        raise RuntimeError(data["error"].get("message", str(data["error"])))
+    return data.get("result", {})
+
+
+def _search_anysearch(query: str, max_results: int) -> list[dict]:
+    """使用 AnySearch 搜索引擎。"""
+    result = _call_anysearch("search", {"query": query, "max_results": min(max_results, 10)})
+    content = result.get("content", [])
+    results = []
+    for item in content:
+        if item.get("type") == "text":
+            raw = json.loads(item["text"]) if isinstance(item["text"], str) else item["text"]
+            break
+    else:
+        return []
+
+    for entry in (raw if isinstance(raw, list) else [raw]):
+        if not isinstance(entry, dict):
+            continue
+        title = str(entry.get("title") or "").strip()
+        href = str(entry.get("url") or entry.get("link") or "").strip()
+        body = str(entry.get("snippet") or entry.get("content") or entry.get("body") or "").strip()
+        if title and href:
+            results.append({"title": title, "href": href, "body": body})
+        if len(results) >= max_results:
+            break
+    return results
+
+
+def _anysearch_extract(url: str) -> str:
+    """使用 AnySearch 的 extract 能力获取网页内容（备用方案）。"""
+    try:
+        result = _call_anysearch("extract", {"url": url})
+        content = result.get("content", [])
+        for item in content:
+            if item.get("type") == "text":
+                return item.get("text", "")
+    except Exception:
+        pass
+    return ""
+
+
 def _format_results(query: str, results: list[dict], source: str, *, original_query: str = "", note: str = "") -> str:
     lines = [f"🔍 搜索「{query}」找到 {len(results)} 条结果（来源: {source}）："]
     lines.append(_current_date_context())
@@ -369,10 +432,10 @@ def _format_results(query: str, results: list[dict], source: str, *, original_qu
 
 @tool
 def web_search(query: str, max_results: int = 5, recency_days: int = 0) -> str:
-    """搜索互联网，返回相关网页标题、链接和摘要。优先使用 Bing，失败时自动切换 DuckDuckGo，无需 API Key。
+    """搜索互联网，返回相关网页标题、链接和摘要。优先使用 AnySearch，失败时自动回退到 Bing/百度/搜狗，无需 API Key。
 
     参数:
-        query: 搜索关键词。查询“今天/最新/近期/current/latest”等实时信息时必须包含正确年份；工具会按当前日期辅助补全年份。
+        query: 搜索关键词。查询"今天/最新/近期/current/latest"等实时信息时必须包含正确年份；工具会按当前日期辅助补全年份。
         max_results: 返回结果数量（默认 5，建议 5-8）。先用一次高质量搜索，再 fetch 1-3 个最相关链接，避免多轮改写搜索。
         recency_days: 可选，限制近 N 天结果（1-365）。例如今天/最新新闻用 7，近期事件用 30；不需要近期约束时传 0。
     """
@@ -382,7 +445,7 @@ def web_search(query: str, max_results: int = 5, recency_days: int = 0) -> str:
     normalized_query, note = _normalize_search_query(query, recency_days)
     errors = []
 
-    search_backends = []
+    search_backends = [("AnySearch", _search_anysearch)]
     if _TAVILY_SEARCH_ENABLED:
         search_backends.append(("Tavily", lambda q, n: _search_tavily(q, n, recency_days)))
     search_backends.extend((("Bing", _search_bing), ("百度", _search_baidu), ("搜狗", _search_sogou)))
@@ -406,7 +469,7 @@ def web_search(query: str, max_results: int = 5, recency_days: int = 0) -> str:
             errors.append(f"{source}: {type(e).__name__}: {e}")
 
     return (
-        f"❌ 未能获取「{normalized_query}」的搜索结果。已尝试 Bing、百度、搜狗。\n"
+        f"❌ 未能获取「{normalized_query}」的搜索结果。已尝试 AnySearch、Bing、百度、搜狗。\n"
         + _current_date_context()
         + (f"\n搜索提示: {note}" if note else "")
         + "\n"

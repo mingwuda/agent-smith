@@ -92,6 +92,7 @@ class AgentConfig:
     tavily_search_enabled: bool = False
     tavily_api_key: str = ""
     tavily_search_url: str = "https://api.tavily.com/search"
+    anysearch_api_key: str = ""
     
     system_prompt: str = (
         "你是一个桌面 AI 智能体，可以自主完成用户交给你的任务。\n\n"
@@ -160,6 +161,7 @@ class AgentConfig:
             "TAVILY_SEARCH_ENABLED": ("tavily_search_enabled", _env_bool),
             "TAVILY_API_KEY": ("tavily_api_key", str),
             "TAVILY_SEARCH_URL": ("tavily_search_url", str),
+            "ANYSEARCH_API_KEY": ("anysearch_api_key", str),
         }
         env_overrides = set()
         for env_key, (attr_name, cast_fn) in env_map.items():
@@ -288,6 +290,7 @@ class AgentConfig:
             "tavily_search_enabled": self.tavily_search_enabled,
             "tavily_api_key": self.tavily_api_key,
             "tavily_search_url": self.tavily_search_url,
+            "anysearch_api_key": self.anysearch_api_key,
         }
         CONFIG_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     
@@ -329,4 +332,6 @@ class AgentConfig:
             "tavily_api_key_configured": bool(tavily_key),
             "tavily_api_key_preview": tavily_key[:8] + "..." if len(tavily_key) > 8 else ("已设置" if tavily_key else "未设置"),
             "tavily_search_url": self.tavily_search_url or "https://api.tavily.com/search",
+            "anysearch_api_key_configured": bool(self.anysearch_api_key),
+            "anysearch_api_key_preview": self.anysearch_api_key[:8] + "..." if len(self.anysearch_api_key) > 8 else ("已设置" if self.anysearch_api_key else "未设置"),
         }

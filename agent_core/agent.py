@@ -111,16 +111,20 @@ def _detect_tool_loop(calls: list[dict], recursion_limit: int) -> str:
             return f"最近 30 次工具调用中，同一工具和参数严格重复了 {count} 次"
 
     # ── 检测2：参数循环（A→B→A→B 模式）──
-    if len(calls) >= 8:
-        recent12 = calls[-12:]
-        sigs = [c.get("signature", "") for c in recent12 if c.get("signature")]
-        if len(sigs) >= 8:
-            # 检查最近 2、3、4 个签名是否与之前形成循环
+    # 要求连续重复至少 3 轮才中断，避免误杀 web_search ↔ web_fetch 正常配对
+    if len(calls) >= 12:
+        recent18 = calls[-18:]
+        sigs = [c.get("signature", "") for c in recent18 if c.get("signature")]
+        if len(sigs) >= 12:
             for window in (2, 3, 4):
-                if len(sigs) >= window * 2 and sigs[-window:] == sigs[-window*2:-window]:
+                if (
+                    len(sigs) >= window * 3
+                    and sigs[-window:] == sigs[-window*2:-window]
+                    and sigs[-window*2:-window] == sigs[-window*3:-window*2]
+                ):
                     return (
-                        f"工具调用出现循环模式：最近 {window*2} 次的形式为 "
-                        + " → ".join(sigs[-window*2:])
+                        f"工具调用出现循环模式：最近 {window*3} 次的形式为 "
+                        + " → ".join(sigs[-window*3:])
                     )
 
     estimated_graph_steps = len(calls) * 2 + 1
