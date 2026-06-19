@@ -1920,6 +1920,7 @@ function handleStreamEvent(data) {
           <span class="tool-icon">${toolIcon}</span>
           <span class="tool-label">调用工具:</span>
           <span class="tool-name-inline">${escapeHtml(toolName)}</span>
+          <span class="search-source-badge" id="src-badge-${curStep}" style="display:none;margin-left:6px;font-size:11px;padding:1px 6px;border-radius:4px;background:#f0f0f0;color:#555;"></span>
           <span class="tool-duration" id="tool-dur-${curStep}"></span>
           <span class="tool-status-dot running" id="tool-status-${curStep}"></span>
         </div>
@@ -1999,6 +2000,28 @@ function handleStreamEvent(data) {
           }
           outArea.innerHTML = '<div class="tool-section-label">结果</div>' +
             `<pre class="tool-code-block" style="${isError ? 'color:#fca5a5;' : ''}max-height:400px;overflow-y:auto;">${escapeHtml(String(fullResult))}</pre>`;
+
+          // web_search 特殊处理：从结果中提取搜索来源并显示 badge
+          if (data.tool === 'web_search') {
+            var srcMatch = String(fullResult).match(/[（(]来源[:：]\s*([^）)]+)[）)]/);
+            if (srcMatch) {
+              var badge = document.getElementById('src-badge-' + trStep);
+              if (badge) {
+                var sourceName = srcMatch[1].trim();
+                badge.textContent = sourceName;
+                badge.style.display = 'inline';
+                // 不同搜索引擎显示不同颜色
+                var colorMap = {
+                  'AnySearch': { bg: '#e8f5e9', color: '#2e7d32' },
+                  'Tavily': { bg: '#e3f2fd', color: '#1565c0' },
+                  'Bing': { bg: '#fff3e0', color: '#e65100' },
+                };
+                var colors = colorMap[sourceName] || { bg: '#f3e5f5', color: '#7b1fa2' };
+                badge.style.background = colors.bg;
+                badge.style.color = colors.color;
+              }
+            }
+          }
         }
 
         // Diff 视图
