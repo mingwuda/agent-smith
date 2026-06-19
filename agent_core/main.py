@@ -1604,6 +1604,7 @@ class SettingsRequest(BaseModel):
     tavily_search_enabled: bool = False
     tavily_api_key: str = ""
     tavily_search_url: str = "https://api.tavily.com/search"
+    anysearch_api_key: str = ""
 
 
 @app.get("/settings")
@@ -1636,6 +1637,8 @@ def save_settings(req: SettingsRequest, request: Request):
     if req.tavily_api_key:
         cfg.tavily_api_key = req.tavily_api_key
     cfg.tavily_search_url = req.tavily_search_url or cfg.tavily_search_url or "https://api.tavily.com/search"
+    if req.anysearch_api_key:
+        cfg.anysearch_api_key = req.anysearch_api_key
     
     # 持久化到文件（现在包含 API Key）
     cfg.save()
@@ -1663,6 +1666,10 @@ def save_settings(req: SettingsRequest, request: Request):
         os.environ.pop("TAVILY_API_KEY", None)
     if cfg.tavily_search_url:
         os.environ["TAVILY_SEARCH_URL"] = cfg.tavily_search_url
+    if cfg.anysearch_api_key:
+        os.environ["ANYSEARCH_API_KEY"] = cfg.anysearch_api_key
+    else:
+        os.environ.pop("ANYSEARCH_API_KEY", None)
     if cfg.base_url:
         os.environ["LLM_BASE_URL"] = cfg.base_url
     else:

@@ -725,6 +725,11 @@
             <input id="s-tavily-search-url" placeholder="https://api.tavily.com/search" />
             <div class="hint" data-i18n="tavilySearchUrlHint">默认使用 Tavily 官方搜索接口。</div>
           </div>
+          <div class="form-group">
+            <label for="s-anysearch-api-key">AnySearch API Key</label>
+            <input id="s-anysearch-api-key" type="password" placeholder="可选，留空则匿名使用" autocomplete="new-password" />
+            <div class="hint" id="s-anysearch-api-key-hint">留空则保留当前已保存的 AnySearch API Key。</div>
+          </div>
         </div>
 
         <!-- 数据库设置 -->
@@ -971,6 +976,9 @@ const I18N = {
     tavilyApiKeyNotSaved: '尚未保存 Tavily API Key。',
     tavilySearchUrlLabel: 'Tavily Search URL',
     tavilySearchUrlHint: '默认使用 Tavily 官方搜索接口。',
+    anysearchApiKeyHint: '留空则保留当前已保存的 AnySearch API Key。',
+    anysearchApiKeySaved: '已保存：{preview}。留空则继续使用已保存的 AnySearch API Key。',
+    anysearchApiKeyNotSaved: '尚未保存 AnySearch API Key。',
     cancelButton: '取消',
     saveRestartButton: '保存并重启',
     artifactPreviewTitle: '文件预览',
@@ -1101,6 +1109,9 @@ const I18N = {
     tavilyApiKeyNotSaved: 'No Tavily API key saved yet.',
     tavilySearchUrlLabel: 'Tavily Search URL',
     tavilySearchUrlHint: 'Uses the official Tavily search endpoint by default.',
+    anysearchApiKeyHint: 'Leave blank to keep the saved AnySearch API key.',
+    anysearchApiKeySaved: 'Saved: {preview}. Leave blank to keep the saved AnySearch API key.',
+    anysearchApiKeyNotSaved: 'No AnySearch API key saved yet.',
     cancelButton: 'Cancel',
     saveRestartButton: 'Save and restart',
     artifactPreviewTitle: 'File preview',
@@ -2411,6 +2422,10 @@ function renderProviderFields(providerId) {
   document.getElementById('s-tavily-api-key-hint').textContent = settingsData.tavily_api_key_configured
     ? t('tavilyApiKeySaved', { preview: settingsData.tavily_api_key_preview })
     : t('tavilyApiKeyNotSaved');
+  document.getElementById('s-anysearch-api-key').value = '';
+  document.getElementById('s-anysearch-api-key-hint').textContent = settingsData.anysearch_api_key_configured
+    ? t('anysearchApiKeySaved', { preview: settingsData.anysearch_api_key_preview })
+    : t('anysearchApiKeyNotSaved');
 }
 
 function onProviderChange() {
@@ -2483,6 +2498,7 @@ async function saveSettings() {
         tavily_search_enabled: document.getElementById('s-tavily-enabled').checked,
         tavily_api_key: document.getElementById('s-tavily-api-key').value,
         tavily_search_url: document.getElementById('s-tavily-search-url').value,
+        anysearch_api_key: document.getElementById('s-anysearch-api-key').value,
       }),
     });
     const data = await res.json();
@@ -2492,6 +2508,7 @@ async function saveSettings() {
       // 清空密码框
       document.getElementById('s-api-key').value = '';
       document.getElementById('s-tavily-api-key').value = '';
+      document.getElementById('s-anysearch-api-key').value = '';
       // 刷新状态
       setTimeout(async () => {
         closeSettings();
@@ -2537,6 +2554,7 @@ async function quickSwitchProvider() {
         tavily_search_enabled: !!settingsData.tavily_search_enabled,
         tavily_api_key: '',
         tavily_search_url: settingsData.tavily_search_url || 'https://api.tavily.com/search',
+        anysearch_api_key: '',
       }),
     });
     const data = await res.json();
