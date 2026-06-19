@@ -368,7 +368,7 @@
   #new-session-btn { background:#2c2c2e; color:#fff; border:none; border-radius:6px; padding:4px 10px; font-size:12px; cursor:pointer; }
   #new-session-btn:hover { background:#3a3a3c; }
   #session-list { flex:1; overflow-y:auto; }
-  .session-item { padding:10px 16px; cursor:pointer; border-left:3px solid transparent; transition:all .15s; }
+  .session-item { padding:10px 16px; cursor:pointer; border-left:3px solid transparent; transition:all .15s; position:relative; }
   .session-item:hover { background:#2c2c2e; }
   .session-item.active { background:#2c2c2e; border-left-color:#007aff; }
   .session-item .s-title { font-size:13px; font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
@@ -376,6 +376,14 @@
   .session-item .s-del { margin-left:auto; background:transparent; border:none; color:#8e8e93; cursor:pointer; font-size:14px; padding:0 2px; visibility:hidden; }
   .session-item:hover .s-del { visibility:visible; }
   .session-item .s-del:hover { color:#ff453a; }
+  /* 会话加载中状态：覆盖一层半透明遮罩 + 右侧旋转指示器 */
+  .session-item.loading { pointer-events:none; }
+  .session-item.loading::after {
+    content:''; position:absolute; right:12px; top:50%; transform:translateY(-50%);
+    width:12px; height:12px; border:2px solid #007aff; border-top-color:transparent;
+    border-radius:50%; animation:spin .6s linear infinite;
+  }
+  .session-item.loading .s-del { visibility:hidden; }
 
   /* 侧边栏折叠/移动端适配 */
   #sidebar-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.4); z-index:98; }
@@ -996,6 +1004,7 @@ const I18N = {
     deleteTitle: '删除',
     noSessions: '暂无会话，新建一个开始对话',
     emptySession: '这是新的空白会话，发条消息开始吧',
+    loadingSession: '会话加载中...',
     newSessionReady: '新会话已创建，发条消息开始吧',
     deleteSessionConfirm: '确定删除此会话？',
     modelNotConfigured: '未配置模型',
@@ -1125,6 +1134,7 @@ const I18N = {
     deleteTitle: 'Delete',
     noSessions: 'No sessions yet. Create one to start chatting.',
     emptySession: 'This is a new empty session. Send a message to begin.',
+    loadingSession: 'Loading session...',
     newSessionReady: 'New session created. Send a message to begin.',
     deleteSessionConfirm: 'Delete this session?',
     modelNotConfigured: 'No model configured',
@@ -2161,11 +2171,23 @@ async function loadSessions() {
 }
 
 async function loadSessionMessages(sessionId) {
+  const container = document.getElementById('messages');
+  // 立即清空旧消息，避免切换会话时短暂残留上一会话内容
+  container.innerHTML = '';
+  // 占位：加载中提示（居中、轻量，不阻断滚动）
+  const loadingHint = document.createElement('div');
+  loadingHint.className = 'msg system';
+  loadingHint.id = '__session_loading_hint__';
+  loadingHint.innerHTML = '<span style="display:inline-block;width:12px;height:12px;border:2px solid #8e8e93;border-top-color:transparent;border-radius:50%;animation:spin .6s linear infinite;vertical-align:middle;margin-right:6px;"></span>' + escapeHtml(t('loadingSession') || '加载中...');
+  container.appendChild(loadingHint);
+
   try {
     const res = await fetch(`/sessions/${sessionId}`);
+    // 无论成功失败都先移除加载提示
+    const hint = document.getElementById('__session_loading_hint__');
+    if (hint) hint.remove();
     if (res.ok) {
       const data = await res.json();
-      const container = document.getElementById('messages');
       container.innerHTML = '';
       if (data.messages && data.messages.length > 0) {
         data.messages.forEach(msg => {
@@ -2184,9 +2206,11 @@ async function loadSessionMessages(sessionId) {
       }
     }
     // 会话消息加载完成后强制滚动到底部
-    const container = document.getElementById('messages');
     if (container) container.scrollTop = container.scrollHeight;
   } catch (e) {
+    // 异常时移除加载提示
+    const hint = document.getElementById('__session_loading_hint__');
+    if (hint) hint.remove();
     console.error('[loadSession] failed:', e);
   }
 }
@@ -2235,15 +2259,24 @@ async function switchSession(sessionId, forceLoad = false) {
   if (sessionId === currentSessionId && !forceLoad) return;
   currentSessionId = sessionId;
   threadId = sessionId;
-  
+
   // 更新激活样式
   document.querySelectorAll('.session-item').forEach(el => {
     el.classList.toggle('active', el.dataset.id === sessionId);
   });
-  
-  // 加载该会话的历史消息
-  await loadSessionMessages(sessionId);
-  refreshStats();
+
+  // 在选中的会话项上展示 loading 动画
+  const activeItem = document.querySelector('.session-item.active');
+  if (activeItem) activeItem.classList.add('loading');
+
+  try {
+    // 加载该会话的历史消息（内部已立即清空旧消息）
+    await loadSessionMessages(sessionId);
+    refreshStats();
+  } finally {
+    // 无论成功失败都移除 loading 状态
+    if (activeItem) activeItem.classList.remove('loading');
+  }
 }
 
 async function newSession() {
