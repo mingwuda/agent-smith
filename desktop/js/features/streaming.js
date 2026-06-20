@@ -325,11 +325,9 @@ function handleStreamEvent(data) {
         logEl.innerHTML = '<pre></pre>';
         capEl.insertAdjacentElement('afterend', logEl);
       }
-      // 运行中默认展开；完成态默认折叠
+      // 运行中默认展开，完成后保持展开状态
       if (status === 'running' && !logEl.dataset.collapsedByUser) {
         logEl.classList.remove('collapsed');
-      } else if (status !== 'running' && !logEl.dataset.touched) {
-        logEl.classList.add('collapsed');
       }
       // 写最终结果摘要
       const preEl = logEl.querySelector('pre');
