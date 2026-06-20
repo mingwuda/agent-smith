@@ -1,0 +1,220 @@
+/* modals.css — 设置弹窗、技能详情、记忆、artifact 预览、修改密码、会话列表、数据库二级页签、权限可视化 */
+
+  /* 设置弹窗 */
+  .modal-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.4); z-index:100; align-items:center; justify-content:center; }
+  .modal-overlay.active { display:flex; }
+  .modal-card { background:#fff; border-radius:16px; width:420px; max-width:90vw; box-shadow:0 20px 60px rgba(0,0,0,0.3); overflow:hidden; }
+  .modal-card .modal-header { display:flex; align-items:center; justify-content:space-between; padding:18px 22px 0; }
+  .modal-card .modal-header h3 { font-size:17px; font-weight:600; margin:0; }
+  .modal-card .modal-close { background:none; border:none; font-size:18px; cursor:pointer; color:#999; padding:4px; line-height:1; }
+  .modal-card .modal-close:hover { color:#333; }
+  .modal-card .modal-body { padding:14px 22px 4px; }
+  .modal-card .modal-body label { display:block; font-size:13px; font-weight:500; color:#555; margin-bottom:2px; }
+  .modal-card .modal-footer { display:flex; justify-content:flex-end; gap:10px; padding:12px 22px 18px; }
+  .modal-card .modal-btn { padding:8px 20px; border-radius:8px; font-size:14px; border:1px solid #ddd; background:#fff; cursor:pointer; }
+  .modal-card .modal-btn-primary { background:#007aff; color:#fff; border-color:#007aff; }
+  .modal-card .modal-btn-primary:hover { background:#0062cc; }
+  .modal-input { width:100%; padding:10px 12px; border:1px solid #ddd; border-radius:8px; font-size:14px; margin:4px 0 12px; box-sizing:border-box; outline:none; background:#f9f9f9; }
+  .modal-input:focus { border-color:#007aff; background:#fff; }
+  .modal-error { color:#d70015; font-size:13px; margin:4px 0; }
+  /* 设置弹窗 - 侧边栏布局 */
+  .settings-modal { background:#fff; border-radius:16px; width:680px; max-width:92vw; box-shadow:0 20px 60px rgba(0,0,0,0.3); display:flex; flex-direction:column; max-height:80vh; }
+  .settings-modal .settings-header { display:flex; align-items:center; justify-content:space-between; padding:20px 24px 0; flex-shrink:0; }
+  .settings-modal .settings-header h2 { font-size:18px; margin:0; }
+  .settings-modal .settings-close { background:none; border:none; font-size:18px; cursor:pointer; color:#999; padding:4px; line-height:1; }
+  .settings-modal .settings-close:hover { color:#333; }
+  .settings-modal .settings-body { display:flex; flex:1; min-height:0; padding:16px 0 0; }
+  .settings-modal .settings-sidebar { width:160px; flex-shrink:0; border-right:1px solid #eee; padding:0 0 8px; overflow-y:auto; }
+  .settings-modal .settings-tab { display:block; width:100%; padding:10px 16px; border:none; background:none; cursor:pointer; font-size:14px; color:#666; text-align:left; transition:all .12s; }
+  .settings-modal .settings-tab:hover { background:#f5f5f7; color:#333; }
+  .settings-modal .settings-tab.active { background:#e8f0fe; color:#007aff; font-weight:500; border-right:3px solid #007aff; }
+  .settings-modal .settings-content { flex:1; overflow-y:auto; padding:0 24px 8px; }
+  .settings-modal .settings-content .form-group { margin-bottom:16px; }
+  .settings-modal .settings-footer { display:flex; justify-content:flex-end; gap:10px; padding:12px 24px 18px; flex-shrink:0; border-top:1px solid #eee; }
+  .settings-modal .settings-footer .btn-secondary { padding:8px 20px; border-radius:8px; font-size:14px; border:1px solid #ddd; background:#fff; cursor:pointer; }
+  .settings-modal .settings-footer .btn-secondary:hover { background:#f0f0f0; }
+  .settings-modal .settings-footer .btn-primary { padding:8px 20px; border-radius:8px; font-size:14px; border:1px solid #007aff; background:#007aff; color:#fff; cursor:pointer; }
+  .settings-modal .settings-footer .btn-primary:hover { background:#0062cc; }
+  .settings-modal .modal { display:none; } /* hide old modal when new layout is used */
+  .settings-tab-panel { display:none; }
+  .settings-tab-panel.active { display:block; }
+  .settings-modal h2 { font-size:18px; margin-bottom:20px; }
+  .form-group { margin-bottom:16px; }
+  .modal { background:#fff; border-radius:16px; padding:24px 28px; width:480px; max-width:90vw; box-shadow:0 20px 60px rgba(0,0,0,0.3); }
+  .modal h2 { font-size:18px; margin-bottom:20px; }
+  .form-group label { display:block; font-size:13px; font-weight:500; color:#555; margin-bottom:4px; }
+  .form-group input,
+  .form-group select { width:100%; padding:10px 12px; border:1px solid #ddd; border-radius:8px; font-size:14px; outline:none; transition:border-color .2s; background:#fff; }
+  .form-group input:focus,
+  .form-group select:focus { border-color:#007aff; }
+  .form-group .hint { font-size:11px; color:#999; margin-top:4px; }
+  .provider-row { display:flex; gap:8px; }
+  .provider-row select { flex:1; min-width:0; }
+  .provider-row button { padding:0 12px; border:1px solid #ddd; border-radius:8px; background:#f0f0f0; cursor:pointer; white-space:nowrap; }
+  .provider-row button:hover { background:#e0e0e0; }
+  .hidden { display:none; }
+  .modal .btn-primary,
+  .modal .btn-secondary {
+    border:none;
+    border-radius:8px;
+    cursor:pointer;
+    font-size:14px;
+    padding:8px 16px;
+    white-space:nowrap;
+    transition:background .15s, color .15s;
+  }
+  .modal .btn-primary { background:#007aff; color:#fff; }
+  .modal .btn-primary:hover { background:#0056cc; }
+  .modal .btn-primary:disabled { background:#999; cursor:not-allowed; }
+  .modal .btn-secondary { background:#f0f0f0; color:#333; }
+  .modal .btn-secondary:hover { background:#ddd; }
+  .modal-actions { display:flex; gap:8px; justify-content:flex-end; margin-top:20px; }
+  .save-feedback { font-size:13px; margin-top:8px; padding:8px; border-radius:6px; text-align:center; }
+  .save-feedback.ok { background:#e8f5e9; color:#2e7d32; }
+  .save-feedback.err { background:#fbe9e7; color:#c62828; }
+  .memory-toolbar { display:flex; gap:8px; margin-bottom:12px; }
+  .memory-toolbar input { flex:1; padding:8px 10px; border:1px solid #ddd; border-radius:8px; font-size:13px; }
+  .memory-toolbar button { min-width:64px; }
+  .memory-list { max-height:320px; overflow-y:auto; border:1px solid #eee; border-radius:8px; }
+  .memory-item { padding:10px 12px; border-bottom:1px solid #eee; }
+  .memory-item:last-child { border-bottom:none; }
+  .memory-key { display:flex; align-items:center; justify-content:space-between; gap:8px; font-size:13px; font-weight:600; color:#1d1d1f; }
+  .memory-value { margin-top:6px; font-size:12px; color:#555; white-space:pre-wrap; word-break:break-word; }
+  .memory-delete { background:transparent; border:none; color:#ff453a; cursor:pointer; font-size:12px; }
+  .artifact-preview-modal { width:min(940px, calc(100vw - 32px)); max-height:86vh; display:flex; flex-direction:column; }
+  .artifact-preview-path { color:#8e8e93; font-size:12px; margin:-12px 0 14px; word-break:break-all; }
+  .artifact-preview-body { flex:1; overflow:auto; border:1px solid #e5e5ea; border-radius:8px; padding:18px 22px; background:#fff; color:#1d1d1f; font-size:14px; line-height:1.7; }
+  .artifact-preview-body h1,.artifact-preview-body h2,.artifact-preview-body h3 { margin:14px 0 8px; line-height:1.3; }
+  .artifact-preview-body p,.artifact-preview-body ul,.artifact-preview-body ol,.artifact-preview-body table { margin:10px 0; }
+  .artifact-preview-body ul,.artifact-preview-body ol { padding-left:22px; }
+  .artifact-preview-body table { width:100%; border-collapse:collapse; display:block; overflow-x:auto; }
+  .artifact-preview-body th,.artifact-preview-body td { border:1px solid #ddd; padding:6px 8px; text-align:left; white-space:nowrap; }
+  .artifact-preview-body th:last-child,.artifact-preview-body td:last-child { white-space:normal; }
+  .artifact-preview-body code { background:#ececec; padding:2px 5px; border-radius:4px; }
+  .artifact-preview-body pre { background:#1c1c1e; color:#f5f5f7; padding:14px 16px; border-radius:8px; overflow:auto; margin:12px 0; max-height:45vh; position:relative; }
+  .artifact-preview-body pre code { background:transparent; color:inherit; padding:0; border-radius:0; font-size:13px; line-height:1.6; }
+  .artifact-preview-body img { max-width:100%; height:auto; border-radius:6px; margin:8px 0; }
+
+  /* 技能详情弹窗 */
+  .skill-detail-modal { width:min(960px, calc(100vw - 32px)); max-height:88vh; display:flex; flex-direction:column; }
+  .skill-detail-meta { color:#8e8e93; font-size:12px; margin:-12px 0 10px; display:flex; flex-direction:column; gap:6px; flex-shrink:0; }
+  .skill-detail-desc { color:#3a3a3c; font-size:13px; line-height:1.5; }
+  .skill-detail-triggers { font-size:12px; color:#6e6e73; max-height:48px; overflow:hidden; transition:max-height .2s ease; flex-shrink:0; }
+  .skill-detail-triggers.expanded { max-height:35vh; overflow-y:auto; }
+  .skill-detail-triggers .chip { display:inline-block; background:#e0e8ff; color:#0062cc; border-radius:10px; padding:1px 8px; margin:0 4px 2px 0; font-size:11px; }
+  .skill-detail-triggers .trigger-toggle { display:inline-block; font-size:11px; color:#007aff; cursor:pointer; margin-left:4px; user-select:none; }
+  .skill-detail-triggers .trigger-toggle:hover { text-decoration:underline; }
+  .skill-detail-body { display:flex; gap:14px; flex:1; min-height:0; }
+  .skill-detail-sidebar { width:200px; flex-shrink:0; display:flex; flex-direction:column; min-height:0; }
+  .skill-sidebar-label { font-size:12px; color:#6e6e73; padding:0 0 8px; font-weight:500; }
+  .skill-detail-files { display:flex; flex-direction:column; gap:4px; padding-right:4px; overflow-y:auto; min-height:0; }
+  .skill-file-chip { font-size:12px; padding:6px 10px; background:#f0f0f3; border:1px solid #ddd; border-radius:6px; cursor:pointer; user-select:none; word-break:break-all; }
+  .skill-file-chip:hover { background:#e5e5ea; }
+  .skill-file-chip.active { background:#007aff; color:#fff; border-color:#007aff; }
+  .skill-file-chip.dir { background:#fff8e1; color:#7a5a00; border-color:#ffe082; cursor:default; }
+  .skill-file-chip.dir.active { background:#7a5a00; color:#fff; border-color:#7a5a00; }
+  .skill-preview-body { flex:1; min-width:0; }
+
+  /* 会话列表 */
+  #session-header { display:flex; align-items:center; justify-content:space-between; padding:12px 16px 4px; }
+  #session-header h2 { font-size:15px; color:#8e8e93; text-transform:uppercase; letter-spacing:1px; padding:0; }
+  #new-session-btn { background:#2c2c2e; color:#fff; border:none; border-radius:6px; padding:4px 10px; font-size:12px; cursor:pointer; }
+  #new-session-btn:hover { background:#3a3a3c; }
+  #session-list { flex:1; overflow-y:auto; }
+  .session-item { padding:10px 16px; cursor:pointer; border-left:3px solid transparent; transition:all .15s; position:relative; }
+  .session-item:hover { background:#2c2c2e; }
+  .session-item.active { background:#2c2c2e; border-left-color:#007aff; }
+  .session-item .s-title { font-size:13px; font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .session-item .s-meta { font-size:11px; color:#8e8e93; margin-top:2px; display:flex; gap:8px; }
+  .session-item .s-del { margin-left:auto; background:transparent; border:none; color:#8e8e93; cursor:pointer; font-size:14px; padding:0 2px; visibility:hidden; }
+  .session-item:hover .s-del { visibility:visible; }
+  .session-item .s-del:hover { color:#ff453a; }
+  /* 会话加载中状态：覆盖一层半透明遮罩 + 右侧旋转指示器 */
+  .session-item.loading { pointer-events:none; }
+  .session-item.loading::after {
+    content:''; position:absolute; right:12px; top:50%; transform:translateY(-50%);
+    width:12px; height:12px; border:2px solid #007aff; border-top-color:transparent;
+    border-radius:50%; animation:spin .6s linear infinite;
+  }
+  .session-item.loading .s-del { visibility:hidden; }
+
+  /* ═══ 数据库设置内部二级页签 ═══ */
+  .db-inner-tabs {
+    display:flex;gap:0;margin-bottom:16px;border-bottom:2px solid #e8e8ee;
+  }
+  .db-inner-tab {
+    padding:8px 18px;border:none;background:none;cursor:pointer;font-size:14px;
+    color:#666;border-bottom:2px solid transparent;margin-bottom:-2px;transition:all .2s;
+    font-weight:500;
+  }
+  .db-inner-tab:hover { color:#333; }
+  .db-inner-tab.active {
+    color:#007aff;border-bottom-color:#007aff;font-weight:600;
+  }
+  .db-sub-panel { display:none; }
+  .db-sub-panel.active { display:block; }
+
+  /* ═══ 权限配置可视化UI样式 ═══ */
+  .perm-section { margin-bottom:20px;padding:16px;background:#f9f9fb;border-radius:10px;border:1px solid #eee; }
+  .perm-section-header { display:flex;justify-content:space-between;align-items:center;margin-bottom:12px; }
+  .perm-section-title { font-size:14px;font-weight:600;margin:0;color:#222; }
+  .perm-add-btn { padding:5px 12px;border:1px solid #007aff;border-radius:6px;background:#fff;color:#007aff;cursor:pointer;font-size:12px;font-weight:500; }
+  .perm-add-btn:hover { background:#007aff;color:#fff; }
+
+  .perm-form-grid { display:grid;grid-template-columns:repeat(3,1fr);gap:12px;align-items:end; }
+  @media(max-width:640px){ .perm-form-grid{grid-template-columns:1fr;} }
+
+  .perm-entity-list { min-height:30px; }
+  .perm-placeholder { font-size:13px;color:#aaa;text-align:center;padding:16px 0;margin:0; }
+
+  /* 实体卡片（用户/角色）*/
+  .perm-entity-card {
+    background:#fff;border:1px solid #e0e0e6;border-radius:8px;margin-bottom:10px;
+    overflow:hidden;transition:border-color .15s;
+  }
+  .perm-entity-card:hover { border-color:#c0c0cc; }
+  .perm-entity-card-header {
+    display:flex;justify-content:space-between;align-items:center;
+    padding:10px 14px;background:#f4f4f8;cursor:pointer;
+    user-select:none;border-bottom:1px solid #eee;
+  }
+  .perm-entity-name { font-size:13px;font-weight:600;color:#222;display:flex;align-items:center;gap:6px; }
+  .perm-entity-type-badge {
+    font-size:10px;padding:2px 7px;border-radius:10px;font-weight:500;
+    vertical-align:middle;
+  }
+  .perm-type-role { background:#e8f0fe;color:#1a56db; }
+  .perm-type-user { background:#e6f4ea;color:#137333; }
+  .perm-entity-actions { display:flex;gap:4px; }
+  .perm-act-btn {
+    padding:3px 8px;border:1px solid #ddd;border-radius:4px;background:#fff;
+    cursor:pointer;font-size:11px;color:#555;
+  }
+  .perm-act-btn:hover { background:#f0f0f0; }
+  .perm-act-btn.danger:hover { color:#d70015;border-color:#d70015; }
+  .perm-entity-body { padding:12px 14px;display:none; }
+  .perm-entity-body.open { display:block; }
+
+  /* 规则列表 */
+  .perm-rules-header { display:flex;justify-content:space-between;align-items:center;margin-bottom:8px; }
+  .perm-rules-label { font-size:12px;color:#888;font-weight:500; }
+  .perm-rule-add-btn { padding:3px 10px;border:1px solid #ccc;border-radius:4px;background:#fff;cursor:pointer;font-size:11px;color:#555; }
+  .perm-rule-add-btn:hover { background:#f5f5f5; }
+
+  .perm-rule-card {
+    background:#fafafc;border:1px solid #e8e8ee;border-radius:6px;
+    margin-bottom:8px;padding:12px;position:relative;
+  }
+  .perm-rule-delete {
+    position:absolute;top:6px;right:6px;width:20px;height:20px;border-radius:50%;
+    border:1px solid #e0e0e6;background:#fff;color:#999;cursor:pointer;font-size:14px;line-height:18px;text-align:center;
+  }
+  .perm-rule-delete:hover { color:#d70015;border-color:#d70015; }
+  .perm-rule-fields { display:grid;grid-template-columns:1fr 1fr;gap:8px; }
+  .perm-rule-field label { font-size:11px;color:#777;display:block;margin-bottom:3px;font-weight:500; }
+  .perm-rule-field input, .perm-rule-field select, .perm-rule-field textarea {
+    padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:12px;width:100%;box-sizing:border-box;
+    background:#fff;
+  }
+  .perm-rule-field textarea { resize:vertical;min-height:32px; }
+  .perm-rule-field-full { grid-column:1/-1; }

@@ -20,6 +20,7 @@ from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException, Request, Response, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 import uvicorn
 
@@ -213,6 +214,9 @@ if UI_DIR.exists():
     if ui_index.exists():
         _html_content = ui_index.read_text(encoding="utf-8")
         logger.info("📁 桌面 UI: %s", UI_DIR / "index.html")
+
+# 挂载静态文件目录，使 index.html 中的 /static/libs/、/static/styles/、/static/js/ 可访问
+app.mount("/static", StaticFiles(directory=str(UI_DIR)), name="static")
 
 # ---------- Agent 实例 ----------
 

@@ -1,0 +1,186 @@
+/* messaging.js — 消息渲染、附件处理、输入事件绑定
+   依赖: state.js, util.js, i18n.js, artifacts.js(openArtifactPreview) */
+
+// ---------- 消息区域点击：制品预览链接委托 ----------
+messages.addEventListener('click', (event) => {
+  const link = event.target.closest('a');
+  if (!link) return;
+  const href = link.getAttribute('href') || '';
+  if (!href.startsWith('#artifact-preview:')) return;
+  event.preventDefault();
+  const path = decodeURIComponent(href.slice('#artifact-preview:'.length));
+  openArtifactPreview(path);
+});
+
+// ---------- 消息渲染 ----------
+
+function addMessage(text, role) {
+  const div = document.createElement('div');
+  div.className = `msg ${role}`;
+  if (role === 'bot') {
+    // 渲染 Markdown
+    div.innerHTML = renderMarkdown(text);
+  } else {
+    div.textContent = text;
+  }
+  messages.appendChild(div);
+  smartScroll(messages);
+  return div;
+}
+
+function addUserMessage(text, attachments = []) {
+  const hasZip = attachments.some(item => item.mime_type === 'application/zip' || (item.name || '').endsWith('.zip'));
+  const msgFallback = hasZip ? '分析项目中...' : t('analyzingImages');
+  const div = addMessage(text || (attachments.length ? msgFallback : ''), 'user');
+  if (attachments.length) {
+    const grid = document.createElement('div');
+    grid.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;';
+    attachments.forEach(item => {
+      const isZip = item.mime_type === 'application/zip' || (item.name || '').endsWith('.zip');
+      if (isZip) {
+        const badge = document.createElement('div');
+        badge.style.cssText = 'width:96px;height:96px;display:flex;flex-direction:column;align-items:center;justify-content:center;border-radius:8px;background:#e0f2fe;color:#0369a1;border:1px solid rgba(255,255,255,.5);font-size:12px;';
+        badge.innerHTML = '<span style="font-size:28px">📦</span><span style="margin-top:4px">' + escapeHtml(item.name) + '</span>';
+        grid.appendChild(badge);
+      } else {
+        const img = document.createElement('img');
+        img.src = item.data_url;
+        img.alt = item.name || 'pasted image';
+        img.style.cssText = 'width:96px;height:96px;object-fit:cover;border-radius:8px;border:1px solid rgba(255,255,255,.5);';
+        grid.appendChild(img);
+      }
+    });
+    div.appendChild(grid);
+  }
+  return div;
+}
+
+function resizeComposer() {
+  input.style.height = 'auto';
+  input.style.height = `${Math.min(input.scrollHeight, 180)}px`;
+}
+
+function renderAttachmentPreview() {
+  if (!attachmentPreview) return;
+  attachmentPreview.innerHTML = '';
+  attachmentPreview.classList.toggle('show', pendingAttachments.length > 0);
+  pendingAttachments.forEach((item, index) => {
+    const chip = document.createElement('div');
+    chip.className = 'attachment-chip';
+
+    const isZip = item.mime_type === 'application/zip' || (item.name || '').endsWith('.zip');
+    if (isZip) {
+      const icon = document.createElement('div');
+      icon.style.cssText = 'width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:28px;background:#e0f2fe;color:#0369a1;font-weight:bold;';
+      icon.textContent = '📦';
+      chip.appendChild(icon);
+    } else {
+      const img = document.createElement('img');
+      img.src = item.data_url;
+      img.alt = item.name || 'pasted image';
+      chip.appendChild(img);
+    }
+
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.setAttribute('aria-label', currentLanguage === 'en' ? 'Remove image' : '移除图片');
+    removeBtn.textContent = '×';
+    removeBtn.addEventListener('click', () => {
+      pendingAttachments.splice(index, 1);
+      renderAttachmentPreview();
+    });
+    chip.appendChild(removeBtn);
+    attachmentPreview.appendChild(chip);
+  });
+}
+
+function addImageFile(file) {
+  const isZip = file.name.endsWith('.zip') || file.type === 'application/zip' || file.type === 'application/x-zip-compressed';
+  if (!isZip && !file.type.startsWith('image/')) return;
+
+  // 大小限制：ZIP 50MB，图片 6MB
+  const maxSize = isZip ? 50 * 1024 * 1024 : 6 * 1024 * 1024;
+  if (file.size > maxSize) {
+    addMessage(t('imageTooLarge', { name: file.name || '' }), 'system');
+    return;
+  }
+
+  if (pendingAttachments.length >= 4) {
+    addMessage(t('imageLimit'), 'system');
+    return;
+  }
+
+  const reader = new FileReader();
+  reader.onload = () => {
+    pendingAttachments.push({
+      name: file.name,
+      mime_type: isZip ? 'application/zip' : (file.type || 'image/png'),
+      data_url: String(reader.result || ''),
+    });
+    renderAttachmentPreview();
+  };
+  reader.readAsDataURL(file);
+}
+
+function handleFiles(files) {
+  files.forEach(addImageFile);
+}
+
+// ---------- 文件上传按钮 ----------
+document.getElementById('attach-btn').onclick = () => {
+  document.getElementById('file-input').click();
+};
+document.getElementById('file-input').onchange = (e) => {
+  handleFiles(Array.from(e.target.files));
+  e.target.value = '';
+};
+
+// ---------- 输入框事件绑定 ----------
+let inputComposing = false;
+let lastCompositionEndAt = 0;
+
+input.addEventListener('compositionstart', () => {
+  inputComposing = true;
+});
+
+input.addEventListener('compositionend', () => {
+  inputComposing = false;
+  lastCompositionEndAt = Date.now();
+});
+
+input.addEventListener('input', resizeComposer);
+
+input.addEventListener('paste', (e) => {
+  const files = Array.from(e.clipboardData?.files || []).filter(file => file.type.startsWith('image/'));
+  if (!files.length) return;
+  e.preventDefault();
+  files.forEach(addImageFile);
+});
+
+input.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter') return;
+  const justEndedComposition = Date.now() - lastCompositionEndAt < 120;
+  if (inputComposing || e.isComposing || e.keyCode === 229 || justEndedComposition) {
+    return;
+  }
+  // Enter 单独按 → 发送；⌘/Ctrl+Enter → 换行；屏蔽 Shift+Enter
+  if (e.metaKey || e.ctrlKey) {
+    // 插入换行
+    const start = input.selectionStart, end = input.selectionEnd;
+    input.value = input.value.slice(0, start) + '\n' + input.value.slice(end);
+    input.selectionStart = input.selectionEnd = start + 1;
+    resizeComposer();
+    e.preventDefault();
+    return;
+  }
+  if (e.shiftKey) return;
+  e.preventDefault();
+  send();
+});
+sendBtn.onclick = () => {
+  if (isLoading) {
+    stopCurrentRun();
+    return;
+  }
+  send();
+};

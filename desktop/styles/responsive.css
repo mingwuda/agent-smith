@@ -1,0 +1,34 @@
+/* responsive.css — 侧边栏折叠/移动端适配（须在 base.css、modals.css 之后加载） */
+
+  /* 侧边栏折叠/移动端适配 */
+  #sidebar-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.4); z-index:98; }
+  #sidebar-overlay.show { display:block; }
+  #sidebar-toggle { display:none; background:transparent; border:none; font-size:20px; cursor:pointer; padding:4px; color:#333; line-height:1; }
+  #sidebar-toggle:hover { color:#007aff; }
+
+  @media (max-width: 768px) {
+    #sidebar-toggle { display:block; }
+    #sidebar {
+      position:fixed; left:0; top:0; bottom:0; z-index:99;
+      transform:translateX(-100%); transition:transform .25s ease;
+    }
+    #sidebar.open { transform:translateX(0); }
+    #messages { padding:12px 12px; }
+    .msg { max-width:92%; font-size:13px; padding:10px 14px; }
+    #header { padding:8px 10px; gap:4px; }
+    #header .left { gap:4px; }
+    #header .right { gap:4px; }
+    #status-text { display:none; }
+    #sidebar-toggle { font-size:18px; padding:2px; }
+    #status-dot { width:6px; height:6px; flex-shrink:0; }
+    #input-area { padding:8px 10px 14px; }
+    #composer { padding:4px 6px; border-radius:12px; }
+    .modal { width:95vw; padding:16px; }
+    .msg.bot pre { font-size:12px; padding:8px; }
+    .steps-container { max-width:98%; }
+  }
+  @media (min-width: 769px) {
+    #sidebar.collapsed { width:0; overflow:hidden; border-right:none; padding:0; min-width:0; }
+    #sidebar.collapsed > * { display:none; }
+    #sidebar-toggle { display:block; }
+  }

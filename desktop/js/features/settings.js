@@ -1,0 +1,236 @@
+/* settings.js — 设置弹窗、Provider 管理、快速切换
+   依赖: state.js, util.js, i18n.js, messaging.js(addMessage), stats.js(checkHealth, refreshStats) */
+
+// ---------- 设置按钮 ----------
+document.getElementById('settings-btn').onclick = openSettings;
+// 新建会话按钮
+document.getElementById('new-session-btn').onclick = newSession;
+
+// ---------- Provider 工具函数 ----------
+
+function providerLabel(provider, id) {
+  const name = provider.name || id;
+  const model = provider.model || t('modelNotConfigured');
+  return `${name} · ${model}`;
+}
+
+function populateProviderOptions(select, data, includeMissing = false) {
+  select.innerHTML = '';
+  Object.entries(data.providers || {}).forEach(([id, provider]) => {
+    if (!includeMissing && (!provider.model || !provider.api_key_configured)) return;
+    const option = document.createElement('option');
+    option.value = id;
+    option.textContent = providerLabel(provider, id);
+    select.appendChild(option);
+  });
+}
+
+function populateProviderSelect(data) {
+  const select = document.getElementById('s-provider');
+  populateProviderOptions(select, data, true);
+  select.value = data.active_provider || 'openai';
+}
+
+function refreshQuickProviderSelect(data) {
+  settingsData = data;
+  populateProviderOptions(quickProviderSelect, data, true);
+  quickProviderSelect.value = data.active_provider || 'openai';
+}
+
+async function loadSettingsForSwitcher() {
+  if (!isAdmin) return null;
+  try {
+    const res = await fetch('/settings');
+    if (!res.ok) return null;
+    const data = await res.json();
+    refreshQuickProviderSelect(data);
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+// ---------- 设置弹窗操作 ----------
+
+function renderProviderFields(providerId) {
+  if (!settingsData || !settingsData.providers) return;
+  const provider = settingsData.providers[providerId] || {};
+  const isCustom = !!provider.is_custom;
+  const modelOptions = document.getElementById('s-model-options');
+  modelOptions.innerHTML = '';
+  (provider.models || []).forEach(modelName => {
+    const option = document.createElement('option');
+    option.value = modelName;
+    modelOptions.appendChild(option);
+  });
+  
+  document.getElementById('s-model').value = provider.model || '';
+  document.getElementById('s-base-url').value = provider.base_url || '';
+  document.getElementById('s-recursion-limit').value = settingsData.recursion_limit || 60;
+  document.getElementById('s-tavily-enabled').checked = !!settingsData.tavily_search_enabled;
+  document.getElementById('s-tavily-api-key').value = '';
+  document.getElementById('s-tavily-search-url').value = settingsData.tavily_search_url || 'https://api.tavily.com/search';
+  document.getElementById('s-api-key').value = '';
+  document.getElementById('s-provider-name').value = provider.name || '';
+  document.getElementById('s-provider-name-group').classList.toggle('hidden', !isCustom);
+  document.getElementById('s-provider-hint').textContent = t('currentProvider', { name: provider.name || providerId });
+  document.getElementById('s-api-key-hint').textContent = provider.api_key_configured
+    ? t('apiKeySaved', { preview: provider.api_key_preview })
+    : t('apiKeyNotSaved');
+  document.getElementById('s-tavily-api-key-hint').textContent = settingsData.tavily_api_key_configured
+    ? t('tavilyApiKeySaved', { preview: settingsData.tavily_api_key_preview })
+    : t('tavilyApiKeyNotSaved');
+  document.getElementById('s-anysearch-api-key').value = '';
+  document.getElementById('s-anysearch-api-key-hint').textContent = settingsData.anysearch_api_key_configured
+    ? t('anysearchApiKeySaved', { preview: settingsData.anysearch_api_key_preview })
+    : t('anysearchApiKeyNotSaved');
+}
+
+function onProviderChange() {
+  renderProviderFields(document.getElementById('s-provider').value);
+}
+
+function addCustomProvider() {
+  if (!settingsData) settingsData = { providers: {} };
+  const id = `custom_${Date.now()}`;
+  settingsData.providers[id] = {
+    name: t('customProviderName'),
+    is_custom: true,
+    api_key_configured: false,
+    api_key_preview: currentLanguage === 'en' ? 'Not set' : '未设置',
+    model: '',
+    base_url: '',
+    models: [],
+  };
+  settingsData.active_provider = id;
+  populateProviderSelect(settingsData);
+  renderProviderFields(id);
+  document.getElementById('s-provider-name').focus();
+  document.getElementById('s-provider-name').select();
+}
+
+function openSettings() {
+  if (!isAdmin) return;
+  const modal = document.getElementById('settings-modal');
+  modal.classList.add('active');
+  document.getElementById('save-feedback').textContent = '';
+  document.getElementById('save-feedback').className = 'save-feedback';
+  document.getElementById('save-settings-btn').disabled = false;
+  
+  // 加载当前配置
+  fetch('/settings').then(r => r.json()).then(data => {
+    settingsData = data;
+    populateProviderSelect(data);
+    refreshQuickProviderSelect(data);
+    renderProviderFields(data.active_provider || 'openai');
+  }).catch(() => {});
+}
+
+function closeSettings() {
+  document.getElementById('settings-modal').classList.remove('active');
+}
+
+async function saveSettings() {
+  if (!isAdmin) return;
+  const btn = document.getElementById('save-settings-btn');
+  const feedback = document.getElementById('save-feedback');
+  btn.disabled = true;
+  feedback.textContent = t('saving');
+  feedback.className = 'save-feedback';
+  
+  try {
+    const res = await fetch('/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        active_provider: document.getElementById('s-provider').value,
+        provider_name: document.getElementById('s-provider-name').value,
+        api_key: document.getElementById('s-api-key').value,
+        model: document.getElementById('s-model').value,
+        base_url: document.getElementById('s-base-url').value,
+        recursion_limit: Number(document.getElementById('s-recursion-limit').value || 60),
+        api_max_retries: settingsData?.api_max_retries ?? 3,
+        api_timeout_seconds: settingsData?.api_timeout_seconds ?? 30,
+        api_host_ips: settingsData?.api_host_ips || '',
+        context_window_tokens: settingsData?.context_window_tokens || 0,
+        tavily_search_enabled: document.getElementById('s-tavily-enabled').checked,
+        tavily_api_key: document.getElementById('s-tavily-api-key').value,
+        tavily_search_url: document.getElementById('s-tavily-search-url').value,
+        anysearch_api_key: document.getElementById('s-anysearch-api-key').value,
+      }),
+    });
+    const data = await res.json();
+    if (data.status === 'ok') {
+      feedback.textContent = '✅ ' + (currentLanguage === 'en' ? t('settingsSaved') : (data.message || t('settingsSaved')));
+      feedback.className = 'save-feedback ok';
+      // 清空密码框
+      document.getElementById('s-api-key').value = '';
+      document.getElementById('s-tavily-api-key').value = '';
+      document.getElementById('s-anysearch-api-key').value = '';
+      // 刷新状态
+      setTimeout(async () => {
+        closeSettings();
+        await loadSettingsForSwitcher();
+        checkHealth();
+        refreshStats();
+      }, 1000);
+    } else {
+      feedback.textContent = '⚠️ ' + (currentLanguage === 'en' ? t('saveFailed') : (data.message || t('saveFailed')));
+      feedback.className = 'save-feedback err';
+      btn.disabled = false;
+    }
+  } catch (e) {
+    feedback.textContent = t('networkSettingsError');
+    feedback.className = 'save-feedback err';
+    btn.disabled = false;
+  }
+}
+
+async function quickSwitchProvider() {
+  if (!isAdmin) return;
+  const providerId = quickProviderSelect.value;
+  if (!providerId || !settingsData || !settingsData.providers) return;
+  const provider = settingsData.providers[providerId];
+  if (!provider) return;
+  
+  quickProviderSelect.disabled = true;
+  try {
+    const res = await fetch('/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        active_provider: providerId,
+        provider_name: provider.name || providerId,
+        api_key: '',
+        model: provider.model || '',
+        base_url: provider.base_url || '',
+        recursion_limit: settingsData.recursion_limit || 60,
+        api_max_retries: settingsData.api_max_retries ?? 3,
+        api_timeout_seconds: settingsData.api_timeout_seconds ?? 30,
+        api_host_ips: settingsData.api_host_ips || '',
+        context_window_tokens: settingsData.context_window_tokens || 0,
+        tavily_search_enabled: !!settingsData.tavily_search_enabled,
+        tavily_api_key: '',
+        tavily_search_url: settingsData.tavily_search_url || 'https://api.tavily.com/search',
+        anysearch_api_key: '',
+      }),
+    });
+    const data = await res.json();
+    if (data.status !== 'ok') {
+      addMessage('⚠️ ' + (currentLanguage === 'en' ? t('switchProviderFailed') : (data.message || t('switchProviderFailed'))), 'system');
+    }
+    await loadSettingsForSwitcher();
+    await checkHealth();
+  } catch {
+    addMessage(t('switchProviderNetworkFailed'), 'system');
+  } finally {
+    quickProviderSelect.disabled = false;
+  }
+}
+
+// ---------- 设置弹窗 Tab 切换 ----------
+
+function switchSettingsTab(tabId) {
+  document.querySelectorAll('.settings-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tabId));
+  document.querySelectorAll('.settings-tab-panel').forEach(p => p.classList.toggle('active', p.id === 'panel-' + tabId));
+}
