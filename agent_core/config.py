@@ -50,6 +50,14 @@ DEFAULT_PROVIDERS: dict[str, dict[str, Any]] = {
         "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
         "models": ["qwen-plus", "qwen-max", "qwen-turbo", "qwen-long"],
     },
+    "ollama": {
+        "name": "Ollama（本地）",
+        "is_custom": False,
+        "api_key": "",
+        "model": "qwen2",
+        "base_url": "http://localhost:11434/v1",
+        "models": ["llama3", "qwen2", "qwen2.5", "gemma2", "mistral", "phi3", "deepseek-r1"],
+    },
     "custom": {
         "name": "自定义",
         "is_custom": True,
