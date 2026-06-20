@@ -224,6 +224,11 @@
             <div class="hint" data-i18n="recursionLimitHint">复杂任务或多次工具调用可适当调大；过大时循环任务会运行更久。</div>
           </div>
           <div class="form-group">
+            <label for="s-api-timeout">API 超时（秒）</label>
+            <input id="s-api-timeout" type="number" min="60" max="600" step="10" value="60" />
+            <div class="hint">模型响应读超时。长上下文或多工具结果时可调大到 120~300；需重启后端生效。</div>
+          </div>
+          <div class="form-group">
             <label>
               <input id="s-tavily-enabled" type="checkbox" style="width:auto;height:auto;margin-right:6px;" />
               <span data-i18n="tavilyEnabledLabel">优先使用 Tavily Search</span>

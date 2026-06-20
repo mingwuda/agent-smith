@@ -67,6 +67,7 @@ function renderProviderFields(providerId) {
   document.getElementById('s-model').value = provider.model || '';
   document.getElementById('s-base-url').value = provider.base_url || '';
   document.getElementById('s-recursion-limit').value = settingsData.recursion_limit || 60;
+  document.getElementById('s-api-timeout').value = settingsData.api_timeout_seconds || 60;
   document.getElementById('s-tavily-enabled').checked = !!settingsData.tavily_search_enabled;
   document.getElementById('s-tavily-api-key').value = '';
   document.getElementById('s-tavily-search-url').value = settingsData.tavily_search_url || 'https://api.tavily.com/search';
@@ -150,7 +151,7 @@ async function saveSettings() {
         base_url: document.getElementById('s-base-url').value,
         recursion_limit: Number(document.getElementById('s-recursion-limit').value || 60),
         api_max_retries: settingsData?.api_max_retries ?? 3,
-        api_timeout_seconds: settingsData?.api_timeout_seconds ?? 30,
+        api_timeout_seconds: Number(document.getElementById('s-api-timeout').value || 60),
         api_host_ips: settingsData?.api_host_ips || '',
         context_window_tokens: settingsData?.context_window_tokens || 0,
         tavily_search_enabled: document.getElementById('s-tavily-enabled').checked,
@@ -206,7 +207,7 @@ async function quickSwitchProvider() {
         base_url: provider.base_url || '',
         recursion_limit: settingsData.recursion_limit || 60,
         api_max_retries: settingsData.api_max_retries ?? 3,
-        api_timeout_seconds: settingsData.api_timeout_seconds ?? 30,
+        api_timeout_seconds: settingsData.api_timeout_seconds ?? 60,
         api_host_ips: settingsData.api_host_ips || '',
         context_window_tokens: settingsData.context_window_tokens || 0,
         tavily_search_enabled: !!settingsData.tavily_search_enabled,
