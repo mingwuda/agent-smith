@@ -455,11 +455,13 @@ function handleStreamEvent(data) {
 
     case 'subagent_end':
       renderSubagentCapsules(data.capsules, 'done');
+      showGeneratingBadge('🔄 正在汇总...');
       break;
 
     case 'thought':
       hideTyping();
       removeThinkingHint();
+      removeGeneratingBadge();
       hasToolCalls = true;
       ensureStepsContainer();
       updateProgress();
@@ -667,7 +669,7 @@ function handleStreamEvent(data) {
     case 'token':
       hideTyping();
       removeThinkingHint();
-      if (!hasToolCalls) removeGeneratingBadge();
+      removeGeneratingBadge();
       if (!currentBotMsgEl) {
         currentBotMsgEl = document.createElement('div');
         currentBotMsgEl.className = 'msg bot streaming-final';
