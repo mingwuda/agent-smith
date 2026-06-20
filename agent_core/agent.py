@@ -450,7 +450,7 @@ class DesktopAgent:
     def _build_llm(self, model_override: str = ""):
         kwargs = {
             "model": model_override or self.config.model,
-            "api_key": self.config.api_key,
+            "api_key": self.config.api_key or "sk-no-key-required",
             "temperature": 0,
             "max_retries": self.config.api_max_retries,
             "timeout": self.config.api_timeout_seconds,
