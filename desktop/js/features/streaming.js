@@ -274,8 +274,6 @@ function handleStreamEvent(data) {
         container.appendChild(row);
       }
     }
-    // 胶囊 ≥ 3 个时切横向滚动模式
-    row.classList.toggle('scrollable', capsules.length >= 3);
     const iconMap = { searcher: '🔍', coder: '<>', reviewer: '👁', debugger: '🐛' };
 
     // 删除不再存在的胶囊节点
