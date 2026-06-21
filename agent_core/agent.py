@@ -737,6 +737,7 @@ class DesktopAgent:
         subagent_capsules: list[dict] = []  # 并行子代理任务胶囊数据
         _subagent_dispatched = False         # 是否已派发过子代理
         _post_subagent_tool_calls = 0        # 子代理完成后父模型继续调用的工具次数
+        _post_subagent_seen_run_ids: set[str] = set()  # 已统计过的非子代理工具 run_id（避免重试重复计数）
         subagent_end_sent_at = 0.0           # 子代理结束事件发送时间戳
         last_model_activity_at = 0.0         # 最后一次模型活动（token/thought/tool）时间戳
         
@@ -762,11 +763,12 @@ class DesktopAgent:
                         })
                     if running_tools:
                         last_progress_at = now
-                    # 子代理结束但父模型长时间没有产生任何内容，强制终止
+                    # 子代理结束但父模型长时间没有产生最终回复，强制终止
+                    # 以 subagent_end 发送时间为基准，避免父模型内部的慢速/空轮询刷新 idle 时间
                     if subagent_end_sent_at and not running_tools and not loop_guard_triggered:
-                        idle = now - max(subagent_end_sent_at, last_model_activity_at)
-                        if idle >= 60:
-                            logger.warning("[子代理] subagent_end 后父模型 %d 秒无活动，强制终止", int(idle))
+                        elapsed_after_subagent = now - subagent_end_sent_at
+                        if elapsed_after_subagent >= 90:
+                            logger.warning("[子代理] subagent_end 已发送 %d 秒，父模型仍未完成汇总，强制终止", int(elapsed_after_subagent))
                             loop_guard_triggered = True
                             final_buffer = "✅ 所有子代理搜索已完成。\n\n（模型在汇总阶段超时，未返回完整汇总，以下为已收集的子代理结果片段）\n"
                             yield _sse({"type": "done", "content": final_buffer})
@@ -810,11 +812,13 @@ class DesktopAgent:
                     tool_name = event.get("name", "")
                     run_id = event.get("run_id", "")
                     
-                    # 子代理完成后如果父模型还在调工具，最多允许 1 次，之后强制汇总
-                    if _subagent_dispatched and tool_name not in {"delegate_tasks_parallel", "delegate_task"}:
+                    # 子代理完成后如果父模型还在调工具，最多允许 3 次不同的非子代理工具，之后强制汇总
+                    # 用 run_id 去重，避免同一工具因网络重试被重复计数
+                    if _subagent_dispatched and tool_name not in {"delegate_tasks_parallel", "delegate_task"} and run_id not in _post_subagent_seen_run_ids:
+                        _post_subagent_seen_run_ids.add(run_id)
                         _post_subagent_tool_calls += 1
-                        if _post_subagent_tool_calls >= 2:
-                            logger.warning("[防循环] 子代理完成后父模型已连续调用 %d 次工具，强制汇总", _post_subagent_tool_calls)
+                        if _post_subagent_tool_calls >= 3:
+                            logger.warning("[防循环] 子代理完成后父模型已调用 %d 次不同工具，强制汇总", _post_subagent_tool_calls)
                             loop_guard_triggered = True
                             final_buffer = "✅ 所有子代理搜索已完成，开始汇总结果。\n\n（以下为归并总结）\n"
                             yield _sse({"type": "done", "content": final_buffer})
