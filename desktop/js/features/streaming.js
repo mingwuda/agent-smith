@@ -455,11 +455,17 @@ function handleStreamEvent(data) {
     case 'subagent_start':
       hideTyping();
       hasToolCalls = true;
+      if (!data.capsules || !data.capsules.length) {
+        console.warn('[胶囊] subagent_start 无胶囊数据:', data);
+        addMessage('⚠️ 触发子代理但无胶囊数据', 'system');
+        break;
+      }
       renderSubagentCapsules(data.capsules, 'running');
       break;
 
     case 'subagent_end':
       renderSubagentCapsules(data.capsules, 'done');
+      addMessage('✅ 子代理搜索已完成，正在汇总...', 'system');
       showGeneratingBadge('🔄 正在汇总...');
       break;
 
