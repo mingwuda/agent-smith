@@ -21,8 +21,8 @@ function setSendButtonRunning(running) {
 
 // ---------- 定时器 ----------
 
-setInterval(() => { checkHealth(); refreshStats(); }, 5000);
-setInterval(loadSessions, 10000);
+setInterval(() => { checkHealth(); refreshStats(); }, 30000);
+setInterval(loadSessions, 60000);
 
 // ---------- 启动入口 ----------
 
