@@ -455,11 +455,13 @@ function handleStreamEvent(data) {
     case 'subagent_start':
       hideTyping();
       hasToolCalls = true;
+      console.log('[胶囊] subagent_start 收到:', data);
       if (!data.capsules || !data.capsules.length) {
         console.warn('[胶囊] subagent_start 无胶囊数据:', data);
         addMessage('⚠️ 触发子代理但无胶囊数据', 'system');
         break;
       }
+      addMessage('🔍 子代理搜索已启动：' + data.capsules.length + ' 个任务', 'system');
       renderSubagentCapsules(data.capsules, 'running');
       break;
 

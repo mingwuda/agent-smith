@@ -117,10 +117,10 @@
   @keyframes bounce { 0%,80%,100% { transform:translateY(0); } 40% { transform:translateY(-6px); } }
 
   /* 子代理胶囊 */
-  .subagent-row { display:flex; flex-flow:row wrap; gap:12px 16px; margin:8px 0 4px; align-items:flex-start; max-width:85%; }
-  .subagent-group { display:flex; flex-direction:column; gap:4px; min-width:0; max-width:280px; }
-  .subagent-capsule { display:inline-flex; align-items:center; gap:5px; padding:4px 10px 4px 5px; background:#f0f0f2; border:1px solid #e0e0e3; border-radius:18px; font-size:12px; cursor:pointer; transition:all .15s; max-width:260px; }
-  .subagent-capsule:hover { background:#e5e5ea; border-color:#ccc; }
+  .subagent-row { display:flex; flex-flow:row wrap; gap:12px 16px; margin:8px 0 4px; align-items:flex-start; max-width:100%; }
+  .subagent-group { display:flex; flex-direction:column; gap:4px; min-width:0; max-width:280px; border:1px dashed #ccc; border-radius:10px; padding:6px; background:#fafafa; }
+  .subagent-capsule { display:inline-flex; align-items:center; gap:5px; padding:4px 10px 4px 5px; background:#fff; border:1px solid #b0b0b8; border-radius:18px; font-size:12px; cursor:pointer; transition:all .15s; box-shadow:0 1px 3px rgba(0,0,0,.08); max-width:260px; }
+  .subagent-capsule:hover { background:#f5f5ff; border-color:#7c5ce7; }
   .subagent-capsule .sa-icon { width:20px; height:20px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:9px; font-weight:700; color:#fff; flex-shrink:0; }
   .subagent-capsule .sa-icon.searcher { background:#7c5ce7; }
   .subagent-capsule .sa-icon.coder { background:#007aff; }

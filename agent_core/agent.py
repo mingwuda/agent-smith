@@ -875,6 +875,7 @@ class DesktopAgent:
                                 if capsules:
                                     _subagent_dispatched = True
                                     subagent_capsules = capsules
+                                    logger.info("[子代理] 发送 subagent_start，capsules=%d", len(capsules))
                                     yield _sse({
                                         "type": "subagent_start",
                                         "capsules": capsules,
