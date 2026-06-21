@@ -276,9 +276,9 @@ function handleStreamEvent(data) {
     }
     const iconMap = { searcher: '🔍', coder: '<>', reviewer: '👁', debugger: '🐛' };
 
-    // 删除不再存在的胶囊节点
+    // 删除不再存在的子代理组
     const incomingIds = new Set(capsules.map(c => String(c.id)));
-    Array.from(row.querySelectorAll('[data-cap-id]')).forEach(el => {
+    Array.from(row.querySelectorAll('.subagent-group[data-cap-id]')).forEach(el => {
       if (!incomingIds.has(el.dataset.capId)) el.remove();
     });
 
@@ -286,21 +286,30 @@ function handleStreamEvent(data) {
       const capId = String(cap.id);
       const status = forcedStatus || cap.status || 'running';
 
-      // 找或创建胶囊节点
-      let capEl = row.querySelector(`.subagent-capsule[data-cap-id="${capId}"]`);
+      // 找或创建子代理组（每个组包含胶囊+日志，横向排列的一列）
+      let group = row.querySelector(`.subagent-group[data-cap-id="${capId}"]`);
+      if (!group) {
+        group = document.createElement('div');
+        group.className = 'subagent-group';
+        group.dataset.capId = capId;
+        row.appendChild(group);
+      }
+
+      // 找或创建组内的胶囊节点
+      let capEl = group.querySelector('.subagent-capsule');
       if (!capEl) {
         capEl = document.createElement('div');
         capEl.className = 'subagent-capsule';
         capEl.dataset.capId = capId;
         capEl.onclick = (e) => {
-          if (e.target.closest('.subagent-log-inline')) return;  // 点击日志不折叠
-          const logEl = capEl.nextElementSibling;
-          if (logEl && logEl.classList.contains('subagent-log-inline')) {
+          if (e.target.closest('.subagent-log-inline')) return;
+          const logEl = group.querySelector('.subagent-log-inline');
+          if (logEl) {
             logEl.classList.toggle('collapsed');
             smartScroll(container);
           }
         };
-        row.appendChild(capEl);
+        group.appendChild(capEl);
       }
       const icon = iconMap[cap.agent_type] || '⚙';
       const initial = (cap.agent_type || '?')[0].toUpperCase();
@@ -316,14 +325,14 @@ function handleStreamEvent(data) {
         <span class="sa-badge">${icon} ${escapeHtml(cap.agent_type || '')} #${cap.id}</span>
       `;
 
-      // 找或创建 inline 日志节点（紧跟胶囊之后）
-      let logEl = capEl.nextElementSibling;
-      if (!logEl || !logEl.classList.contains('subagent-log-inline') || logEl.dataset.capId !== capId) {
+      // 找或创建组内的日志节点
+      let logEl = group.querySelector('.subagent-log-inline');
+      if (!logEl) {
         logEl = document.createElement('div');
         logEl.className = 'subagent-log-inline';
         logEl.dataset.capId = capId;
         logEl.innerHTML = '<pre></pre>';
-        capEl.insertAdjacentElement('afterend', logEl);
+        group.appendChild(logEl);
       }
       // 运行中默认展开，完成后保持展开状态
       if (status === 'running' && !logEl.dataset.collapsedByUser) {

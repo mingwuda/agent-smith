@@ -117,9 +117,9 @@
   @keyframes bounce { 0%,80%,100% { transform:translateY(0); } 40% { transform:translateY(-6px); } }
 
   /* 子代理胶囊 */
-  .subagent-row { margin:8px 0 4px; clear:both; max-width:85%; }
-  .subagent-row::after { content:''; display:table; clear:both; }
-  .subagent-capsule { display:inline-flex; align-items:center; gap:5px; padding:4px 10px 4px 5px; background:#f0f0f2; border:1px solid #e0e0e3; border-radius:18px; font-size:12px; cursor:pointer; transition:all .15s; max-width:260px; vertical-align:top; }
+  .subagent-row { display:flex; flex-flow:row wrap; gap:12px 16px; margin:8px 0 4px; align-items:flex-start; max-width:85%; }
+  .subagent-group { display:flex; flex-direction:column; gap:4px; min-width:0; max-width:280px; }
+  .subagent-capsule { display:inline-flex; align-items:center; gap:5px; padding:4px 10px 4px 5px; background:#f0f0f2; border:1px solid #e0e0e3; border-radius:18px; font-size:12px; cursor:pointer; transition:all .15s; max-width:260px; }
   .subagent-capsule:hover { background:#e5e5ea; border-color:#ccc; }
   .subagent-capsule .sa-icon { width:20px; height:20px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:9px; font-weight:700; color:#fff; flex-shrink:0; }
   .subagent-capsule .sa-icon.searcher { background:#7c5ce7; }
@@ -186,11 +186,11 @@
   .python-output { max-height:300px; overflow-y:auto; background:#1e1e1e; color:#d4d4d4; padding:10px 12px; border-radius:6px; font-size:12px; line-height:1.5; white-space:pre-wrap; word-break:break-word; margin:0; font-family:'SF Mono',Monaco,Menlo,Consolas,monospace; }
   .subagent-log { margin:10px 0; }
   .subagent-log pre { max-height:250px; overflow-y:auto; background:#f8f8fa; padding:8px 10px; border-radius:6px; font-size:12px; line-height:1.5; white-space:pre-wrap; word-break:break-word; margin:0; font-family:'SF Mono',Monaco,Menlo,Consolas,monospace; color:#333; border:1px solid #e0e0e3; }
-  /* 内联展开日志：胶囊正下方显示 */
-  .subagent-log-inline { max-width:480px; margin:2px 0 8px 4px; transition:max-height .2s ease, opacity .15s; overflow:hidden; }
-  .subagent-log-inline pre { max-height:120px; overflow-y:auto; background:#1c1c1e; color:#e8e8ed; padding:6px 10px; border-radius:6px; font-size:11px; line-height:1.45; white-space:pre-wrap; word-break:break-word; margin:0; font-family:'SF Mono',Monaco,Menlo,Consolas,monospace; border:1px solid #333; min-height:20px; }
-  .subagent-log-inline.collapsed pre { display:none; }
-  .subagent-log-inline.collapsed::before { content:"📋 点击胶囊查看日志"; color:#999; font-size:11px; padding:2px 0 6px; display:block; cursor:pointer; }
+  /* 内联展开日志：组内胶囊正下方显示 */
+  .subagent-group .subagent-log-inline { max-width:260px; margin:0; transition:max-height .2s ease, opacity .15s; overflow:hidden; }
+  .subagent-group .subagent-log-inline pre { max-height:120px; overflow-y:auto; background:#1c1c1e; color:#e8e8ed; padding:6px 10px; border-radius:6px; font-size:11px; line-height:1.45; white-space:pre-wrap; word-break:break-word; margin:0; font-family:'SF Mono',Monaco,Menlo,Consolas,monospace; border:1px solid #333; min-height:20px; }
+  .subagent-group .subagent-log-inline.collapsed pre { display:none; }
+  .subagent-group .subagent-log-inline.collapsed::before { content:"📋 点击胶囊查看日志"; color:#999; font-size:11px; padding:2px 0; display:block; cursor:pointer; }
   /* 子代理日志内容精简 */
   .subagent-log-inline pre .log-line { padding:1px 0; }
   .subagent-log-inline pre .log-line.info { color:#8ab4f8; }
