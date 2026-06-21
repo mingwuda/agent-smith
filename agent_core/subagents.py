@@ -357,12 +357,17 @@ def delegate_tasks_parallel(tasks_json: str) -> str:
             f"{item.result or item.error}"
         )
 
-    max_workers = min(len(items), 4)
+    max_workers = min(len(items), 2)  # 最多同时 2 个，避免触发 API 速率限制
     results = []
     errors = []
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = {pool.submit(run_one, item): i for i, item in enumerate(items)}
+        futures = {}
+        for i, item in enumerate(items):
+            # 每个子代理启动间隔 1s，避免同时打爆 API 限流
+            if i > 0:
+                time.sleep(1)
+            futures[pool.submit(run_one, item)] = i
         for future in as_completed(futures):
             idx = futures[future]
             try:
