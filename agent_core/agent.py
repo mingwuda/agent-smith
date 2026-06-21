@@ -901,6 +901,7 @@ class DesktopAgent:
                     
                     # 并行子代理完成：发送每个子任务的状态更新
                     if tool_name in {"delegate_tasks_parallel", "delegate_task"} and subagent_capsules:
+                        logger.info("[子代理] %s 执行完毕，准备合并...", tool_name)
                         try:
                             full_output = str(output)
                             updated = []
@@ -925,6 +926,7 @@ class DesktopAgent:
                                 "capsules": [dict(cap, status="done") for cap in subagent_capsules],
                             })
                         subagent_capsules = []
+                        logger.info("[子代理] subagent_end 已发送，等待父模型生成汇总回复...")
                     
                     # 重置推理上下文（但保留其他并行工具的进度状态）
                     in_tool_call = False
@@ -959,9 +961,11 @@ class DesktopAgent:
             raise
         except Exception as e:
             if _is_recursion_limit_error(e):
+                logger.warning("[流事件] 工具循环到达上限，结束任务")
                 final_buffer = _recursion_limit_message(run_config["recursion_limit"])
                 yield _sse({"type": "error", "content": final_buffer})
             else:
+                logger.error("[流事件] 异常: %s", e)
                 final_buffer = _connection_diagnostic(e, self.config)
                 yield _sse({"type": "error", "content": final_buffer})
             
