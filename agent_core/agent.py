@@ -737,6 +737,8 @@ class DesktopAgent:
         subagent_capsules: list[dict] = []  # 并行子代理任务胶囊数据
         _subagent_dispatched = False         # 是否已派发过子代理
         _post_subagent_tool_calls = 0        # 子代理完成后父模型继续调用的工具次数
+        subagent_end_sent_at = 0.0           # 子代理结束事件发送时间戳
+        last_model_activity_at = 0.0         # 最后一次模型活动（token/thought/tool）时间戳
         
         try:
             await self._compact_checkpoint_if_needed(run_config)
@@ -760,6 +762,17 @@ class DesktopAgent:
                         })
                     if running_tools:
                         last_progress_at = now
+                    # 子代理结束但父模型长时间没有产生任何内容，强制终止
+                    if subagent_end_sent_at and not running_tools and not loop_guard_triggered:
+                        idle = now - max(subagent_end_sent_at, last_model_activity_at)
+                        if idle >= 60:
+                            logger.warning("[子代理] subagent_end 后父模型 %d 秒无活动，强制终止", int(idle))
+                            loop_guard_triggered = True
+                            final_buffer = "✅ 所有子代理搜索已完成。\n\n（模型在汇总阶段超时，未返回完整汇总，以下为已收集的子代理结果片段）\n"
+                            yield _sse({"type": "done", "content": final_buffer})
+                            if pending_event and not pending_event.done():
+                                pending_event.cancel()
+                            break
                     continue
                 except StopAsyncIteration:
                     break
@@ -785,6 +798,7 @@ class DesktopAgent:
                         # 暂时作为 token 流式输出，但最终如果发现是推理会转为 thought
                         final_buffer += chunk.content
                         yield _sse({"type": "token", "content": chunk.content})
+                        last_model_activity_at = time.time()
                     elif has_content and in_tool_call:
                         # 工具调用后还在输出文本 → 这是下一轮思考或最终回复
                         # 这里不会走到，因为 tool start/end 会重置状态
@@ -809,6 +823,7 @@ class DesktopAgent:
                             break
                     
                     started_at = time.time()
+                    last_model_activity_at = time.time()
                     running_tools[run_id] = {
                         "name": tool_name,
                         "step": step_count,
@@ -946,6 +961,7 @@ class DesktopAgent:
                             })
                         subagent_capsules = []
                         logger.info("[子代理] subagent_end 已发送，等待父模型生成汇总回复...")
+                        subagent_end_sent_at = time.time()
                     
                     # 重置推理上下文（但保留其他并行工具的进度状态）
                     in_tool_call = False
