@@ -852,8 +852,10 @@ class DesktopAgent:
                     })
 
                     # 并行子代理：解析任务列表，发送子代理启动事件
-                    if tool_name in {"delegate_tasks_parallel", "delegate_task"} and isinstance(inp, dict):
+                    if tool_name in {"delegate_tasks_parallel", "delegate_task"}:
                         try:
+                            if not isinstance(inp, dict):
+                                inp = {"tasks_json": str(inp) if tool_name == "delegate_tasks_parallel" else str(inp)}
                             if tool_name == "delegate_tasks_parallel":
                                 raw_tasks = inp.get("tasks_json", "")
                                 sub_tasks = json.loads(raw_tasks) if isinstance(raw_tasks, str) else raw_tasks
@@ -877,8 +879,8 @@ class DesktopAgent:
                                         "type": "subagent_start",
                                         "capsules": capsules,
                                     })
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            logger.warning("[子代理] 解析胶囊失败 (tool=%s inp=%s): %s", tool_name, type(inp).__name__, exc)
 
                 # ── 工具结束 ──
                 elif kind == "on_tool_end":
