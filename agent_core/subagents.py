@@ -206,7 +206,7 @@ class SubagentManager:
                 configure_host_resolution(host, self._config.api_host_ips)
         llm = ChatOpenAI(
             model=self._config.model,
-            api_key=self._config.api_key,
+            api_key=self._config.api_key or "sk-no-key-required",
             base_url=self._config.base_url or None,
             temperature=0,
             max_retries=self._config.api_max_retries,
