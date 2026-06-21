@@ -735,6 +735,8 @@ class DesktopAgent:
         loop_guard_triggered = False
         tool_call_history: list[dict] = []
         subagent_capsules: list[dict] = []  # 并行子代理任务胶囊数据
+        _subagent_dispatched = False         # 是否已派发过子代理
+        _post_subagent_tool_calls = 0        # 子代理完成后父模型继续调用的工具次数
         
         try:
             await self._compact_checkpoint_if_needed(run_config)
@@ -793,6 +795,19 @@ class DesktopAgent:
                     step_count += 1
                     tool_name = event.get("name", "")
                     run_id = event.get("run_id", "")
+                    
+                    # 子代理完成后如果父模型还在调工具，最多允许 1 次，之后强制汇总
+                    if _subagent_dispatched and tool_name not in {"delegate_tasks_parallel", "delegate_task"}:
+                        _post_subagent_tool_calls += 1
+                        if _post_subagent_tool_calls >= 2:
+                            logger.warning("[防循环] 子代理完成后父模型已连续调用 %d 次工具，强制汇总", _post_subagent_tool_calls)
+                            loop_guard_triggered = True
+                            final_buffer = "✅ 所有子代理搜索已完成，开始汇总结果。\n\n（以下为归并总结）\n"
+                            yield _sse({"type": "done", "content": final_buffer})
+                            if pending_event and not pending_event.done():
+                                pending_event.cancel()
+                            break
+                    
                     started_at = time.time()
                     running_tools[run_id] = {
                         "name": tool_name,
@@ -856,6 +871,7 @@ class DesktopAgent:
                                         "status": "running",
                                     })
                                 if capsules:
+                                    _subagent_dispatched = True
                                     subagent_capsules = capsules
                                     yield _sse({
                                         "type": "subagent_start",
