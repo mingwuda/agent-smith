@@ -94,7 +94,7 @@ class AgentConfig:
     max_cost_per_day: float = 5.0
     recursion_limit: int = 60
     api_max_retries: int = 3
-    api_timeout_seconds: float = 60.0
+    api_timeout_seconds: float = 120.0
     api_host_ips: str = ""
     context_window_tokens: int = 0
     tavily_search_enabled: bool = False
@@ -189,7 +189,7 @@ class AgentConfig:
         config._normalize_providers(apply_legacy=apply_legacy)
         config.recursion_limit = max(1, int(config.recursion_limit or 60))
         config.api_max_retries = max(0, int(config.api_max_retries or 0))
-        config.api_timeout_seconds = max(60.0, float(config.api_timeout_seconds or 60.0))
+        config.api_timeout_seconds = max(60.0, float(config.api_timeout_seconds or 120.0))
         config.context_window_tokens = max(0, int(config.context_window_tokens or 0))
         
         # 3. 填充默认值

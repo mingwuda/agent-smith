@@ -23,7 +23,7 @@ function showGeneratingBadge(text = t('generating')) {
     generatingBadgeEl = document.createElement('div');
     generatingBadgeEl.className = 'generating-badge';
   }
-  generatingBadgeEl.innerHTML = `<span class="spin"></span> ${text}`;
+  generatingBadgeEl.innerHTML = `<span class="spin"></span> ${escapeHtml(unescapeDisplay(text))}`;
   if (currentBotMsgEl) {
     currentBotMsgEl.after(generatingBadgeEl);
   } else if (currentStepsEl) {
@@ -342,11 +342,11 @@ function handleStreamEvent(data) {
       const preEl = logEl.querySelector('pre');
       if (preEl) {
         if (status === 'done' && cap.result && !preEl.dataset.hasResult) {
-          const tail = `\n─── 完成 ───\n${String(cap.result).slice(0, 2000)}`;
+          const tail = `\n─── 完成 ───\n${unescapeDisplay(String(cap.result)).slice(0, 2000)}`;
           preEl.textContent += tail;
           preEl.dataset.hasResult = '1';
         } else if (status === 'error' && cap.result && !preEl.dataset.hasResult) {
-          preEl.textContent += `\n─── 失败 ───\n${String(cap.result).slice(0, 800)}`;
+          preEl.textContent += `\n─── 失败 ───\n${unescapeDisplay(String(cap.result)).slice(0, 800)}`;
           preEl.dataset.hasResult = '1';
         }
       }
@@ -368,7 +368,7 @@ function handleStreamEvent(data) {
       try {
         const d = JSON.parse(e.data || '{}');
         const prefix = d.cat === 'tool' ? '🔧 ' : d.cat === 'ai' ? '💭 ' : d.cat === 'error' ? '❌ ' : d.cat === 'done' ? '✅ ' : '';
-        preEl.textContent += `[${d.cat}] ${prefix}${d.text}\n`;
+        preEl.textContent += `[${d.cat}] ${prefix}${unescapeDisplay(d.text)}\n`;
         if (!logEl.classList.contains('collapsed')) smartScroll(container);
       } catch {}
     };
@@ -436,7 +436,7 @@ function handleStreamEvent(data) {
     ensureStepsContainer();
     const hint = document.createElement('div');
     hint.className = 'thinking-step';
-    hint.innerHTML = `<span>${text}</span><span class="dots"><span></span><span></span><span></span></span>`;
+    hint.innerHTML = `<span>${escapeHtml(unescapeDisplay(text))}</span><span class="dots"><span></span><span></span><span></span></span>`;
     currentStepsEl.appendChild(hint);
     smartScroll(container);
   }
@@ -509,8 +509,25 @@ function handleStreamEvent(data) {
       updateProgress();
 
       const toolIcon = getToolIcon(data.tool);
-      const argsStr = data.args ? JSON.stringify(data.args, null, 2) : '（无参数）';
       const toolName = data.tool || 'unknown';
+
+      // 渲染参数：run_python 的代码单独显示，其他工具显示 JSON 但还原转义换行
+      let argsHtml = '';
+      if (data.tool === 'run_python' && data.args && typeof data.args.code === 'string') {
+        const code = unescapeDisplay(data.args.code);
+        const cwd = data.args.cwd ? escapeHtml(String(data.args.cwd)) : '';
+        argsHtml = `
+          <div class="tool-section-label">代码</div>
+          <pre class="tool-code-block">${escapeHtml(code)}</pre>
+          ${cwd ? `<div style="color:#888;font-size:11px;margin-top:4px;">cwd: ${cwd}</div>` : ''}
+        `;
+      } else {
+        const argsStr = data.args ? JSON.stringify(data.args, null, 2) : '（无参数）';
+        argsHtml = `
+          <div class="tool-section-label">参数</div>
+          <pre class="tool-code-block">${escapeHtml(unescapeDisplay(argsStr))}</pre>
+        `;
+      }
 
       const cardDiv = document.createElement('div');
       cardDiv.className = 'tool-card open';
@@ -526,8 +543,7 @@ function handleStreamEvent(data) {
           <span class="tool-status-dot running" id="tool-status-${curStep}"></span>
         </div>
         <div class="tool-card-body">
-          <div class="tool-section-label">参数</div>
-          <pre class="tool-code-block">${escapeHtml(argsStr)}</pre>
+          ${argsHtml}
           <div id="tool-output-${curStep}"></div>
         </div>`;
       currentStepsEl.appendChild(cardDiv);
@@ -543,33 +559,69 @@ function handleStreamEvent(data) {
           '<pre class="python-output" id="python-out-' + curStep + '">等待输出...</pre>';
         cardDiv.querySelector('.tool-card-body').appendChild(pyBox);
         var outEl = document.getElementById('python-out-' + curStep);
-        // 用 fetch 轮询 JSON 接口获取实时输出
+        // 使用 WebSocket 推送实时输出，替代 /tool-progress-json 轮询
+        var proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        var wsUrl = proto + '//' + window.location.host + '/ws/tool-progress';
         var seenCount = 0;
-        var pollTimer = setInterval(function() {
-          fetch('/tool-progress-json').then(function(r) { return r.json(); }).then(function(d) {
-            if (!d || !outEl) return;
+        var ws = null;
+        var reconnectTimer = null;
+        var reconnectAttempts = 0;
+        var maxReconnectAttempts = 3;
+        var wsClosed = false;
+        function scheduleReconnect() {
+          if (wsClosed || reconnectTimer || reconnectAttempts >= maxReconnectAttempts) return;
+          reconnectAttempts++;
+          reconnectTimer = setTimeout(function() {
+            reconnectTimer = null;
+            openWs();
+          }, 2000);
+        }
+        function openWs() {
+          if (wsClosed || reconnectTimer) return;
+          ws = new WebSocket(wsUrl);
+          ws.onopen = function() { reconnectAttempts = 0; };
+          ws.onmessage = function(ev) {
+            if (!outEl) return;
+            var d;
+            try { d = JSON.parse(ev.data); } catch (e) { return; }
             if (d.lines && d.lines.length > seenCount) {
               var newLines = d.lines.slice(seenCount);
               if (outEl.textContent === '等待输出...') outEl.textContent = '';
               for (var j = 0; j < newLines.length; j++) {
-                outEl.textContent += newLines[j] + '\n';
+                outEl.textContent += unescapeDisplay(newLines[j]) + '\n';
               }
               outEl.scrollTop = outEl.scrollHeight;
               seenCount = d.lines.length;
             }
-            if (!d.running && seenCount >= d.lines.length) {
-              clearInterval(pollTimer);
+            if (d.running === false) {
+              wsClosed = true;
+              closePythonProgress();
             }
-          }).catch(function() {});
-        }, 500);
-        // 5 秒后如果还没有实时日志，显示等待提示
+          };
+          ws.onerror = function() { scheduleReconnect(); };
+          ws.onclose = function() { scheduleReconnect(); };
+        }
+        openWs();
+        // 8 秒后如果还没有实时日志，显示等待提示
         setTimeout(function() {
           if (outEl && outEl.textContent === '等待输出...') {
             outEl.textContent = '等待输出中...（执行完成后会自动显示结果）';
           }
-        }, 5000);
-        // 保存定时器以便 tool_result 清理
-        _pythonProgressSource = { close: function() { clearInterval(pollTimer); } };
+        }, 8000);
+        // 保存关闭句柄以便 tool_result 清理
+        _pythonProgressSource = {
+          close: function() {
+            wsClosed = true;
+            if (reconnectTimer) {
+              clearTimeout(reconnectTimer);
+              reconnectTimer = null;
+            }
+            if (ws) {
+              try { ws.close(); } catch (e) {}
+              ws = null;
+            }
+          }
+        };
       }
       break;
 
@@ -600,7 +652,7 @@ function handleStreamEvent(data) {
             fullResult = data.result_full;
           }
           outArea.innerHTML = '<div class="tool-section-label">结果</div>' +
-            `<pre class="tool-code-block" style="${isError ? 'color:#fca5a5;' : ''}max-height:400px;overflow-y:auto;">${escapeHtml(String(fullResult))}</pre>`;
+            `<pre class="tool-code-block" style="${isError ? 'color:#fca5a5;' : ''}max-height:400px;overflow-y:auto;">${escapeHtml(unescapeDisplay(String(fullResult)))}</pre>`;
 
           // web_search 特殊处理：从结果中提取搜索来源并显示 badge
           if (data.tool === 'web_search') {

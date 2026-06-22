@@ -7,6 +7,18 @@ function escapeHtml(text) {
   return d.innerHTML;
 }
 
+// 将字符串中字面量的 \n \t \r \\ 还原为实际换行/制表符/反斜杠，用于展示后端 JSON 转义后的文本
+function unescapeDisplay(text) {
+  if (typeof text !== 'string') return text;
+  const placeholder = '\u0000';
+  return text
+    .replace(/\\\\/g, placeholder)
+    .replace(/\\n/g, '\n')
+    .replace(/\\t/g, '\t')
+    .replace(/\\r/g, '\r')
+    .replace(new RegExp(placeholder, 'g'), '\\');
+}
+
 /* escHtml：与 escapeHtml 不同，不转义引号。
    用于权限可视化表单的 <input value="..."> 和 <option> 文本，
    转义引号会导致表单显示 &quot; 实体。保留两者语义差异。 */
@@ -28,6 +40,7 @@ marked.setOptions({
 });
 
 function renderMarkdown(text) {
+  text = unescapeDisplay(String(text || ''));
   // ----- 数学公式渲染（KaTeX）-----
   // 直接嵌入 KaTeX HTML，不使用占位符方案。
   // marked 的 GFM 模式会保留 inline HTML，因此 KaTeX <span>/<div> 能原样通过。

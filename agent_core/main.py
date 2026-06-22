@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import quote
 
-from fastapi import FastAPI, HTTPException, Request, Response, Query
+from fastapi import FastAPI, HTTPException, Request, Response, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -192,6 +192,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# 当前活跃的 Python 工具进度 WebSocket 连接
+_active_tool_progress_ws: set[WebSocket] = set()
 
 
 @app.middleware("http")
@@ -1119,6 +1122,7 @@ async def run_agent_stream(req: RunRequest, request: Request):
         final_content = ""
         error_content = ""
         forwarded_terminal_event = False
+        yielded_count = 0
         if model_override:
             yield f"data: {json.dumps({'type': 'model_switch', 'model': model_override, 'reason': '图片输入'}, ensure_ascii=False)}\n\n"
         stream = agent.stream_run(
@@ -1130,10 +1134,13 @@ async def run_agent_stream(req: RunRequest, request: Request):
         try:
             async for sse_event in stream:
                 if await request.is_disconnected():
+                    logger.info("[run/stream] 客户端断开，停止事件流")
                     await stream.aclose()
                     return
                 if sse_event.strip() == "data: [DONE]":
                     continue
+                yielded_count += 1
+                logger.debug("[run/stream] yield event: %s", sse_event[:80])
                 if '"type": "tool_start"' in sse_event:
                     try:
                         m = re.search(r'data: ({.*})', sse_event)
@@ -1186,17 +1193,27 @@ async def run_agent_stream(req: RunRequest, request: Request):
             await stream.aclose()
             yield f"data: {json.dumps({'type': 'error', 'content': f'服务内部错误: {e}'}, ensure_ascii=False)}\n\n"
             return
-        
+
+        logger.info(
+            "[run/stream] stream_run 返回: yielded_count=%d, final_content_len=%d, error_content_len=%d, forwarded_terminal=%s",
+            yielded_count,
+            len(final_content),
+            len(error_content),
+            forwarded_terminal_event,
+        )
         try:
             final_content = final_content or ""
             if final_content:
                 final_content = _append_artifact_links(final_content, uid, artifact_paths)
+                logger.info("[run/stream] 发送 done: content_len=%d", len(final_content))
                 yield f"data: {json.dumps({'type': 'done', 'content': final_content}, ensure_ascii=False)}\n\n"
                 _save_assistant_result(uid, session_id, req.message, final_content, collected_steps)
             elif error_content:
+                logger.info("[run/stream] 保存 error 结果: error_len=%d", len(error_content))
                 _save_assistant_result(uid, session_id, req.message, "❌ " + error_content, collected_steps)
             elif artifact_paths:
                 summary = _append_artifact_links("任务已完成，文件已保存。", uid, artifact_paths)
+                logger.info("[run/stream] 发送 artifact 总结: %s", summary)
                 yield f"data: {json.dumps({'type': 'done', 'content': summary}, ensure_ascii=False)}\n\n"
                 _save_assistant_result(uid, session_id, req.message, summary, collected_steps)
             elif not forwarded_terminal_event:
@@ -1205,8 +1222,11 @@ async def run_agent_stream(req: RunRequest, request: Request):
                     "这通常发生在接近最大推理步数时，模型仍在继续调用工具。"
                     f"当前最大推理步数为 {agent.config.recursion_limit}，可以提高该值，或把任务拆小后重试。"
                 )
+                logger.info("[run/stream] 发送 fallback: %s", fallback)
                 yield f"data: {json.dumps({'type': 'done', 'content': fallback}, ensure_ascii=False)}\n\n"
                 _save_assistant_result(uid, session_id, req.message, fallback, collected_steps)
+            else:
+                logger.info("[run/stream] 已转发 terminal 事件，不再发送兜底")
         except Exception as e:
             logger.exception("SSE 流处理异常")
             err_msg = f"服务内部错误: {e}"
@@ -1610,7 +1630,7 @@ class SettingsRequest(BaseModel):
     base_url: str = ""
     recursion_limit: int = 60
     api_max_retries: int = 3
-    api_timeout_seconds: float = 60.0
+    api_timeout_seconds: float = 120.0
     api_host_ips: str = ""
     context_window_tokens: int = 0
     tavily_search_enabled: bool = False
@@ -1642,7 +1662,7 @@ def save_settings(req: SettingsRequest, request: Request):
     )
     cfg.recursion_limit = max(1, int(req.recursion_limit or 60))
     cfg.api_max_retries = max(0, int(req.api_max_retries or 0))
-    cfg.api_timeout_seconds = max(60.0, float(req.api_timeout_seconds or 60.0))
+    cfg.api_timeout_seconds = max(60.0, float(req.api_timeout_seconds or 120.0))
     cfg.api_host_ips = req.api_host_ips or cfg.api_host_ips
     cfg.context_window_tokens = max(0, int(req.context_window_tokens or 0))
     cfg.tavily_search_enabled = bool(req.tavily_search_enabled)
@@ -1845,7 +1865,7 @@ async def tool_progress_stream(request: Request):
 
 @app.get("/tool-progress-json")
 async def tool_progress_json():
-    """Python 执行进度 JSON 接口（供前端 fetch 轮询）"""
+    """Python 执行进度 JSON 接口（供前端 fetch 轮询，保留兼容）"""
     from tools import code_tools as _ct
     lines, total = _ct.get_progress_since(0)
     return {
@@ -1853,6 +1873,49 @@ async def tool_progress_json():
         "total": total,
         "running": _ct.is_progress_running(),
     }
+
+
+@app.websocket("/ws/tool-progress")
+async def tool_progress_ws(websocket: WebSocket):
+    """Python 执行实时进度 WebSocket（替代 /tool-progress-json 轮询）"""
+    await websocket.accept()
+    _active_tool_progress_ws.add(websocket)
+    last_count = 0
+    max_idle_loops = 600  # 0.5s * 600 = 300s = 5 分钟无输出/无工具则关闭
+    idle_loops = 0
+    try:
+        while True:
+            await asyncio.sleep(0.5)
+            lines, idx = code_tools.get_progress_since(0)
+            running = code_tools.is_progress_running()
+            filtered_lines = [l.rstrip() for l in lines if l.rstrip()]
+            if len(filtered_lines) > last_count:
+                await websocket.send_json({
+                    "lines": filtered_lines,
+                    "total": idx,
+                    "running": running,
+                })
+                last_count = len(filtered_lines)
+                idle_loops = 0
+            elif not running:
+                # 工具已结束，发送最终状态后关闭
+                if last_count > 0 or idle_loops > 0:
+                    await websocket.send_json({
+                        "lines": filtered_lines,
+                        "total": idx,
+                        "running": False,
+                    })
+                break
+            else:
+                idle_loops += 1
+                if idle_loops >= max_idle_loops:
+                    break
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        logger.warning("tool-progress WebSocket 异常: %s", e)
+    finally:
+        _active_tool_progress_ws.discard(websocket)
 
 
 # ── 子代理实时日志流 ──

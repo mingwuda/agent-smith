@@ -210,13 +210,13 @@ def _connection_diagnostic(exc: Exception, config: AgentConfig) -> str:
         ])
     if exc_name == "ReadTimeout" or "ReadTimeout" in message:
         return "\n".join([
-            message,
+            message or "ReadTimeout: 模型响应读超时",
             (
                 f"模型响应读超时：当前 provider={config.active_provider}，model={config.model}，"
                 f"timeout={config.api_timeout_seconds}s，base_url={config.base_url or '默认 OpenAI'}。"
             ),
             "这通常表示模型网关已连接，但在超时时间内没有返回下一段响应；长上下文、工具结果较多或模型端排队都会触发。",
-            "可以新开会话减少上下文，或把 AGENT_API_TIMEOUT_SECONDS 临时调大到 60 再重试。",
+            "可以新开会话减少上下文，或在设置里把 AGENT_API_TIMEOUT_SECONDS 临时调大到 180 再重试。",
         ])
     if exc_name != "APIConnectionError" and "Connection error" not in str(exc):
         return message
@@ -703,7 +703,61 @@ class DesktopAgent:
             self._hydrated_threads.add(thread_key)
             if attachments:
                 await self._strip_checkpoint_images(config, graph)
-    
+
+    async def _stream_events_with_heartbeat(
+        self,
+        graph,
+        input_data: dict,
+        run_config: dict,
+        heartbeat_interval: float = 2.0,
+    ) -> AsyncGenerator[dict, None]:
+        """流式获取 LangGraph 事件，并定期产生心跳事件。
+
+        心跳事件格式为 {"_heartbeat": True}。此实现用独立的心跳任务替代
+        asyncio.shield，避免底层事件任务异常未被消费而触发 asyncio 的
+        "exception in shielded future" 告警。
+        """
+        event_iter = graph.astream_events(input_data, run_config, version="v2").__aiter__()
+        event_task = asyncio.create_task(event_iter.__anext__())
+        heartbeat_task = asyncio.create_task(asyncio.sleep(heartbeat_interval))
+        try:
+            while True:
+                done, _pending = await asyncio.wait(
+                    {event_task, heartbeat_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if heartbeat_task in done:
+                    try:
+                        heartbeat_task.result()
+                    except asyncio.CancelledError:
+                        return
+                    logger.debug("[stream_run] 心跳")
+                    yield {"_heartbeat": True}
+                    heartbeat_task = asyncio.create_task(asyncio.sleep(heartbeat_interval))
+                    continue
+
+                if event_task in done:
+                    try:
+                        event = event_task.result()
+                    except StopAsyncIteration:
+                        return
+                    yield event
+                    event_task = asyncio.create_task(event_iter.__anext__())
+        finally:
+            if not event_task.done():
+                event_task.cancel()
+            if not heartbeat_task.done():
+                heartbeat_task.cancel()
+            # 消费未处理的任务异常，避免 asyncio 产生 "exception in shielded future" 告警
+            for task in (event_task, heartbeat_task):
+                if task.done() and not task.cancelled():
+                    try:
+                        task.result()
+                    except (StopAsyncIteration, asyncio.CancelledError):
+                        pass
+                    except Exception:
+                        pass
+
     async def stream_run(
         self,
         message: str,
@@ -730,7 +784,6 @@ class DesktopAgent:
         usage_recorded = False
         running_tools: dict[str, dict] = {}   # run_id -> {name, step, started_at}
         last_progress_at = 0.0
-        pending_event = None
         cancelled = False
         loop_guard_triggered = False
         tool_call_history: list[dict] = []
@@ -742,13 +795,16 @@ class DesktopAgent:
         last_model_activity_at = 0.0         # 最后一次模型活动（token/thought/tool）时间戳
         
         try:
+            logger.info(
+                "[stream_run] 开始: thread_id=%s, model=%s, timeout=%s, message_len=%d",
+                self._thread_id,
+                model_override or self.config.model,
+                self.config.api_timeout_seconds,
+                len(message),
+            )
             await self._compact_checkpoint_if_needed(run_config)
-            event_iter = graph.astream_events(input_data, run_config, version="v2").__aiter__()
-            pending_event = asyncio.create_task(event_iter.__anext__())
-            while True:
-                try:
-                    event = await asyncio.wait_for(asyncio.shield(pending_event), timeout=2.0)
-                except asyncio.TimeoutError:
+            async for event in self._stream_events_with_heartbeat(graph, input_data, run_config):
+                if event.get("_heartbeat"):
                     now = time.time()
                     # 发送所有正在运行的工具进度
                     for rid, tinfo in list(running_tools.items()):
@@ -772,16 +828,12 @@ class DesktopAgent:
                             loop_guard_triggered = True
                             final_buffer = "✅ 所有子代理搜索已完成。\n\n（模型在汇总阶段超时，未返回完整汇总，以下为已收集的子代理结果片段）\n"
                             yield _sse({"type": "done", "content": final_buffer})
-                            if pending_event and not pending_event.done():
-                                pending_event.cancel()
                             break
                     continue
-                except StopAsyncIteration:
-                    break
-                pending_event = asyncio.create_task(event_iter.__anext__())
 
                 kind = event["event"]
                 node = event.get("metadata", {}).get("langgraph_node", "")
+                logger.debug("[stream_run] 事件: kind=%s node=%s", kind, node)
                 
                 # ── LLM 流式 token ──
                 if kind == "on_chat_model_stream" and node == "agent":
@@ -822,8 +874,6 @@ class DesktopAgent:
                             loop_guard_triggered = True
                             final_buffer = "✅ 所有子代理搜索已完成，开始汇总结果。\n\n（以下为归并总结）\n"
                             yield _sse({"type": "done", "content": final_buffer})
-                            if pending_event and not pending_event.done():
-                                pending_event.cancel()
                             break
                     
                     started_at = time.time()
@@ -978,8 +1028,6 @@ class DesktopAgent:
                         loop_guard_triggered = True
                         final_buffer = _loop_guard_message(loop_reason, tool_call_history, run_config["recursion_limit"])
                         yield _sse({"type": "error", "content": final_buffer})
-                        if pending_event and not pending_event.done():
-                            pending_event.cancel()
                         break
                 elif kind == "on_chat_model_end" and node == "agent":
                     output = event.get("data", {}).get("output")
@@ -990,21 +1038,19 @@ class DesktopAgent:
         
         except asyncio.CancelledError:
             cancelled = True
-            if pending_event and not pending_event.done():
-                pending_event.cancel()
+            logger.info("[stream_run] 被取消")
             raise
         except GeneratorExit:
             cancelled = True
-            if pending_event and not pending_event.done():
-                pending_event.cancel()
+            logger.info("[stream_run] GeneratorExit")
             raise
         except Exception as e:
             if _is_recursion_limit_error(e):
-                logger.warning("[流事件] 工具循环到达上限，结束任务")
+                logger.warning("[stream_run] 工具循环到达上限，结束任务")
                 final_buffer = _recursion_limit_message(run_config["recursion_limit"])
                 yield _sse({"type": "error", "content": final_buffer})
             else:
-                logger.error("[流事件] 异常: %s", e)
+                logger.error("[stream_run] 异常: %s", e, exc_info=True)
                 final_buffer = _connection_diagnostic(e, self.config)
                 yield _sse({"type": "error", "content": final_buffer})
             
@@ -1034,8 +1080,14 @@ class DesktopAgent:
                 subagent_capsules = []
         
         finally:
-            if pending_event and not pending_event.done():
-                pending_event.cancel()
+            logger.info(
+                "[stream_run] 结束: thread_id=%s, cancelled=%s, loop_guard=%s, final_len=%d, usage_recorded=%s",
+                self._thread_id,
+                cancelled,
+                loop_guard_triggered,
+                len(final_buffer),
+                usage_recorded,
+            )
             self._hydrated_threads.add(thread_key)
             if attachments:
                 await self._strip_checkpoint_images(run_config, graph)

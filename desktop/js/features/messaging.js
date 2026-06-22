@@ -15,6 +15,7 @@ messages.addEventListener('click', (event) => {
 // ---------- 消息渲染 ----------
 
 function addMessage(text, role) {
+  text = unescapeDisplay(String(text || ''));
   const div = document.createElement('div');
   div.className = `msg ${role}`;
   if (role === 'bot') {

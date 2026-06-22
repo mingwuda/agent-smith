@@ -154,7 +154,7 @@ python generate_login_url.py --host 127.0.0.1 --port 8899 --expires 300 --user a
 | `AGENT_PORT` | 监听端口 | `8899` |
 | `AGENT_RECURSION_LIMIT` | 最大推理步数 | `60` |
 | `AGENT_API_MAX_RETRIES` | 模型连接错误重试次数 | `3` |
-| `AGENT_API_TIMEOUT_SECONDS` | 模型请求超时秒数 | `60` |
+| `AGENT_API_TIMEOUT_SECONDS` | 模型请求超时秒数 | `120` |
 | `AGENT_CONTEXT_WINDOW_TOKENS` | 手动指定模型上下文窗口 | 自动识别 |
 | `AGENT_API_HOST_IPS` | 自定义模型网关 DNS 兜底 IP 列表 | 空 |
 | `AGENT_USERS` | 多用户列表 `user1:pass1;user2:pass2` | 空 |

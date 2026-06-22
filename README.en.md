@@ -145,7 +145,7 @@ Common environment variables:
 | `AGENT_PORT` | Listen port | `8899` |
 | `AGENT_RECURSION_LIMIT` | Max reasoning steps | `60` |
 | `AGENT_API_MAX_RETRIES` | Model connection retries | `3` |
-| `AGENT_API_TIMEOUT_SECONDS` | Model request timeout seconds | `30` |
+| `AGENT_API_TIMEOUT_SECONDS` | Model request timeout seconds | `120` |
 | `AGENT_CONTEXT_WINDOW_TOKENS` | Manual model context window | auto-detect |
 | `AGENT_API_HOST_IPS` | Fallback DNS IP list for custom model gateways | empty |
 | `DESKTOP_AGENT_AUTH_COOKIE_SECURE` | Send cookie over HTTPS only | `0` |

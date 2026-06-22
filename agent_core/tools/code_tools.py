@@ -2,7 +2,9 @@
 import difflib
 import json
 import os
+import subprocess
 import sys
+import tempfile
 import threading
 from io import StringIO
 from pathlib import Path
@@ -131,18 +133,52 @@ def run_python(code: str) -> str:
     workspace = resolve_workspace()
     before_snapshot = _snapshot_files(workspace)
 
-    # ── 执行代码（使用 _ProgressIO 实时推送到全局进度）──
-    old_stdout = sys.stdout
-    captured = _ProgressIO()
-    sys.stdout = captured
+    # ── 执行代码（在独立子进程中运行，避免阻塞事件循环并支持超时）──
+    output = ""
+    temp_path = None
     try:
-        exec(code, {"__builtins__": __builtins__})
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".py", delete=False, encoding="utf-8", dir=workspace
+        ) as f:
+            f.write(code)
+            temp_path = f.name
+
+        proc = subprocess.Popen(
+            [sys.executable, temp_path],
+            cwd=workspace,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+
+        def _reader():
+            nonlocal output
+            for line in proc.stdout:
+                line = line.rstrip("\n")
+                output += line + "\n"
+                with _progress_lock:
+                    _progress_lines.append(line)
+
+        reader_thread = threading.Thread(target=_reader, daemon=True)
+        reader_thread.start()
+
+        proc.wait()
+        reader_thread.join(timeout=5)
+
+        if proc.returncode != 0:
+            return f"❌ 执行出错 (exit {proc.returncode}): {output or '（无输出）'}"
+
     except Exception as e:
         return f"❌ 执行出错: {type(e).__name__}: {e}"
     finally:
-        sys.stdout = old_stdout
         _progress_running = False
-    output = captured.getvalue()
+        if temp_path:
+            try:
+                os.unlink(temp_path)
+            except Exception:
+                pass
 
     # ── 执行后检测文件内容变化 ──
     diffs = []
