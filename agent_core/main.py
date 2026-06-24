@@ -2220,7 +2220,7 @@ async def wechat_qrcode(request: Request):
     data = await bot.get_qrcode()
     if "qrcode_img_content" in data:
         data["qrcode_img_base64"] = _base64.b64encode(
-            data.pop("qrcode_img_content")
+            data.pop("qrcode_img_content").encode("utf-8")
         ).decode()
     return data
 
