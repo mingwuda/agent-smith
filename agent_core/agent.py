@@ -4,6 +4,7 @@ import json
 import socket
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import AsyncGenerator, Optional
 from urllib.parse import urlparse
 
@@ -480,6 +481,17 @@ class DesktopAgent:
             + f"- 当前时间：{now.strftime('%Y-%m-%d %H:%M:%S %Z%z')}\n"
             + "- 遇到\u201c今天/昨日/今年/最新/current/latest/recent\u201d等相对时间时，必须以这里的日期为准。\n"
         )
+
+        # ── 注入项目根目录的 AGENTS.md（如果存在）──
+        try:
+            agents_md_path = Path(__file__).resolve().parent.parent / "AGENTS.md"
+            if agents_md_path.exists():
+                agents_content = agents_md_path.read_text(encoding="utf-8").strip()
+                if agents_content:
+                    prompt += "\n\n" + agents_content
+        except Exception:
+            pass
+
         skill_block = self.registry.generate_prompt_block()
         if skill_block:
             prompt += skill_block
