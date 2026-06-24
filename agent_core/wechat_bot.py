@@ -222,8 +222,12 @@ class WeChatBot:
 
         # 发送回复
         if reply:
-            await self.send_message(from_user, context_token, reply)
-            logger.info("[微信Bot] 回复: %s", reply[:120])
+            send_resp = await self.send_message(from_user, context_token, reply)
+            send_ret = send_resp.get("ret", -1)
+            if send_ret != 0:
+                logger.warning("[微信Bot] sendmessage 返回 ret=%s: %s", send_ret, send_resp.get("err_msg", ""))
+            else:
+                logger.info("[微信Bot] 回复: %s", reply[:120])
 
     # ── 生命周期 ──────────────────────────────────
 
