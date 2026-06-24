@@ -346,6 +346,65 @@ triggers: [debug, 排查, 根因]
 
 ---
 
+## 微信集成
+
+AgentSmith 通过**腾讯官方 iLink Bot API** 接入微信个人号，让你可以直接在微信里与 Agent 对话。
+
+### 特性
+
+- **官方合法**：基于腾讯 iLink 协议，有法律条款背书，无封号风险
+- **无需公网 IP**：客户端主动长轮询微信服务器，不需要 ngrok / frp / 公网域名
+- **扫码一次，永久使用**：Token 持久化到本地文件，服务重启后自动恢复轮询
+- **信息零存储**：腾讯仅做消息管道中转，不存储你的消息内容和 AI 输出
+- **会话同步**：微信中的对话自动保存到 Web 端会话列表，带 💬 图标标识
+
+### 使用步骤
+
+#### 1. 安装依赖
+
+```bash
+pip install qrcode[pil]
+```
+
+#### 2. 重启服务
+
+确保后端已加载最新代码（`agent_core/wechat_bot.py`）。
+
+#### 3. 扫码登录
+
+浏览器访问：
+
+```
+http://localhost:8899/wechat/qrcode
+```
+
+页面会显示微信登录二维码，用手机微信扫码并确认。扫码成功后 Bot 自动开始轮询消息。
+
+#### 4. 开始使用
+
+在微信里给 Bot 发送消息，Agent 会自动回复。回复内容会同步显示在 Web 端的会话列表中（带 💬 图标标记）。
+
+### 管理端点
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/wechat/qrcode` | GET | 微信扫码登录页面（返回 HTML） |
+| `/wechat/qrcode-status?qrcode=xxx` | GET | 轮询扫码状态 |
+| `/wechat/status` | GET | 查看登录/运行状态 |
+| `/wechat/start` | POST | 手动启动消息轮询 |
+| `/wechat/stop` | POST | 停止消息轮询 |
+| `/wechat/sessions` | GET | 列出微信 Bot 会话列表 |
+| `/wechat/sessions/{id}` | GET | 获取微信会话消息详情 |
+
+### 注意事项
+
+- 首次使用必须先扫码登录（一次即可，Token 持久化）
+- Agent 处理消息需要一定时间（通常 30-60 秒），处理期间微信会显示"对方正在输入..."
+- 目前只支持 1 对 1 私聊，不支持群消息
+- 腾讯保留控制权，可能会限速或调整策略
+
+---
+
 ## 数据库交互
 
 AgentSmith 内置 `dbcli` 数据库交互系统，让 Agent 可以直接用自然语言与数据库对话。
@@ -513,6 +572,12 @@ http://127.0.0.1:8899/docs
 | `/db/permissions` | GET/PUT | 读写权限配置 |
 | `/db/query` | POST | 执行 SQL 查询（含权限检查） |
 | `/db/schema/{connection_name}` | GET | 获取数据库表结构 |
+| `/wechat/qrcode` | GET | 微信扫码登录页 |
+| `/wechat/status` | GET | 微信 Bot 状态 |
+| `/wechat/start` | POST | 启动微信轮询 |
+| `/wechat/stop` | POST | 停止微信轮询 |
+| `/wechat/sessions` | GET | 微信会话列表 |
+| `/wechat/sessions/{id}` | GET | 微信会话消息 |
 | `/health` | GET | 健康检查 |
 
 除登录、退出、Token 登录和健康检查外，其它 API 都需要登录。

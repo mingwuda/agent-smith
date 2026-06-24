@@ -282,6 +282,65 @@ Currently 13 built-in skills:
 
 ---
 
+## WeChat Integration
+
+AgentSmith supports connecting to **WeChat personal accounts** through Tencent's official **iLink Bot API**, allowing you to chat with your AI Agent directly from WeChat.
+
+### Highlights
+
+- **Official & Legal**: Based on Tencent's iLink protocol with legal Terms of Service — no ban risk
+- **No Public IP Required**: Uses client-side long polling, no ngrok / frp / public domain needed
+- **One-time QR Scan**: Token is persisted to disk; polling resumes automatically after server restart
+- **Zero Data Storage**: Tencent only relays messages without storing your inputs or AI outputs
+- **Session Sync**: WeChat conversations are saved and visible in the web UI with a 💬 badge
+
+### Getting Started
+
+#### 1. Install dependency
+
+```bash
+pip install qrcode[pil]
+```
+
+#### 2. Restart the server
+
+Make sure the latest code (including `agent_core/wechat_bot.py`) is loaded.
+
+#### 3. Scan the QR code
+
+Open in your browser:
+
+```
+http://localhost:8899/wechat/qrcode
+```
+
+A QR code page will appear. Scan it with WeChat on your phone and confirm. The bot will automatically start polling for messages.
+
+#### 4. Start chatting
+
+Send a message to the bot on WeChat. The Agent will reply — responses are also saved to the web UI session list with a 💬 icon.
+
+### Management Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/wechat/qrcode` | GET | WeChat QR code login page (returns HTML) |
+| `/wechat/qrcode-status?qrcode=xxx` | GET | Poll QR code scan status |
+| `/wechat/status` | GET | Bot login/running status |
+| `/wechat/start` | POST | Start message polling |
+| `/wechat/stop` | POST | Stop message polling |
+| `/wechat/sessions` | GET | List WeChat bot sessions |
+| `/wechat/sessions/{id}` | GET | Get WeChat session messages |
+
+### Notes
+
+- QR scan is required only once (token is persisted)
+- Responses may take 30–60 seconds; WeChat shows "typing..." during processing
+- Currently supports 1-on-1 direct messages only (no group chat)
+- Tencent reserves the right to rate-limit or adjust service policies
+
+---
+
 ## Database Interaction
 
 AgentSmith includes a built-in `dbcli` database interaction system that allows the Agent to talk to databases in natural language.
@@ -386,6 +445,12 @@ Main endpoints:
 | `/db/permissions` | GET/PUT | Read/write permission config |
 | `/db/query` | POST | Execute SQL query (with permission check) |
 | `/db/schema/{connection_name}` | GET | Get database schema |
+| `/wechat/qrcode` | GET | WeChat QR login page |
+| `/wechat/status` | GET | WeChat bot status |
+| `/wechat/start` | POST | Start WeChat polling |
+| `/wechat/stop` | POST | Stop WeChat polling |
+| `/wechat/sessions` | GET | WeChat session list |
+| `/wechat/sessions/{id}` | GET | WeChat session messages |
 | `/health` | GET | Health check |
 
 All APIs except login, logout, token login, and health check require authentication.
