@@ -20,6 +20,7 @@ from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException, Request, Response, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 import uvicorn
@@ -2212,23 +2213,71 @@ async def wechat_status(request: Request):
         "running": bot.is_running,
     }
 
-@app.get("/wechat/qrcode")
+@app.get("/wechat/qrcode", response_class=HTMLResponse)
 async def wechat_qrcode(request: Request):
-    """获取微信登录二维码"""
+    """获取微信登录二维码（返回可直接扫码的 HTML 页面）"""
     bot: WeChatBot = request.app.state.wechat_bot
     data = await bot.get_qrcode()
-    # qrcode_img_content 是 WeChat 登录页 URL，用它作为二维码数据
+    qrcode_str = data.get("qrcode", "")
     img_url = data.pop("qrcode_img_content", None)
-    qr_data = img_url or f"https://liteapp.weixin.qq.com/q/{data.get('qrcode', '')}"
+    qr_data = img_url or f"https://liteapp.weixin.qq.com/q/{qrcode_str}"
+
+    # 生成二维码 PNG
+    img_b64 = ""
     try:
         img = qrcode.make(qr_data)
         buf = BytesIO()
         img.save(buf, format="PNG")
-        data["qrcode_img_base64"] = base64.b64encode(buf.getvalue()).decode()
+        img_b64 = base64.b64encode(buf.getvalue()).decode()
     except Exception as e:
         logger.warning("生成二维码失败: %s", e)
-        data["qrcode_url"] = qr_data
-    return data
+
+    status_url = f"/wechat/qrcode-status?qrcode={qrcode_str}"
+    return HTMLResponse(f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>微信 Bot 扫码登录</title>
+<style>
+  body {{ font-family: -apple-system, sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; background: #f5f5f5; }}
+  .card {{ background: #fff; border-radius: 16px; padding: 40px; text-align: center; box-shadow: 0 2px 12px rgba(0,0,0,.08); }}
+  img {{ width: 280px; height: 280px; }}
+  .hint {{ color: #666; font-size: 14px; margin-top: 16px; }}
+  .status {{ color: #999; font-size: 13px; margin-top: 8px; }}
+  .success {{ color: #07c160; font-weight: bold; }}
+</style>
+</head>
+<body>
+<div class="card">
+  <h2>📱 微信 Bot 登录</h2>
+  <img src="data:image/png;base64,{img_b64}" alt="微信登录二维码" />
+  <div class="hint">请使用微信扫描二维码登录</div>
+  <div class="status" id="status">等待扫码...</div>
+</div>
+<script>
+(function() {{
+  var statusEl = document.getElementById('status');
+  function poll() {{
+    fetch('{status_url}')
+      .then(function(r) {{ return r.json(); }})
+      .then(function(d) {{
+        if (d.status === 'confirmed') {{
+          statusEl.innerHTML = '✅ <span class="success">扫码成功！Bot 已登录</span>';
+        }} else if (d.status === 'expired') {{
+          statusEl.innerHTML = '❌ 二维码已过期，请刷新页面重新获取';
+        }} else {{
+          statusEl.textContent = '等待扫码...（' + d.status + '）';
+          setTimeout(poll, 2000);
+        }}
+      }})
+      .catch(function() {{ setTimeout(poll, 2000); }});
+  }}
+  setTimeout(poll, 2000);
+}})();
+</script>
+</body>
+</html>""")
 
 @app.get("/wechat/qrcode-status")
 async def wechat_qrcode_status(qrcode: str, request: Request):
