@@ -100,6 +100,8 @@ class WeChatBot:
                     self.bot_base_url = data.get("baseurl") or ""
                     self._save_token()
                     logger.info("[微信Bot] 扫码登录成功")
+                    # 自动启动轮询
+                    await self.start()
                     return data
                 elif status == "expired":
                     logger.warning("[微信Bot] 二维码已过期")
