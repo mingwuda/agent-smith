@@ -154,14 +154,13 @@ class WeChatBot:
     ) -> dict:
         """发送文本消息"""
         base = self.bot_base_url or ILINK_BASE_URL
+        # 去掉 msg 包装层，使用与 sendtyping 一致的扁平结构
         payload = {
-            "msg": {
-                "to_user_id": to_user_id,
-                "message_type": 2,  # BOT 发出
-                "message_state": 2,  # FINISH（完整消息）
-                "context_token": context_token,
-                "item_list": [{"type": 1, "text_item": {"text": text}}],
-            },
+            "to_user_id": to_user_id,
+            "message_type": 2,  # BOT 发出
+            "message_state": 2,  # FINISH（完整消息）
+            "context_token": context_token,
+            "item_list": [{"type": 1, "text_item": {"text": text}}],
             "base_info": {"channel_version": "1.0.2"},
         }
         async with httpx.AsyncClient(timeout=30, trust_env=False) as client:
