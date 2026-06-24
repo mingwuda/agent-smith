@@ -151,6 +151,7 @@ def run_python(code: str) -> str:
             text=True,
             encoding="utf-8",
             errors="replace",
+            env={**os.environ, "PYTHONIOENCODING": "utf-8"},
         )
 
         def _reader():
