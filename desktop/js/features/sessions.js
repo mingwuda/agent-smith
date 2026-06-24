@@ -13,8 +13,8 @@ function renderSessionList(sessions, currentId) {
   container.innerHTML = sessions.map(s => {
     const isActive = s.id === currentId;
     const time = s.updated_at ? s.updated_at.slice(5, 16).replace('T', ' ') : '';
-    return `<div class="session-item ${isActive ? 'active' : ''}" data-id="${s.id}" onclick="switchSession('${s.id}')">
-      <div class="s-title">${escapeHtml(s.title || t('unnamed'))}</div>
+    return `<div class="session-item ${isActive ? 'active' : ''} ${s.source === 'wechat' ? 'session-wechat' : ''}" data-id="${s.id}" onclick="switchSession('${s.id}')">
+      <div class="s-title">${s.source === 'wechat' ? '<span class="wechat-icon" title="微信会话">💬</span> ' : ''}${escapeHtml(s.title || t('unnamed'))}</div>
       <div class="s-meta">
         <span>${escapeHtml(t('messagesCount', { count: s.message_count || 0 }))}</span>
         <span>${time}</span>

@@ -1427,6 +1427,7 @@ class SessionInfo(BaseModel):
     created_at: str
     updated_at: str
     message_count: int
+    source: str = "web"  # "web" 或 "wechat"
 
 
 class SessionListResponse(BaseModel):
@@ -1438,6 +1439,7 @@ class SessionMessagesResponse(BaseModel):
     id: str
     title: str
     messages: list[dict]
+    source: str = "web"
 
 
 class RenameRequest(BaseModel):
@@ -1451,35 +1453,36 @@ class CreateSessionResponse(BaseModel):
 
 @app.get("/sessions", response_model=SessionListResponse)
 def list_sessions(request: Request):
-    """列出当前用户的会话"""
+    """列出当前用户的会话（含微信 Bot 会话）"""
     uid = _get_current_user(request)
-    raw = session_store.list_sessions(uid)
     sessions = [
-        SessionInfo(
-            id=s["id"],
-            title=s.get("title", "未命名"),
-            created_at=s.get("created_at", ""),
-            updated_at=s.get("updated_at", ""),
-            message_count=s.get("message_count", 0),
-        )
-        for s in raw
+        SessionInfo(**s, source="web")
+        for s in session_store.list_sessions(uid)
     ]
-    # 返回会话列表中最新的会话 ID，如果没有则返回 "default"
+    # 合并微信 Bot 会话
+    for s in session_store.list_sessions("wechat"):
+        if not any(ex.id == s["id"] for ex in sessions):
+            sessions.append(SessionInfo(**s, source="wechat"))
+    sessions.sort(key=lambda s: s.updated_at, reverse=True)
     current_id = sessions[0].id if sessions else "default"
     return SessionListResponse(sessions=sessions, current_id=current_id)
 
 
 @app.get("/sessions/{session_id}", response_model=SessionMessagesResponse)
 def get_session(session_id: str, request: Request):
-    """获取当前用户的会话消息"""
+    """获取当前用户的会话消息（也支持微信 Bot 会话）"""
     uid = _get_current_user(request)
     session = session_store.get_session(uid, session_id)
+    # 如果当前用户没有，尝试从微信 Bot 会话中查找
+    if not session:
+        session = session_store.get_session("wechat", session_id)
     if not session:
         raise HTTPException(404, "会话不存在")
     return SessionMessagesResponse(
         id=session["id"],
         title=session.get("title", "未命名"),
         messages=session.get("messages", []),
+        source="wechat" if session_store.get_session("wechat", session_id) else "web",
     )
 
 
@@ -1493,9 +1496,11 @@ def create_session(request: Request):
 
 @app.delete("/sessions/{session_id}")
 def delete_session(session_id: str, request: Request):
-    """删除会话"""
+    """删除会话（也支持微信 Bot 会话）"""
     uid = _get_current_user(request)
     ok = session_store.delete_session(uid, session_id)
+    if not ok:
+        ok = session_store.delete_session("wechat", session_id)
     if not ok:
         raise HTTPException(404, "会话不存在")
     return {"status": "ok", "message": f"已删除会话 {session_id}"}

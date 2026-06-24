@@ -137,6 +137,7 @@
     border-radius:50%; animation:spin .6s linear infinite;
   }
   .session-item.loading .s-del { visibility:hidden; }
+  .session-item .wechat-icon { font-size:13px; margin-right:4px; vertical-align:middle; }
 
   /* ═══ 数据库设置内部二级页签 ═══ */
   .db-inner-tabs {
