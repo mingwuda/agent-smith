@@ -80,7 +80,7 @@ class WeChatBot:
 
     async def get_qrcode(self) -> dict:
         """获取登录二维码，返回 {qrcode, qrcode_img_content}"""
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(trust_env=False) as client:
             resp = await client.get(
                 f"{ILINK_BASE_URL}/ilink/bot/get_bot_qrcode",
                 params={"bot_type": "3"},
@@ -89,7 +89,7 @@ class WeChatBot:
 
     async def poll_qrcode_status(self, qrcode: str):
         """轮询扫码状态，扫码确认后保存 token"""
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(trust_env=False) as client:
             while True:
                 resp = await client.get(
                     f"{ILINK_BASE_URL}/ilink/bot/get_qrcode_status",
@@ -119,7 +119,7 @@ class WeChatBot:
             "base_info": {"channel_version": "1.0.2"},
         }
         base = self.bot_base_url or ILINK_BASE_URL
-        async with httpx.AsyncClient(timeout=60) as client:
+        async with httpx.AsyncClient(timeout=60, trust_env=False) as client:
             resp = await client.post(
                 f"{base}/ilink/bot/getupdates",
                 headers=self._auth_headers(),
@@ -134,7 +134,7 @@ class WeChatBot:
         """发送'正在输入'状态"""
         base = self.bot_base_url or ILINK_BASE_URL
         try:
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(trust_env=False) as client:
                 await client.post(
                     f"{base}/ilink/bot/sendtyping",
                     headers=self._auth_headers(),
@@ -161,7 +161,7 @@ class WeChatBot:
                 "item_list": [{"type": 1, "text_item": {"text": text}}],
             }
         }
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=30, trust_env=False) as client:
             resp = await client.post(
                 f"{base}/ilink/bot/sendmessage",
                 headers=self._auth_headers(),
