@@ -179,6 +179,9 @@ async def lifespan(app):
     setup_logging()
     logger.info("🔄 服务启动中...（Agent 将在首次请求时初始化）")
     _init_default_users()
+    # 保存主事件循环引用，供 sync 线程调度 async 任务
+    import asyncio
+    app.state.main_loop = asyncio.get_running_loop()
     yield
 
 app = FastAPI(
@@ -289,8 +292,9 @@ def init_agent():
     app.state.wechat_bot = bot
     # 已有 token 时自动启动轮询（无需重新扫码）
     if bot.is_logged_in:
-        import asyncio
-        asyncio.ensure_future(bot.start())
+        loop = getattr(app.state, "main_loop", None)
+        if loop and loop.is_running():
+            asyncio.run_coroutine_threadsafe(bot.start(), loop)
 
 # ---------- API 模型 ----------
 
