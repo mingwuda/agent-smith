@@ -3,7 +3,6 @@ import asyncio
 import base64
 import hashlib
 import hmac
-import httpx
 import json
 import os
 import re
@@ -49,6 +48,7 @@ from memory.local_memory import get_memory
 import session_store
 import user_manager
 from wechat_bot import WeChatBot
+import qrcode
 
 # ---------- 认证 ----------
 
@@ -2217,17 +2217,17 @@ async def wechat_qrcode(request: Request):
     """获取微信登录二维码"""
     bot: WeChatBot = request.app.state.wechat_bot
     data = await bot.get_qrcode()
-    # qrcode_img_content 是图片 URL（如 https://liteapp.weixin.qq.com/...）
+    # qrcode_img_content 是 WeChat 登录页 URL，用它作为二维码数据
     img_url = data.pop("qrcode_img_content", None)
-    if img_url:
-        try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                resp = await client.get(img_url)
-                if resp.status_code == 200:
-                    data["qrcode_img_base64"] = base64.b64encode(resp.content).decode()
-        except Exception as e:
-            logger.warning("获取二维码图片失败: %s", e)
-            data["qrcode_url"] = img_url  # 兜底返回 URL
+    qr_data = img_url or f"https://liteapp.weixin.qq.com/q/{data.get('qrcode', '')}"
+    try:
+        img = qrcode.make(qr_data)
+        buf = BytesIO()
+        img.save(buf, format="PNG")
+        data["qrcode_img_base64"] = base64.b64encode(buf.getvalue()).decode()
+    except Exception as e:
+        logger.warning("生成二维码失败: %s", e)
+        data["qrcode_url"] = qr_data
     return data
 
 @app.get("/wechat/qrcode-status")
