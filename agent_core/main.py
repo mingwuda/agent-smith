@@ -3,6 +3,7 @@ import asyncio
 import base64
 import hashlib
 import hmac
+import httpx
 import json
 import os
 import re
@@ -2202,8 +2203,6 @@ def db_get_schema(connection_name: str, table: str = "", request: Request = None
 
 # ---------- 微信 Bot 管理 ----------
 
-import base64 as _base64  # 避免与顶部 base64 冲突
-
 @app.get("/wechat/status")
 async def wechat_status(request: Request):
     """获取微信 Bot 状态"""
@@ -2218,10 +2217,17 @@ async def wechat_qrcode(request: Request):
     """获取微信登录二维码"""
     bot: WeChatBot = request.app.state.wechat_bot
     data = await bot.get_qrcode()
-    if "qrcode_img_content" in data:
-        data["qrcode_img_base64"] = _base64.b64encode(
-            data.pop("qrcode_img_content").encode("utf-8")
-        ).decode()
+    # qrcode_img_content 是图片 URL（如 https://liteapp.weixin.qq.com/...）
+    img_url = data.pop("qrcode_img_content", None)
+    if img_url:
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.get(img_url)
+                if resp.status_code == 200:
+                    data["qrcode_img_base64"] = base64.b64encode(resp.content).decode()
+        except Exception as e:
+            logger.warning("获取二维码图片失败: %s", e)
+            data["qrcode_url"] = img_url  # 兜底返回 URL
     return data
 
 @app.get("/wechat/qrcode-status")
