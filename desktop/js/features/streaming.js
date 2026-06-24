@@ -1,6 +1,10 @@
 /* streaming.js — SSE 流式发送、handleStreamEvent、typing/loading 指示器
    依赖: state.js, util.js, i18n.js, messaging.js(addMessage, addUserMessage, resizeComposer, renderAttachmentPreview) */
 
+// ---------- 全局变量 ----------
+
+var _currentPythonOutEl = null; // 当前 run_python 的实时日志容器
+
 // ---------- Typing / Loading 指示器 ----------
 
 function showTyping() {
