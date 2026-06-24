@@ -285,7 +285,12 @@ def init_agent():
     logger.info("  已加载技能: %d 个", skills_count)
 
     # 初始化微信 Bot（全局单例）
-    app.state.wechat_bot = WeChatBot(agent)
+    bot = WeChatBot(agent)
+    app.state.wechat_bot = bot
+    # 已有 token 时自动启动轮询（无需重新扫码）
+    if bot.is_logged_in:
+        import asyncio
+        asyncio.ensure_future(bot.start())
 
 # ---------- API 模型 ----------
 
