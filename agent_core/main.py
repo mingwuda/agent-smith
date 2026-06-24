@@ -1898,13 +1898,12 @@ async def tool_progress_ws(websocket: WebSocket):
                 last_count = len(filtered_lines)
                 idle_loops = 0
             elif not running:
-                # 工具已结束，发送最终状态后关闭
-                if last_count > 0 or idle_loops > 0:
-                    await websocket.send_json({
-                        "lines": filtered_lines,
-                        "total": idx,
-                        "running": False,
-                    })
+                # 工具已结束，无论是否有输出都发送最终状态
+                await websocket.send_json({
+                    "lines": filtered_lines,
+                    "total": idx,
+                    "running": False,
+                })
                 break
             else:
                 idle_loops += 1

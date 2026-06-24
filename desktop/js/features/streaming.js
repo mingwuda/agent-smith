@@ -77,6 +77,14 @@ function closePythonProgress() {
     _pythonProgressSource.close();
     _pythonProgressSource = null;
   }
+  // 如果 outEl 仍在显示等待提示，将其更新为已结束
+  if (_currentPythonOutEl) {
+    var waitingText = _currentPythonOutEl.textContent;
+    if (waitingText === '等待输出...' || waitingText === '等待输出中...（执行完成后会自动显示结果）') {
+      _currentPythonOutEl.textContent = '（无实时输出）';
+    }
+    _currentPythonOutEl = null;
+  }
 }
 
 // ---------- 停止当前运行 ----------
@@ -559,6 +567,7 @@ function handleStreamEvent(data) {
           '<pre class="python-output" id="python-out-' + curStep + '">等待输出...</pre>';
         cardDiv.querySelector('.tool-card-body').appendChild(pyBox);
         var outEl = document.getElementById('python-out-' + curStep);
+        _currentPythonOutEl = outEl;
         // 使用 WebSocket 推送实时输出，替代 /tool-progress-json 轮询
         var proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         var wsUrl = proto + '//' + window.location.host + '/ws/tool-progress';
@@ -567,9 +576,16 @@ function handleStreamEvent(data) {
         var reconnectTimer = null;
         var reconnectAttempts = 0;
         var maxReconnectAttempts = 3;
+        var wsFailed = false;  // WebSocket 彻底失败后回退到轮询
         var wsClosed = false;
         function scheduleReconnect() {
-          if (wsClosed || reconnectTimer || reconnectAttempts >= maxReconnectAttempts) return;
+          if (wsClosed || reconnectTimer || reconnectAttempts >= maxReconnectAttempts) {
+            if (reconnectAttempts >= maxReconnectAttempts && !wsFailed && !wsClosed) {
+              wsFailed = true;
+              fallbackToPolling();
+            }
+            return;
+          }
           reconnectAttempts++;
           reconnectTimer = setTimeout(function() {
             reconnectTimer = null;
@@ -602,6 +618,27 @@ function handleStreamEvent(data) {
           ws.onclose = function() { scheduleReconnect(); };
         }
         openWs();
+        // WebSocket 连接失败后的轮询后备
+        function fallbackToPolling() {
+          var pollTimer = setInterval(function() {
+            fetch('/tool-progress-json').then(function(r) { return r.json(); }).then(function(d) {
+              if (!d || !outEl) return;
+              if (d.lines && d.lines.length > seenCount) {
+                var newLines = d.lines.slice(seenCount);
+                if (outEl.textContent === '等待输出...') outEl.textContent = '';
+                for (var j = 0; j < newLines.length; j++) {
+                  outEl.textContent += unescapeDisplay(newLines[j]) + '\n';
+                }
+                outEl.scrollTop = outEl.scrollHeight;
+                seenCount = d.lines.length;
+              }
+              if (!d.running && seenCount >= d.lines.length) {
+                clearInterval(pollTimer);
+              }
+            }).catch(function() {});
+          }, 2000);
+          _pythonProgressSource = { close: function() { clearInterval(pollTimer); } };
+        }
         // 8 秒后如果还没有实时日志，显示等待提示
         setTimeout(function() {
           if (outEl && outEl.textContent === '等待输出...') {
