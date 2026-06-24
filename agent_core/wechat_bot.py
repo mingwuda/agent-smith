@@ -5,6 +5,7 @@
 """
 import asyncio
 import base64
+import hashlib
 import json
 import logging
 import os
@@ -15,6 +16,7 @@ from typing import Optional
 import httpx
 
 from logger import get_logger
+import session_store
 
 logger = get_logger(__name__)
 
@@ -170,7 +172,7 @@ class WeChatBot:
     # ── 消息处理 ──────────────────────────────────
 
     async def _handle_message(self, msg: dict):
-        """处理单条微信消息：调用 agent 并回复"""
+        """处理单条微信消息：调用 agent 并回复，同时保存到会话存储"""
         from_user = msg.get("from_user_id", "")
         context_token = msg.get("context_token", "")
 
@@ -185,6 +187,20 @@ class WeChatBot:
 
         logger.info("[微信Bot] 收到: %s", text[:120])
 
+        # ── 会话管理 ──
+        WECHAT_USER = "wechat"
+        # 用微信用户 ID 的 md5 前 8 位作为稳定的会话 ID
+        session_id = hashlib.md5(from_user.encode()).hexdigest()[:8]
+        session = session_store.get_session(WECHAT_USER, session_id)
+        if session is None:
+            session = session_store.create_session(
+                WECHAT_USER,
+                title=f"[微信] {text[:20]}",
+                session_id=session_id,
+            )
+        # 保存用户消息
+        session_store.add_message(WECHAT_USER, session_id, "user", text)
+
         # 发送"正在输入"状态
         await self.send_typing(from_user, context_token)
 
@@ -194,6 +210,15 @@ class WeChatBot:
         except Exception as e:
             logger.exception("[微信Bot] agent 调用异常")
             reply = f"❌ 处理出错: {e}"
+
+        # 保存助手回复
+        if reply:
+            session_store.add_message(WECHAT_USER, session_id, "assistant", reply)
+            # 更新会话标题（取第一条用户消息）
+            sess = session_store.get_session(WECHAT_USER, session_id)
+            if sess and sess.get("message_count", 0) <= 2:
+                short = text[:30] + ("..." if len(text) > 30 else "")
+                session_store.rename_session(WECHAT_USER, session_id, f"[微信] {short}")
 
         # 发送回复
         if reply:

@@ -2301,6 +2301,33 @@ async def wechat_stop(request: Request):
     await bot.stop()
     return {"status": "stopped"}
 
+@app.get("/wechat/sessions")
+async def wechat_sessions_list():
+    """列出微信 Bot 的会话"""
+    raw = session_store.list_sessions("wechat")
+    return [
+        {
+            "id": s["id"],
+            "title": s.get("title", "未命名"),
+            "created_at": s.get("created_at", ""),
+            "updated_at": s.get("updated_at", ""),
+            "message_count": s.get("message_count", 0),
+        }
+        for s in raw
+    ]
+
+@app.get("/wechat/sessions/{session_id}")
+async def wechat_session_messages(session_id: str):
+    """获取微信 Bot 某条会话的消息"""
+    session = session_store.get_session("wechat", session_id)
+    if not session:
+        raise HTTPException(404, "会话不存在")
+    return {
+        "id": session["id"],
+        "title": session.get("title", "未命名"),
+        "messages": session.get("messages", []),
+    }
+
 
 # ---------- 启动 ----------
 
