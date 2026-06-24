@@ -658,7 +658,11 @@ function handleStreamEvent(data) {
               reconnectTimer = null;
             }
             if (ws) {
-              try { ws.close(); } catch (e) {}
+              // 只在已连接时调用 close；CONNECTING 状态下 close 会触发
+              // "closed before the connection is established" 警告
+              if (ws.readyState === WebSocket.OPEN) {
+                try { ws.close(); } catch (e) {}
+              }
               ws = null;
             }
           }
