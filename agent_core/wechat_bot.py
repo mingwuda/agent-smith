@@ -161,7 +161,8 @@ class WeChatBot:
                 "message_state": 2,  # FINISH（完整消息）
                 "context_token": context_token,
                 "item_list": [{"type": 1, "text_item": {"text": text}}],
-            }
+            },
+            "base_info": {"channel_version": "1.0.2"},
         }
         async with httpx.AsyncClient(timeout=30, trust_env=False) as client:
             resp = await client.post(
@@ -169,7 +170,12 @@ class WeChatBot:
                 headers=self._auth_headers(),
                 json=payload,
             )
-            return resp.json()
+            resp_text = resp.text
+            try:
+                return json.loads(resp_text)
+            except json.JSONDecodeError:
+                logger.warning("[微信Bot] sendmessage 返回非 JSON: %s", resp_text[:200])
+                return {"ret": -1, "raw": resp_text[:200]}
 
     # ── 消息处理 ──────────────────────────────────
 
