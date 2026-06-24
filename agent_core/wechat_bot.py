@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import random
+import uuid
 from pathlib import Path
 from typing import Optional
 
@@ -154,27 +155,38 @@ class WeChatBot:
     ) -> dict:
         """发送文本消息"""
         base = self.bot_base_url or ILINK_BASE_URL
-        # 去掉 msg 包装层，使用与 sendtyping 一致的扁平结构
         payload = {
-            "to_user_id": to_user_id,
-            "message_type": 2,  # BOT 发出
-            "message_state": 2,  # FINISH（完整消息）
-            "context_token": context_token,
-            "item_list": [{"type": 1, "text_item": {"text": text}}],
-            "base_info": {"channel_version": "1.0.2"},
+            "msg": {
+                "from_user_id": "",
+                "to_user_id": to_user_id,
+                "client_id": f"bot-{uuid.uuid4().hex[:12]}",
+                "message_type": 2,
+                "message_state": 2,
+                "context_token": context_token,
+                "item_list": [{"type": 1, "text_item": {"text": text}}],
+            },
+            "base_info": {"channel_version": "1.0.3"},
+        }
+        raw_bytes = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        headers = {
+            **self._auth_headers(),
+            "Content-Length": str(len(raw_bytes)),
         }
         async with httpx.AsyncClient(timeout=30, trust_env=False) as client:
             resp = await client.post(
                 f"{base}/ilink/bot/sendmessage",
-                headers=self._auth_headers(),
-                json=payload,
+                content=raw_bytes,
+                headers=headers,
             )
-            resp_text = resp.text
+            # {} 是 sendmessage 的成功响应（无返回值）
+            resp_text = resp.text.strip()
+            if resp_text == "{}" or resp_text == '{"ret":0}':
+                return {"ret": 0}
             try:
                 return json.loads(resp_text)
             except json.JSONDecodeError:
-                logger.warning("[微信Bot] sendmessage 返回非 JSON: %s", resp_text[:200])
-                return {"ret": -1, "raw": resp_text[:200]}
+                logger.warning("[微信Bot] sendmessage 非 JSON: status=%s body=%s", resp.status_code, resp_text[:200])
+                return {"ret": -1}
 
     # ── 消息处理 ──────────────────────────────────
 
