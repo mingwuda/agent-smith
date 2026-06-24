@@ -519,6 +519,28 @@ class DesktopAgent:
                 learned.append(f"- {val.strip()}")
         return "\n".join(learned) if learned else ""
 
+    async def chat_sync(self, message: str) -> str:
+        """同步聊天：运行 agent 并收集完整的流式回复文本。
+
+        适用于非浏览器场景（如微信、API 调用）需要一次性获取完整回复。
+        """
+        full = ""
+        async for sse_line in self.stream_run(message):
+            line = sse_line.strip()
+            if line.startswith("data: ") and not line.startswith("data: [DONE]"):
+                try:
+                    data = json.loads(line[6:])
+                    event_type = data.get("type")
+                    if event_type == "done":
+                        full = data.get("content", "")
+                    elif event_type == "error":
+                        content = data.get("content", "")
+                        if not full:
+                            full = f"❌ {content}"
+                except json.JSONDecodeError:
+                    pass
+        return full
+
     async def reflect_on_task(
         self,
         user_message: str,

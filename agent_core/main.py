@@ -47,6 +47,7 @@ from skills.registry import get_registry
 from memory.local_memory import get_memory
 import session_store
 import user_manager
+from wechat_bot import WeChatBot
 
 # ---------- 认证 ----------
 
@@ -280,6 +281,9 @@ def init_agent():
     logger.info("  工作区: %s", config.workspace)
     logger.info("  Skills 目录: %s", ", ".join(str(p) for p in skills_dirs))
     logger.info("  已加载技能: %d 个", skills_count)
+
+    # 初始化微信 Bot（全局单例）
+    app.state.wechat_bot = WeChatBot(agent)
 
 # ---------- API 模型 ----------
 
@@ -2194,6 +2198,53 @@ def db_get_schema(connection_name: str, table: str = "", request: Request = None
         {"name": c.name, "type": c.type, "primary_key": c.primary_key}
         for c in t.columns
     ]} for t in tables]
+
+
+# ---------- 微信 Bot 管理 ----------
+
+import base64 as _base64  # 避免与顶部 base64 冲突
+
+@app.get("/wechat/status")
+async def wechat_status(request: Request):
+    """获取微信 Bot 状态"""
+    bot: WeChatBot = request.app.state.wechat_bot
+    return {
+        "logged_in": bot.is_logged_in,
+        "running": bot.is_running,
+    }
+
+@app.get("/wechat/qrcode")
+async def wechat_qrcode(request: Request):
+    """获取微信登录二维码"""
+    bot: WeChatBot = request.app.state.wechat_bot
+    data = await bot.get_qrcode()
+    if "qrcode_img_content" in data:
+        data["qrcode_img_base64"] = _base64.b64encode(
+            data.pop("qrcode_img_content")
+        ).decode()
+    return data
+
+@app.get("/wechat/qrcode-status")
+async def wechat_qrcode_status(qrcode: str, request: Request):
+    """轮询扫码状态"""
+    bot: WeChatBot = request.app.state.wechat_bot
+    return await bot.poll_qrcode_status(qrcode)
+
+@app.post("/wechat/start")
+async def wechat_start(request: Request):
+    """启动微信 Bot 轮询"""
+    bot: WeChatBot = request.app.state.wechat_bot
+    if not bot.is_logged_in:
+        raise HTTPException(400, "尚未登录，请先扫码")
+    await bot.start()
+    return {"status": "started"}
+
+@app.post("/wechat/stop")
+async def wechat_stop(request: Request):
+    """停止微信 Bot 轮询"""
+    bot: WeChatBot = request.app.state.wechat_bot
+    await bot.stop()
+    return {"status": "stopped"}
 
 
 # ---------- 启动 ----------
