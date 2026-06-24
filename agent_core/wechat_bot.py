@@ -34,6 +34,7 @@ class WeChatBot:
         self._running = False
         self._task: Optional[asyncio.Task] = None
         self._update_buf: str = ""
+        self._seen_msg_ids: set[str] = set()  # 已处理消息 ID 去重
 
         os.makedirs(self.data_dir, exist_ok=True)
         self._load_token()
@@ -126,8 +127,9 @@ class WeChatBot:
                 json=payload,
             )
             data = resp.json()
-            if "get_updates_buf" in data and data["get_updates_buf"]:
-                self._update_buf = data["get_updates_buf"]
+            # 始终更新游标（即使返回空字符串），避免重复拉取已处理的消息
+            if "get_updates_buf" in data:
+                self._update_buf = data["get_updates_buf"] or ""
             return data.get("msgs", [])
 
     async def send_typing(self, to_user_id: str, context_token: str):
@@ -185,7 +187,14 @@ class WeChatBot:
         if not text:
             return
 
-        logger.info("[微信Bot] 收到: %s", text[:120])
+        # ── 消息去重 ──
+        msg_id = f"{from_user}|{context_token}|{text}"
+        if msg_id in self._seen_msg_ids:
+            logger.debug("[微信Bot] 跳过重复消息: %s", text[:60])
+            return
+        self._seen_msg_ids.add(msg_id)
+
+        logger.info("[微信Bot] 收到: %s  (context_token=%s...)", text[:120], (context_token or "")[:16])
 
         # ── 会话管理 ──
         WECHAT_USER = "wechat"
@@ -225,7 +234,14 @@ class WeChatBot:
             send_resp = await self.send_message(from_user, context_token, reply)
             send_ret = send_resp.get("ret", -1)
             if send_ret != 0:
-                logger.warning("[微信Bot] sendmessage 返回 ret=%s: %s", send_ret, send_resp.get("err_msg", ""))
+                logger.warning("[微信Bot] sendmessage 返回 ret=%s: %s", send_ret, json.dumps(send_resp, ensure_ascii=False)[:200])
+                # 重试一次（可能瞬时失败）
+                send_resp2 = await self.send_message(from_user, context_token, reply)
+                send_ret2 = send_resp2.get("ret", -1)
+                if send_ret2 == 0:
+                    logger.info("[微信Bot] 回复成功（重试）: %s", reply[:120])
+                else:
+                    logger.warning("[微信Bot] 重试仍失败 ret=%s", send_ret2)
             else:
                 logger.info("[微信Bot] 回复: %s", reply[:120])
 
