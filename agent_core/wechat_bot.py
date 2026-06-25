@@ -35,7 +35,8 @@ class WeChatBot:
         self._running = False
         self._task: Optional[asyncio.Task] = None
         self._update_buf: str = ""
-        self._seen_msg_ids: set[str] = set()  # 已处理消息 ID 去重
+        self._seen_msg_ids: set[str] = set()
+        self._wechat_sessions: dict[str, str] = {}  # wx_user_id → current session_id  # 已处理消息 ID 去重
 
         os.makedirs(self.data_dir, exist_ok=True)
         self._load_token()
@@ -213,22 +214,41 @@ class WeChatBot:
 
         logger.info("[微信Bot] 收到: %s  (context_token=%s...)", text[:120], (context_token or "")[:16])
 
-        # ── 会话管理 ──
         WECHAT_USER = "wechat"
-        # 用微信用户 ID 的 md5 前 8 位作为稳定的会话 ID
-        session_id = hashlib.md5(from_user.encode()).hexdigest()[:8]
-        session = session_store.get_session(WECHAT_USER, session_id)
-        if session is None:
-            session = session_store.create_session(
-                WECHAT_USER,
-                title=f"[微信] {text[:20]}",
-                session_id=session_id,
+
+        # ── /new 命令：创建新会话 ──
+        if text.strip() == "/new":
+            new_sid = uuid.uuid4().hex[:8]
+            session_store.create_session(
+                WECHAT_USER, title=f"[微信] 新会话", session_id=new_sid,
             )
+            self._wechat_sessions[from_user] = new_sid
+            await self.send_message(from_user, context_token, "✅ 已创建新会话，可以开始新的对话了")
+            logger.info("[微信Bot] 用户 %s 创建新会话 %s", from_user[:16], new_sid)
+            return
+
+        # ── 会话管理 ──
+        session_id = self._wechat_sessions.get(from_user)
+        if session_id is None:
+            # 首次消息：用微信用户 ID 的 md5 作为稳定会话 ID
+            session_id = hashlib.md5(from_user.encode()).hexdigest()[:8]
+            self._wechat_sessions[from_user] = session_id
+            session = session_store.get_session(WECHAT_USER, session_id)
+            if session is None:
+                session = session_store.create_session(
+                    WECHAT_USER,
+                    title=f"[微信] {text[:20]}",
+                    session_id=session_id,
+                )
+
         # 保存用户消息
         session_store.add_message(WECHAT_USER, session_id, "user", text)
 
         # 发送"正在输入"状态
         await self.send_typing(from_user, context_token)
+
+        # 为当前会话设置独立的 agent 线程
+        self.agent._thread_id = session_id
 
         # 调用 agent 获取完整回复
         try:
@@ -240,19 +260,17 @@ class WeChatBot:
         # 保存助手回复
         if reply:
             session_store.add_message(WECHAT_USER, session_id, "assistant", reply)
-            # 更新会话标题（取第一条用户消息）
             sess = session_store.get_session(WECHAT_USER, session_id)
             if sess and sess.get("message_count", 0) <= 2:
                 short = text[:30] + ("..." if len(text) > 30 else "")
                 session_store.rename_session(WECHAT_USER, session_id, f"[微信] {short}")
 
-        # 发送回复
+        # 发送回复（带重试）
         if reply:
             send_resp = await self.send_message(from_user, context_token, reply)
             send_ret = send_resp.get("ret", -1)
             if send_ret != 0:
                 logger.warning("[微信Bot] sendmessage 返回 ret=%s: %s", send_ret, json.dumps(send_resp, ensure_ascii=False)[:200])
-                # 重试一次（可能瞬时失败）
                 send_resp2 = await self.send_message(from_user, context_token, reply)
                 send_ret2 = send_resp2.get("ret", -1)
                 if send_ret2 == 0:
