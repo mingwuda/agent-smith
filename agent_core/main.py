@@ -1292,6 +1292,27 @@ def reload_skills():
     return ReloadResponse(message=f"已重新加载 {count} 个技能", count=count)
 
 
+class GrantPathRequest(BaseModel):
+    path: str
+
+
+@app.post("/permissions/grant-path")
+def grant_path(req: GrantPathRequest, request: Request):
+    """授权 AI 在本次会话中对指定路径（或目录）进行编辑。"""
+    uid = _get_current_user(request)
+    from tools.file_tools import add_outside_auth
+    add_outside_auth(uid, req.path)
+    return {"status": "ok", "message": f"已授权路径: {req.path}"}
+
+
+@app.get("/permissions/granted-paths")
+def list_granted_paths(request: Request):
+    """查看当前用户已授权的路径列表。"""
+    uid = _get_current_user(request)
+    from tools.file_tools import _outside_auths
+    return {"paths": _outside_auths.get(uid, [])}
+
+
 # 技能详情读取相关常量
 SKILL_FILE_PREVIEW_MAX_BYTES = 256 * 1024  # 单文件预览上限 256KB
 

@@ -435,6 +435,12 @@ class DesktopAgent:
         self._user_id = user_id
         set_current_user(user_id)
         self._tracker = get_tracker(user_id)
+        # 同步文件工具的用户上下文（用于工作区外授权校验）
+        try:
+            from tools.file_tools import set_current_user as _set_ft_user
+            _set_ft_user(user_id)
+        except Exception:
+            pass
 
     @property
     def user_id(self) -> str:

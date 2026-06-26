@@ -11,6 +11,7 @@ import linecache
 import mmap
 import os
 import re
+from collections import defaultdict
 from pathlib import Path
 from typing import Optional
 from langchain_core.tools import tool
@@ -27,6 +28,38 @@ DIFF_MAX_LINES = 500  # 最多保留 500 行 diff，避免 SSE 事件过大
 # ── 行缓存：避免同一文件反复读取 ──
 _line_cache: dict[str, tuple[list[str], float]] = {}
 LINE_CACHE_TTL = 2.0  # 秒
+
+# ── 工作区外编辑权限（按用户隔离） ──
+_current_user: str = "default"
+_outside_auths: dict[str, list[str]] = defaultdict(list)
+
+
+def set_current_user(uid: str) -> None:
+    global _current_user
+    _current_user = uid
+
+
+def add_outside_auth(uid: str, path_prefix: str) -> None:
+    """授予某用户对指定路径前缀的编辑权限（仅当前进程生命周期有效）。"""
+    normalized = Path(path_prefix).expanduser().resolve().as_posix()
+    existing = _outside_auths[uid]
+    # 不重复添加
+    for p in existing:
+        if normalized.startswith(Path(p).as_posix()):
+            return
+    _outside_auths[uid].append(normalized)
+
+
+def is_path_permitted(target: Path) -> bool:
+    """检查目标路径是否在授权白名单中。"""
+    target_str = target.as_posix()
+    for prefix in _outside_auths.get(_current_user, []):
+        if target_str.startswith(prefix):
+            return True
+    return False
+
+
+PERMISSION_PREFIX = "__PERMISSION_NEEDED__"  # 前端据此识别"需要授权"
 
 
 def _invalidate_line_cache(path: str):
@@ -132,7 +165,10 @@ def _resolve(path: str, allow_outside: bool = False) -> Path:
             continue
         else:
             return target
-    raise ValueError(f"路径超出工作区: {path}。当前工作区: {workspace}")
+    # 检查用户是否已授权此路径
+    if is_path_permitted(target):
+        return target
+    raise ValueError(f"{PERMISSION_PREFIX}:{path} 路径超出工作区，需要用户授权。当前工作区: {workspace}")
 
 
 def _path_error(exc: ValueError) -> str:

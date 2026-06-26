@@ -699,6 +699,48 @@ function handleStreamEvent(data) {
           outArea.innerHTML = '<div class="tool-section-label">结果</div>' +
             `<pre class="tool-code-block" style="${isError ? 'color:#fca5a5;' : ''}max-height:400px;overflow-y:auto;">${escapeHtml(unescapeDisplay(String(fullResult)))}</pre>`;
 
+          // ── 工作区外文件写入授权 ──
+          var resultStr = String(fullResult);
+          var permMatch = resultStr.match(/__PERMISSION_NEEDED__:\s*(\S+)/);
+          if (permMatch) {
+            var permPath = permMatch[1];
+            var permBtn = document.createElement('div');
+            permBtn.style.cssText = 'margin-top:8px;display:flex;gap:10px;align-items:center;';
+            permBtn.innerHTML = `
+              <span style="font-size:12px;color:#8e8e93;">📝 需要授权后才能写入 <code style="background:#2c2c2e;color:#f5f5f7;padding:2px 6px;border-radius:4px;font-size:11px;">${escapeHtml(permPath)}</code></span>
+              <button class="perm-grant-btn" style="padding:5px 14px;background:#007aff;color:#fff;border:none;border-radius:6px;font-size:12px;cursor:pointer;" data-path="${escapeHtml(permPath)}">授权写入</button>
+            `;
+            permBtn.querySelector('.perm-grant-btn').addEventListener('click', async function() {
+              var path = this.dataset.path;
+              try {
+                var r = await fetch('/permissions/grant-path', {
+                  method: 'POST',
+                  headers: {'Content-Type': 'application/json'},
+                  body: JSON.stringify({path: path}),
+                });
+                if (r.ok) {
+                  var inner = this.parentElement;
+                  // 提取目录路径（父目录）用于授权
+                  var dirPath = path;
+                  var lastSlash = dirPath.lastIndexOf('/');
+                  if (lastSlash > 0) dirPath = dirPath.substring(0, lastSlash);
+                  // 同时授权目录级
+                  await fetch('/permissions/grant-path', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({path: dirPath}),
+                  });
+                  inner.innerHTML = '<span style="font-size:12px;color:#30d158;">✅ 已授权，请在输入框输入「继续」重试</span>';
+                } else {
+                  this.textContent = '授权失败';
+                }
+              } catch(e) {
+                this.textContent = '网络错误';
+              }
+            });
+            outArea.appendChild(permBtn);
+          }
+
           // web_search 特殊处理：从结果中提取搜索来源并显示 badge
           if (data.tool === 'web_search') {
             var resultStr = String(fullResult);
