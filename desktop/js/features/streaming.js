@@ -561,7 +561,7 @@ function handleStreamEvent(data) {
       currentStepsEl.appendChild(cardDiv);
       smartScroll(container);
 
-      // ── Python 实时输出流 ──
+      // ── Python 实时输出流（使用 HTTP 轮询，消除 WebSocket 部署兼容问题）──
       if (data.tool === 'run_python' && !_isReplaying) {
         closePythonProgress();
         var pyBox = document.createElement('div');
@@ -572,38 +572,11 @@ function handleStreamEvent(data) {
         cardDiv.querySelector('.tool-card-body').appendChild(pyBox);
         var outEl = document.getElementById('python-out-' + curStep);
         _currentPythonOutEl = outEl;
-        // 使用 WebSocket 推送实时输出，替代 /tool-progress-json 轮询
-        var proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        var wsUrl = proto + '//' + window.location.host + '/ws/tool-progress';
+        // HTTP 轮询获取实时输出
         var seenCount = 0;
-        var ws = null;
-        var reconnectTimer = null;
-        var reconnectAttempts = 0;
-        var maxReconnectAttempts = 0;  // 不重试 WebSocket，失败后立即回退到 HTTP 轮询
-        var wsFailed = false;
-        var wsClosed = false;
-        function scheduleReconnect() {
-          if (wsClosed || reconnectTimer || reconnectAttempts >= maxReconnectAttempts) {
-            if (reconnectAttempts >= maxReconnectAttempts && !wsFailed && !wsClosed) {
-              wsFailed = true;
-              fallbackToPolling();
-            }
-            return;
-          }
-          reconnectAttempts++;
-          reconnectTimer = setTimeout(function() {
-            reconnectTimer = null;
-            openWs();
-          }, 2000);
-        }
-        function openWs() {
-          if (wsClosed || reconnectTimer) return;
-          ws = new WebSocket(wsUrl);
-          ws.onopen = function() { reconnectAttempts = 0; };
-          ws.onmessage = function(ev) {
-            if (!outEl) return;
-            var d;
-            try { d = JSON.parse(ev.data); } catch (e) { return; }
+        var pollTimer = setInterval(function() {
+          fetch('/tool-progress-json').then(function(r) { return r.json(); }).then(function(d) {
+            if (!d || !outEl) return;
             if (d.lines && d.lines.length > seenCount) {
               var newLines = d.lines.slice(seenCount);
               if (outEl.textContent === '等待输出...') outEl.textContent = '';
@@ -614,59 +587,18 @@ function handleStreamEvent(data) {
               seenCount = d.lines.length;
             }
             if (d.running === false) {
-              wsClosed = true;
+              clearInterval(pollTimer);
               closePythonProgress();
             }
-          };
-          ws.onerror = function() { scheduleReconnect(); };
-          ws.onclose = function() { scheduleReconnect(); };
-        }
-        openWs();
-        // WebSocket 连接失败后的轮询后备
-        function fallbackToPolling() {
-          var pollTimer = setInterval(function() {
-            fetch('/tool-progress-json').then(function(r) { return r.json(); }).then(function(d) {
-              if (!d || !outEl) return;
-              if (d.lines && d.lines.length > seenCount) {
-                var newLines = d.lines.slice(seenCount);
-                if (outEl.textContent === '等待输出...') outEl.textContent = '';
-                for (var j = 0; j < newLines.length; j++) {
-                  outEl.textContent += unescapeDisplay(newLines[j]) + '\n';
-                }
-                outEl.scrollTop = outEl.scrollHeight;
-                seenCount = d.lines.length;
-              }
-              if (!d.running && seenCount >= d.lines.length) {
-                clearInterval(pollTimer);
-              }
-            }).catch(function() {});
-          }, 2000);
-          _pythonProgressSource = { close: function() { clearInterval(pollTimer); } };
-        }
+          }).catch(function() {});
+        }, 500);
+        _pythonProgressSource = { close: function() { clearInterval(pollTimer); } };
         // 8 秒后如果还没有实时日志，显示等待提示
         setTimeout(function() {
           if (outEl && outEl.textContent === '等待输出...') {
             outEl.textContent = '等待输出中...（执行完成后会自动显示结果）';
           }
         }, 8000);
-        // 保存关闭句柄以便 tool_result 清理
-        _pythonProgressSource = {
-          close: function() {
-            wsClosed = true;
-            if (reconnectTimer) {
-              clearTimeout(reconnectTimer);
-              reconnectTimer = null;
-            }
-            if (ws) {
-              // 只在已连接时调用 close；CONNECTING 状态下 close 会触发
-              // "closed before the connection is established" 警告
-              if (ws.readyState === WebSocket.OPEN) {
-                try { ws.close(); } catch (e) {}
-              }
-              ws = null;
-            }
-          }
-        };
       }
       break;
 
