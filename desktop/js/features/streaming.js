@@ -579,8 +579,8 @@ function handleStreamEvent(data) {
         var ws = null;
         var reconnectTimer = null;
         var reconnectAttempts = 0;
-        var maxReconnectAttempts = 3;
-        var wsFailed = false;  // WebSocket 彻底失败后回退到轮询
+        var maxReconnectAttempts = 0;  // 不重试 WebSocket，失败后立即回退到 HTTP 轮询
+        var wsFailed = false;
         var wsClosed = false;
         function scheduleReconnect() {
           if (wsClosed || reconnectTimer || reconnectAttempts >= maxReconnectAttempts) {
