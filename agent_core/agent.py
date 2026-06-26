@@ -1078,12 +1078,10 @@ class DesktopAgent:
         
         except asyncio.CancelledError:
             cancelled = True
-            logger.info("[stream_run] 被取消")
-            raise
+            logger.info("[stream_run] 被取消，正常结束（不再重抛，确保 done 事件发出）")
         except GeneratorExit:
             cancelled = True
-            logger.info("[stream_run] GeneratorExit")
-            raise
+            logger.info("[stream_run] GeneratorExit，正常结束")
         except Exception as e:
             if _is_recursion_limit_error(e):
                 logger.warning("[stream_run] 工具循环到达上限，结束任务")
@@ -1131,7 +1129,7 @@ class DesktopAgent:
             self._hydrated_threads.add(thread_key)
             if attachments:
                 await self._strip_checkpoint_images(run_config, graph)
-            if not cancelled and not loop_guard_triggered:
+            if not loop_guard_triggered:
                 if not usage_recorded:
                     self.tracker.record_model_call(
                         provider=self.config.active_provider,
@@ -1142,10 +1140,12 @@ class DesktopAgent:
                         source="chat_model_end",
                         estimated=True,
                     )
-                # 发送完成事件（thinking_buffer 中剩余的是最终回复）
+                # 发送完成事件（cancelled 也发，避免前端收不到 done 而显示 fallback）
                 remaining = thinking_buffer.strip()
                 if remaining:
                     final_buffer = remaining
+                if not final_buffer and cancelled:
+                    final_buffer = "⏹️ 任务已取消"
                 yield _sse({"type": "done", "content": final_buffer})
                 yield "data: [DONE]\n\n"
     
