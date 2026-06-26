@@ -550,7 +550,12 @@ def search_files(pattern: str, path: str = "") -> str:
         return f"❌ 目录不存在: {path or '/'}"
 
     display_root = target
-    matches = list(target.rglob(pattern))
+    # Python 3.13+ 的 pathlib rglob 不支持非相对模式（以 / 或 ../ 开头）
+    cleaned_pattern = pattern
+    for prefix in ["/", "./", "../"]:
+        while cleaned_pattern.startswith(prefix):
+            cleaned_pattern = cleaned_pattern[len(prefix):]
+    matches = list(target.rglob(cleaned_pattern))
     if not matches:
         return f"未找到匹配 '{pattern}' 的文件"
 
