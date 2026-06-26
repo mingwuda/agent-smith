@@ -97,10 +97,13 @@ function addBotMessageWithSteps(content, steps) {
   totalSteps = 0;
   hasToolCalls = false;
   generatingBadgeEl = null;
+  _isReplaying = true;  // 不会发起 WebSocket 等实时连接
 
   steps.forEach(data => {
     handleStreamEvent(data);
   });
+
+  _isReplaying = false;
 
   // 清理回放步骤后残留的"执行中/分析中"状态
   document.querySelectorAll('.tool-status-dot.running').forEach(d => {

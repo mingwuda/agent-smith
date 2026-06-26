@@ -562,7 +562,7 @@ function handleStreamEvent(data) {
       smartScroll(container);
 
       // ── Python 实时输出流 ──
-      if (data.tool === 'run_python') {
+      if (data.tool === 'run_python' && !_isReplaying) {
         closePythonProgress();
         var pyBox = document.createElement('div');
         pyBox.className = 'python-progress';
