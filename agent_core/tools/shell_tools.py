@@ -33,7 +33,6 @@ _FORBIDDEN_PATTERNS: list[str] = [
     r'\bdd\s+if=',                       # dd 直接写磁盘
     r'\bmkfs\.',                         # 格式化磁盘
     r'\bmkswap\b',                       # swap 操作
-    r'\b>.*/dev/\w+\b',                 # 写 /dev/ 设备
     r':\(\)\s*\{.*:\|:.*\};',          # fork bomb
     r'\|\s*shutdown',                    # pipe to shutdown
     r'\bchmod\s+777\s+/',               # chmod 777 /
