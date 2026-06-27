@@ -513,16 +513,50 @@ class DesktopAgent:
         return prompt
 
     def _load_learned_patterns(self) -> str:
-        """从长期记忆中读取经验模式，用于注入系统提示。"""
+        """从长期记忆中读取经验模式，用于注入系统提示。
+        自动遗忘超过 3 天的旧经验，避免记忆膨胀。"""
         if not self._user_id:
             return ""
-        from memory.local_memory import get_memory
+        from memory.local_memory import get_memory, user_manager
         mem = get_memory(self._user_id)
         items = mem.list_items()
+        # 获取记忆文件目录以便检查文件年龄
+        mem_dir = user_manager.memory_dir(self._user_id)
+
+        now = time.time()
+        ttl_seconds = 3 * 24 * 3600  # 3 天
         learned = []
-        for key, val in items:
-            if key.startswith("_learned_") and isinstance(val, str) and val.strip():
-                learned.append(f"- {val.strip()}")
+        deleted_count = 0
+
+        for entry in items:
+            key = entry.get("key", "")
+            val = entry.get("value", "")
+            if not (key.startswith("_learned_") and isinstance(val, str) and val.strip()):
+                continue
+
+            # 检查文件修改时间
+            mem_file = mem_dir / f"{key}.json"
+            file_age = now
+            try:
+                if mem_file.exists():
+                    file_age = now - mem_file.stat().st_mtime
+            except OSError:
+                file_age = 0  # 无法获取则保留
+
+            if file_age > ttl_seconds:
+                # 过期，从磁盘和缓存中删除
+                try:
+                    mem.delete(key)
+                except Exception:
+                    pass
+                deleted_count += 1
+                continue
+
+            learned.append(f"- {val.strip()}")
+
+        if deleted_count:
+            logger.info("[记忆] 自动清理了 %d 条过期学习经验", deleted_count)
+
         return "\n".join(learned) if learned else ""
 
     async def chat_sync(self, message: str) -> str:
