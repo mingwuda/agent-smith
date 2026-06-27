@@ -41,7 +41,7 @@ logger = get_logger(__name__)
 
 from config import AgentConfig
 from agent import DesktopAgent
-from tools import file_tools, code_tools, system_tools, web_tools, memory_tools, git_tools, database_tool
+from tools import file_tools, code_tools, system_tools, web_tools, memory_tools, git_tools, database_tool, shell_tools
 import subagents
 from monitoring.usage_tracker import get_tracker
 from skills.registry import get_registry
@@ -248,6 +248,7 @@ def init_agent():
     # 初始化工作区
     file_tools.set_workspace(Path(config.workspace))
     git_tools.set_workspace(Path(config.workspace))
+    shell_tools.set_workspace(Path(config.workspace))
     web_tools.configure_search(
         tavily_search_enabled=config.tavily_search_enabled,
         tavily_api_key=config.tavily_api_key,
@@ -265,6 +266,7 @@ def init_agent():
     all_tools.extend(git_tools.TOOLS)
     all_tools.extend(subagents.TOOLS)
     all_tools.extend(database_tool.TOOLS)
+    all_tools.extend(shell_tools.TOOLS)
     subagents.manager.configure(config, all_tools)
     
     # 先加载 Skills，再构建 Agent graph；set_tools 会把技能块注入 system prompt。
@@ -977,6 +979,7 @@ def _resolve_user(request: Request) -> str:
     """从请求获取当前用户并设置到 agent"""
     uid = _get_current_user(request)
     file_tools.set_workspace(_workspace_for_user(uid))
+    shell_tools.set_workspace(_workspace_for_user(uid))
     if agent:
         agent.set_user(uid)
     # 设置数据库交互上下文（角色和用户信息，后续可从用户配置扩展）
