@@ -25,18 +25,19 @@ ILINK_BASE_URL = "https://ilinkai.weixin.qq.com"
 
 
 class WeChatBot:
-    """微信 iLink Bot API 客户端"""
+    """微信 iLink Bot API 客户端（按用户隔离）"""
 
-    def __init__(self, agent, data_dir: Optional[str] = None):
+    def __init__(self, agent, user_id: str = "default", data_dir: Optional[str] = None):
         self.agent = agent
-        self.data_dir = data_dir or str(Path.home() / ".desktop_agent" / "wechat")
+        self.user_id = user_id
+        self.data_dir = data_dir or str(Path.home() / ".desktop_agent" / f"wechat_{user_id}")
         self.bot_token: Optional[str] = None
         self.bot_base_url: Optional[str] = None
         self._running = False
         self._task: Optional[asyncio.Task] = None
         self._update_buf: str = ""
         self._seen_msg_ids: set[str] = set()
-        self._wechat_sessions: dict[str, str] = {}  # wx_user_id → current session_id  # 已处理消息 ID 去重
+        self._wechat_sessions: dict[str, str] = {}  # wx_user_id → current session_id
 
         os.makedirs(self.data_dir, exist_ok=True)
         self._load_token()
@@ -212,19 +213,19 @@ class WeChatBot:
             return
         self._seen_msg_ids.add(msg_id)
 
-        logger.info("[微信Bot] 收到: %s  (context_token=%s...)", text[:120], (context_token or "")[:16])
+        logger.info("[微信Bot:%s] 收到: %s  (context_token=%s...)", self.user_id, text[:120], (context_token or "")[:16])
 
-        WECHAT_USER = "wechat"
+        wechat_uid = f"wechat_{self.user_id}"
 
         # ── /new 命令：创建新会话 ──
         if text.strip() == "/new":
             new_sid = uuid.uuid4().hex[:8]
             session_store.create_session(
-                WECHAT_USER, title=f"[微信] 新会话", session_id=new_sid,
+                wechat_uid, title=f"[微信] 新会话", session_id=new_sid,
             )
             self._wechat_sessions[from_user] = new_sid
             await self.send_message(from_user, context_token, "✅ 已创建新会话，可以开始新的对话了")
-            logger.info("[微信Bot] 用户 %s 创建新会话 %s", from_user[:16], new_sid)
+            logger.info("[微信Bot:%s] 用户 %s 创建新会话 %s", self.user_id, from_user[:16], new_sid)
             return
 
         # ── 会话管理 ──
@@ -233,16 +234,16 @@ class WeChatBot:
             # 首次消息：用微信用户 ID 的 md5 作为稳定会话 ID
             session_id = hashlib.md5(from_user.encode()).hexdigest()[:8]
             self._wechat_sessions[from_user] = session_id
-            session = session_store.get_session(WECHAT_USER, session_id)
+            session = session_store.get_session(wechat_uid, session_id)
             if session is None:
                 session = session_store.create_session(
-                    WECHAT_USER,
+                    wechat_uid,
                     title=f"[微信] {text[:20]}",
                     session_id=session_id,
                 )
 
         # 保存用户消息
-        session_store.add_message(WECHAT_USER, session_id, "user", text)
+        session_store.add_message(wechat_uid, session_id, "user", text)
 
         # 发送"正在输入"状态
         await self.send_typing(from_user, context_token)
@@ -259,11 +260,11 @@ class WeChatBot:
 
         # 保存助手回复
         if reply:
-            session_store.add_message(WECHAT_USER, session_id, "assistant", reply)
-            sess = session_store.get_session(WECHAT_USER, session_id)
+            session_store.add_message(wechat_uid, session_id, "assistant", reply)
+            sess = session_store.get_session(wechat_uid, session_id)
             if sess and sess.get("message_count", 0) <= 2:
                 short = text[:30] + ("..." if len(text) > 30 else "")
-                session_store.rename_session(WECHAT_USER, session_id, f"[微信] {short}")
+                session_store.rename_session(wechat_uid, session_id, f"[微信] {short}")
 
         # 发送回复（带重试）
         if reply:
@@ -274,11 +275,11 @@ class WeChatBot:
                 send_resp2 = await self.send_message(from_user, context_token, reply)
                 send_ret2 = send_resp2.get("ret", -1)
                 if send_ret2 == 0:
-                    logger.info("[微信Bot] 回复成功（重试）: %s", reply[:120])
+                    logger.info("[微信Bot:%s] 回复成功（重试）: %s", self.user_id, reply[:120])
                 else:
-                    logger.warning("[微信Bot] 重试仍失败 ret=%s", send_ret2)
+                    logger.warning("[微信Bot:%s] 重试仍失败 ret=%s", self.user_id, send_ret2)
             else:
-                logger.info("[微信Bot] 回复: %s", reply[:120])
+                logger.info("[微信Bot:%s] 回复: %s", self.user_id, reply[:120])
 
     # ── 生命周期 ──────────────────────────────────
 
