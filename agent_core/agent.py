@@ -524,7 +524,7 @@ class DesktopAgent:
         mem_dir = user_manager.memory_dir(self._user_id)
 
         now = time.time()
-        ttl_seconds = 3 * 24 * 3600  # 3 天
+        ttl_seconds = 10 * 24 * 3600  # 10 天
         learned = []
         deleted_count = 0
 
