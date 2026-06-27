@@ -81,7 +81,8 @@ def _is_command_forbidden(command: str) -> tuple[bool, str]:
     """检查命令是否包含被禁止的模式。返回 (是否禁止, 原因)。"""
     for pattern in _FORBIDDEN_PATTERNS:
         if re.search(pattern, command, re.IGNORECASE):
-            return True, f"禁止的操作: {pattern.strip('\\b')}"
+            label = pattern.replace(r"\b", "").strip()
+            return True, f"禁止的操作: {label}"
     return False, ""
 
 
