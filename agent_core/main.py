@@ -1004,6 +1004,24 @@ def _resolve_user(request: Request) -> str:
     return uid
 
 
+def _apply_session_workspace(uid: str, session_id: str):
+    """根据会话设置的工作目录覆盖当前工具的工作区。"""
+    ws = session_store.get_session_workspace(uid, session_id)
+    if not ws:
+        return
+    try:
+        ws_path = Path(ws).expanduser().resolve()
+        if ws_path.is_dir():
+            file_tools.set_workspace(ws_path)
+            shell_tools.set_workspace(ws_path)
+            try:
+                git_tools.set_workspace(ws_path)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
 @app.post("/run", response_model=RunResponse)
 async def run_agent(req: RunRequest, request: Request):
     """发送消息给 Agent 并获取回复"""
@@ -1015,6 +1033,7 @@ async def run_agent(req: RunRequest, request: Request):
     
     uid = _resolve_user(request)
     session_id = req.thread_id
+    _apply_session_workspace(uid, session_id)
     session = await _ensure_session(uid, session_id)
     history_messages = session.get("messages", [])
 
@@ -1099,6 +1118,7 @@ async def run_agent_stream(req: RunRequest, request: Request):
     
     uid = _resolve_user(request)
     session_id = req.thread_id
+    _apply_session_workspace(uid, session_id)
     session = await _ensure_session(uid, session_id)
     history_messages = session.get("messages", [])
 
@@ -1557,6 +1577,44 @@ def rename_session(session_id: str, req: RenameRequest, request: Request):
     if not ok:
         raise HTTPException(404, "会话不存在")
     return {"status": "ok", "message": f"已重命名为 {req.title}"}
+
+
+class SetWorkspaceRequest(BaseModel):
+    workspace: str
+
+
+@app.put("/sessions/{session_id}/workspace")
+def set_session_workspace(session_id: str, req: SetWorkspaceRequest, request: Request):
+    """设置当前会话的工作目录。路径可以是绝对路径或相对于工作区根目录的相对路径。"""
+    uid = _get_current_user(request)
+    ws = req.workspace.strip()
+
+    # 解析路径：绝对路径直接用，相对路径拼接用户工作区
+    if os.path.isabs(ws):
+        resolved = Path(ws).expanduser().resolve()
+    else:
+        base = _workspace_for_user(uid)
+        resolved = (base / ws).resolve()
+
+    # 确保目录存在
+    try:
+        resolved.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        raise HTTPException(400, f"无法创建目录: {e}")
+
+    ws_str = str(resolved)
+    ok = session_store.set_session_workspace(uid, session_id, ws_str)
+    if not ok:
+        raise HTTPException(404, "会话不存在")
+    return {"status": "ok", "workspace": ws_str, "message": "工作目录已设置"}
+
+
+@app.get("/sessions/{session_id}/workspace")
+def get_session_workspace(session_id: str, request: Request):
+    """获取当前会话的工作目录"""
+    uid = _get_current_user(request)
+    ws = session_store.get_session_workspace(uid, session_id)
+    return {"workspace": ws or ""}
 
 
 @app.get("/usage", response_model=UsageStats)

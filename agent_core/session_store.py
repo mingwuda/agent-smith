@@ -93,6 +93,11 @@ def _init_db(conn: sqlite3.Connection):
         )
         """
     )
+    # 兼容性迁移：添加 workspace 列（旧数据库没有该列）
+    try:
+        conn.execute("ALTER TABLE sessions ADD COLUMN workspace TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass  # 列已存在
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS messages (
@@ -118,6 +123,10 @@ def _row_to_session(row: sqlite3.Row, include_messages: bool = False, messages: 
         "updated_at": row["updated_at"],
         "message_count": row["message_count"],
     }
+    try:
+        session["workspace"] = row["workspace"] or ""
+    except (IndexError, KeyError):
+        session["workspace"] = ""
     if include_messages:
         session["messages"] = messages or []
     return session
@@ -221,3 +230,28 @@ def rename_session(user_id: str, session_id: str, new_title: str) -> bool:
             (new_title, now, session_id),
         )
         return cur.rowcount > 0
+
+
+def set_session_workspace(user_id: str, session_id: str, workspace: str) -> bool:
+    """设置会话的工作目录"""
+    now = _timestamp()
+    with _connect(user_id) as conn:
+        cur = conn.execute(
+            "UPDATE sessions SET workspace = ?, updated_at = ? WHERE id = ?",
+            (workspace, now, session_id),
+        )
+        return cur.rowcount > 0
+
+
+def get_session_workspace(user_id: str, session_id: str) -> str:
+    """获取会话的工作目录"""
+    with _connect(user_id) as conn:
+        row = conn.execute(
+            "SELECT workspace FROM sessions WHERE id = ?", (session_id,)
+        ).fetchone()
+        if row:
+            try:
+                return row["workspace"] or ""
+            except (IndexError, KeyError):
+                return ""
+        return ""

@@ -149,6 +149,8 @@ async function switchSession(sessionId, forceLoad = false) {
     // 加载该会话的历史消息（内部已立即清空旧消息）
     await loadSessionMessages(sessionId);
     refreshStats();
+    // 加载该会话的工作目录
+    loadWorkspaceDisplay();
   } finally {
     // 无论成功失败都移除 loading 状态
     if (activeItem) activeItem.classList.remove('loading');
@@ -184,6 +186,61 @@ async function deleteSession(sessionId) {
     }
     await loadSessions();
   } catch {}
+}
+
+// ---------- 工作目录管理 ----------
+
+async function loadWorkspaceDisplay() {
+  const el = document.getElementById('workspace-display');
+  if (!el) return;
+  if (!currentSessionId) {
+    el.style.display = 'none';
+    return;
+  }
+  try {
+    const res = await fetch(`/sessions/${currentSessionId}/workspace`);
+    if (!res.ok) { el.style.display = 'none'; return; }
+    const data = await res.json();
+    if (data.workspace) {
+      el.style.display = 'inline';
+      el.title = '🗂 工作目录: ' + data.workspace + '\n点击修改';
+      el.textContent = '📁 ' + data.workspace.split('/').slice(-2).join('/');
+    } else {
+      el.style.display = 'inline';
+      el.title = '点击设置工作目录';
+      el.textContent = '📁 (未设置)';
+    }
+  } catch {
+    el.style.display = 'none';
+  }
+}
+
+function promptSetWorkspace() {
+  var ws = prompt('请输入工作目录路径（支持绝对路径或相对路径）：\n\n留空取消设置');
+  if (ws === null) return;
+  ws = ws.trim();
+  if (!ws) {
+    // 清空工作目录
+    fetch('/sessions/' + currentSessionId + '/workspace', {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({workspace: ''}),
+    }).then(function() { loadWorkspaceDisplay(); });
+    return;
+  }
+  fetch('/sessions/' + currentSessionId + '/workspace', {
+    method: 'PUT',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({workspace: ws}),
+  }).then(function(r) {
+    if (r.ok) {
+      loadWorkspaceDisplay();
+    } else {
+      r.json().then(function(d) { alert('设置失败: ' + (d.detail || '未知错误')); });
+    }
+  }).catch(function(e) {
+    alert('网络错误: ' + e.message);
+  });
 }
 
 // ---------- 侧边栏折叠逻辑 ----------
