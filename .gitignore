@@ -36,3 +36,5 @@ desktop/package-lock.json
 *.swo
 node_modules/
 reports/
+my-first-video-midnight/
+my-first-video/
