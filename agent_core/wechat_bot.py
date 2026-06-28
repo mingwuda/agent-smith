@@ -40,6 +40,19 @@ class WeChatBot:
         self._wechat_sessions: dict[str, str] = {}  # wx_user_id → current session_id
 
         os.makedirs(self.data_dir, exist_ok=True)
+
+        # ── 迁移旧版 token 到新版路径 ──
+        if user_id == "admin":
+            old_token_path = Path.home() / ".desktop_agent" / "wechat" / "token.json"
+            new_token_path = Path(self.data_dir) / "token.json"
+            if old_token_path.exists() and not new_token_path.exists():
+                try:
+                    new_token_path.parent.mkdir(parents=True, exist_ok=True)
+                    new_token_path.write_bytes(old_token_path.read_bytes())
+                    logger.info("[微信Bot] 已迁移旧版 token 到 %s", new_token_path)
+                except Exception as e:
+                    logger.warning("[微信Bot] token 迁移失败: %s", e)
+
         self._load_token()
 
     # ── 鉴权 ──────────────────────────────────────
@@ -217,8 +230,28 @@ class WeChatBot:
 
         wechat_uid = f"wechat_{self.user_id}"
 
+        # ── 首次启动时迁移旧版 wechat 命名空间下的会话 ──
+        if getattr(self, '_sessions_migrated', False) is False:
+            self._sessions_migrated = True
+            try:
+                old_sessions = session_store.list_sessions("wechat")
+                if old_sessions and self.user_id == "admin":
+                    for old_s in old_sessions:
+                        sid = old_s["id"]
+                        if not session_store.get_session(wechat_uid, sid):
+                            # 复制会话到新命名空间（通过读取旧会话的所有消息重新写入）
+                            old_detail = session_store.get_session("wechat", sid)
+                            if old_detail and old_detail.get("messages"):
+                                session_store.create_session(wechat_uid, title=old_detail.get("title", ""), session_id=sid)
+                                for m in old_detail["messages"]:
+                                    session_store.add_message(wechat_uid, sid, m["role"], m["content"])
+                    logger.info("[微信Bot:%s] 已迁移 %d 个旧会话到新命名空间", self.user_id, len(old_sessions))
+            except Exception as e:
+                logger.warning("[微信Bot:%s] 会话迁移失败: %s", self.user_id, e)
+
         # ── /new 命令：创建新会话 ──
         if text.strip() == "/new":
+            logger.debug("[微信Bot:%s] 触发 /new 命令", self.user_id)
             new_sid = uuid.uuid4().hex[:8]
             session_store.create_session(
                 wechat_uid, title=f"[微信] 新会话", session_id=new_sid,
