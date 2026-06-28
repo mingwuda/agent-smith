@@ -228,6 +228,44 @@ class WeChatBot:
             logger.info("[微信Bot:%s] 用户 %s 创建新会话 %s", self.user_id, from_user[:16], new_sid)
             return
 
+        # ── /list 命令：列出所有会话 ──
+        if text.strip() == "/list":
+            all_sessions = session_store.list_sessions(wechat_uid)
+            if not all_sessions:
+                await self.send_message(from_user, context_token, "📭 暂无会话。发送 /new 创建新会话。")
+                return
+            lines = [f"📋 共有 {len(all_sessions)} 个会话："]
+            for s in all_sessions:
+                sid = s["id"]
+                # 取最后一条用户消息作为摘要
+                sess_detail = session_store.get_session(wechat_uid, sid)
+                last_user_msg = ""
+                if sess_detail and sess_detail.get("messages"):
+                    for m in reversed(sess_detail["messages"]):
+                        if m.get("role") == "user":
+                            last_user_msg = m.get("content", "")[:50]
+                            break
+                marker = "→ " if sid == self._wechat_sessions.get(from_user) else "  "
+                lines.append(f"{marker}{sid}: {last_user_msg or '(空)'}")
+            await self.send_message(from_user, context_token, "\n".join(lines))
+            return
+
+        # ── /switch 命令：切换会话 ──
+        if text.strip().startswith("/switch "):
+            target_sid = text.strip()[len("/switch "):].strip()
+            if not target_sid:
+                await self.send_message(from_user, context_token, "❌ 请指定会话 ID，格式：/switch &lt;sessionId&gt;")
+                return
+            # 验证会话是否存在
+            sess = session_store.get_session(wechat_uid, target_sid)
+            if not sess:
+                await self.send_message(from_user, context_token, f"❌ 会话 {target_sid} 不存在。发送 /list 查看可用会话。")
+                return
+            self._wechat_sessions[from_user] = target_sid
+            await self.send_message(from_user, context_token, f"✅ 已切换到会话 {target_sid}，可以继续对话了")
+            logger.info("[微信Bot:%s] 用户 %s 切换到会话 %s", self.user_id, from_user[:16], target_sid)
+            return
+
         # ── 会话管理 ──
         session_id = self._wechat_sessions.get(from_user)
         if session_id is None:
