@@ -204,7 +204,10 @@ async function loadWorkspaceDisplay() {
     if (data.workspace) {
       el.style.display = 'inline';
       el.title = '🗂 工作目录: ' + data.workspace + '\n点击修改';
-      el.textContent = '📁 ' + data.workspace.split('/').slice(-2).join('/');
+      var parts = data.workspace.split('/').filter(Boolean);
+      var shortPath = parts.slice(-2).join('/');
+      if (data.workspace.startsWith('/')) shortPath = '/' + shortPath;
+      el.textContent = '📁 ' + shortPath;
     } else {
       el.style.display = 'inline';
       el.title = '点击设置工作目录';
