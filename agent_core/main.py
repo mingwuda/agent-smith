@@ -289,18 +289,50 @@ def init_agent():
     logger.info("  Skills 目录: %s", ", ".join(str(p) for p in skills_dirs))
     logger.info("  已加载技能: %d 个", skills_count)
 
-    # 初始化微信 Bot（按用户懒加载 + 启动时主动拉起 admin 的 Bot）
+    # 初始化微信 Bot（按用户懒加载 + 启动时主动拉起所有已登录用户的 Bot）
     app.state.wechat_bots: dict[str, WeChatBot] = {}
-    # 主动拉起 admin 用户的 Bot（如果有 token 则自动开始轮询）
+    _start_all_wechat_bots()
+
+
+def _get_all_users_with_bot() -> list[str]:
+    """获取所有可能有所属微信 Bot 的用户 ID。"""
+    users = ["admin"]
     try:
-        admin_bot = _get_wechat_bot("admin")
-        if admin_bot.is_logged_in and not admin_bot.is_running:
-            loop = getattr(app.state, "main_loop", None)
-            if loop and loop.is_running():
-                asyncio.run_coroutine_threadsafe(admin_bot.start(), loop)
-                logger.info("[微信Bot] admin Bot 已自动启动轮询")
-    except Exception as e:
-        logger.warning("[微信Bot] admin Bot 启动失败: %s", e)
+        from user_manager import list_users
+        for u in list_users():
+            uid = u.get("id", "")
+            if uid and uid not in users:
+                users.append(uid)
+    except Exception:
+        pass
+    # 也检查磁盘上已存在的 wechat_ 目录
+    try:
+        data_root = Path.home() / ".desktop_agent"
+        for p in data_root.glob("wechat_*"):
+            uid = p.name[len("wechat_"):]
+            if uid and uid not in users:
+                users.append(uid)
+    except Exception:
+        pass
+    return users
+
+
+def _start_all_wechat_bots():
+    """为所有有 token 的用户自动启动微信 Bot 轮询。"""
+    loop = getattr(app.state, "main_loop", None)
+    started = 0
+    for uid in _get_all_users_with_bot():
+        try:
+            bot = _get_wechat_bot(uid)
+            if bot.is_logged_in and not bot.is_running:
+                if loop and loop.is_running():
+                    asyncio.run_coroutine_threadsafe(bot.start(), loop)
+                    started += 1
+                    logger.info("[微信Bot] 用户 %s 的 Bot 已自动启动轮询", uid)
+        except Exception as e:
+            logger.warning("[微信Bot] 用户 %s 的 Bot 启动失败: %s", uid, e)
+    if started:
+        logger.info("[微信Bot] 共自动启动 %d 个微信 Bot", started)
 
 
 def _get_wechat_bot(uid: str) -> WeChatBot:
