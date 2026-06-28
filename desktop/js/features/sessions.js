@@ -62,8 +62,17 @@ async function loadSessionMessages(sessionId) {
     if (res.ok) {
       const data = await res.json();
       container.innerHTML = '';
+      // 重建输入历史
+      _msgHistory = [];
+      _msgHistoryIndex = -1;
       if (data.messages && data.messages.length > 0) {
         data.messages.forEach(msg => {
+          if (msg.role === 'user' && msg.content) {
+            // 只存纯文本，排除含图片的消息
+            if (!msg.images || msg.images.length === 0) {
+              _msgHistory.push(msg.content);
+            }
+          }
           const role = msg.role === 'user' ? 'user' : 'bot';
           const content = msg.content || '';
           if (role === 'user' && msg.images && msg.images.length) {

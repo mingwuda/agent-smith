@@ -110,6 +110,11 @@ async function send() {
   if ((!text && attachments.length === 0) || isLoading) return;
   
   addUserMessage(text, attachments);
+  // 推入输入历史
+  if (text) {
+    _msgHistory.push(text);
+    _msgHistoryIndex = -1;
+  }
   input.value = '';
   pendingAttachments = [];
   renderAttachmentPreview();

@@ -159,6 +159,41 @@ input.addEventListener('paste', (e) => {
 });
 
 input.addEventListener('keydown', (e) => {
+  // ── 上下方向键：消息历史导航 ──
+  if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+    e.preventDefault();
+    if (_msgHistory.length === 0) return;
+    var oldIndex = _msgHistoryIndex;
+    if (e.key === 'ArrowUp') {
+      // 上移：后退
+      if (_msgHistoryIndex <= 0) {
+        // 已到最旧消息，不再滚动
+        return;
+      }
+      if (_msgHistoryIndex === -1) {
+        // 保存当前输入内容
+        _msgHistoryIndex = _msgHistory.length - 1;
+      } else {
+        _msgHistoryIndex--;
+      }
+    } else {
+      // 下移：前进
+      if (_msgHistoryIndex === -1) return;
+      _msgHistoryIndex++;
+      if (_msgHistoryIndex >= _msgHistory.length) {
+        _msgHistoryIndex = -1;
+        input.value = '';
+        resizeComposer();
+        return;
+      }
+    }
+    input.value = _msgHistoryIndex >= 0 ? _msgHistory[_msgHistoryIndex] : '';
+    resizeComposer();
+    // 光标移到末尾
+    input.selectionStart = input.selectionEnd = input.value.length;
+    return;
+  }
+
   if (e.key !== 'Enter') return;
   const justEndedComposition = Date.now() - lastCompositionEndAt < 120;
   if (inputComposing || e.isComposing || e.keyCode === 229 || justEndedComposition) {

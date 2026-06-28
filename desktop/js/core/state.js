@@ -37,3 +37,7 @@ let hasToolCalls = false;         // 本轮是否有工具调用
 let generatingBadgeEl = null;     // 生成中徽章 DOM
 let streamIdleTimer = null;        // 流式响应空闲提示定时器
 let lastStreamEventAt = 0;         // 最近一次收到后端事件的时间
+
+// ── 输入区消息历史（上下方向键导航）──
+let _msgHistory = [];              // 当前会话的用户消息列表
+let _msgHistoryIndex = -1;         // -1 = 当前输入（空/新消息）
