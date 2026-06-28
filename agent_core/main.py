@@ -1522,8 +1522,9 @@ def list_sessions(request: Request):
         SessionInfo(**s, source="web")
         for s in session_store.list_sessions(uid)
     ]
-    # 合并微信 Bot 会话
-    for s in session_store.list_sessions("wechat"):
+    # 合并该用户的微信 Bot 会话
+    wechat_uid = f"wechat_{uid}"
+    for s in session_store.list_sessions(wechat_uid):
         if not any(ex.id == s["id"] for ex in sessions):
             sessions.append(SessionInfo(**s, source="wechat"))
     sessions.sort(key=lambda s: s.updated_at, reverse=True)
@@ -1536,16 +1537,16 @@ def get_session(session_id: str, request: Request):
     """获取当前用户的会话消息（也支持微信 Bot 会话）"""
     uid = _get_current_user(request)
     session = session_store.get_session(uid, session_id)
-    # 如果当前用户没有，尝试从微信 Bot 会话中查找
+    # 如果当前用户没有，尝试从该用户的微信 Bot 会话中查找
     if not session:
-        session = session_store.get_session("wechat", session_id)
+        session = session_store.get_session(f"wechat_{uid}", session_id)
     if not session:
         raise HTTPException(404, "会话不存在")
     return SessionMessagesResponse(
         id=session["id"],
         title=session.get("title", "未命名"),
         messages=session.get("messages", []),
-        source="wechat" if session_store.get_session("wechat", session_id) else "web",
+        source="wechat" if session_store.get_session(f"wechat_{uid}", session_id) else "web",
     )
 
 
@@ -1563,7 +1564,7 @@ def delete_session(session_id: str, request: Request):
     uid = _get_current_user(request)
     ok = session_store.delete_session(uid, session_id)
     if not ok:
-        ok = session_store.delete_session("wechat", session_id)
+        ok = session_store.delete_session(f"wechat_{uid}", session_id)
     if not ok:
         raise HTTPException(404, "会话不存在")
     return {"status": "ok", "message": f"已删除会话 {session_id}"}
