@@ -165,7 +165,18 @@ def run_python(code: str) -> str:
         reader_thread = threading.Thread(target=_reader, daemon=True)
         reader_thread.start()
 
-        proc.wait()
+        # 设置超时，避免脚本无限阻塞（默认 300s = 5 分钟）
+        PYTHON_TIMEOUT = int(os.environ.get("PYTHON_TIMEOUT", "300"))
+        try:
+            proc.wait(timeout=PYTHON_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=5)
+            reader_thread.join(timeout=5)
+            return (
+                f"❌ 脚本执行超时（{PYTHON_TIMEOUT}s），已强制终止。\n"
+                f"已输出 {len(output)} 字符:\n{output[-2000:] if output else '（无输出）'}"
+            )
         reader_thread.join(timeout=5)
 
         if proc.returncode != 0:
