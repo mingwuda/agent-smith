@@ -289,8 +289,18 @@ def init_agent():
     logger.info("  Skills 目录: %s", ", ".join(str(p) for p in skills_dirs))
     logger.info("  已加载技能: %d 个", skills_count)
 
-    # 初始化微信 Bot（按用户懒加载）
+    # 初始化微信 Bot（按用户懒加载 + 启动时主动拉起 admin 的 Bot）
     app.state.wechat_bots: dict[str, WeChatBot] = {}
+    # 主动拉起 admin 用户的 Bot（如果有 token 则自动开始轮询）
+    try:
+        admin_bot = _get_wechat_bot("admin")
+        if admin_bot.is_logged_in and not admin_bot.is_running:
+            loop = getattr(app.state, "main_loop", None)
+            if loop and loop.is_running():
+                asyncio.run_coroutine_threadsafe(admin_bot.start(), loop)
+                logger.info("[微信Bot] admin Bot 已自动启动轮询")
+    except Exception as e:
+        logger.warning("[微信Bot] admin Bot 启动失败: %s", e)
 
 
 def _get_wechat_bot(uid: str) -> WeChatBot:
