@@ -163,16 +163,14 @@ input.addEventListener('keydown', (e) => {
   if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
     e.preventDefault();
     if (_msgHistory.length === 0) return;
-    var oldIndex = _msgHistoryIndex;
     if (e.key === 'ArrowUp') {
       // 上移：后退
-      if (_msgHistoryIndex <= 0) {
+      if (_msgHistoryIndex === -1) {
+        // 首次按↑：从最后一条开始
+        _msgHistoryIndex = _msgHistory.length - 1;
+      } else if (_msgHistoryIndex === 0) {
         // 已到最旧消息，不再滚动
         return;
-      }
-      if (_msgHistoryIndex === -1) {
-        // 保存当前输入内容
-        _msgHistoryIndex = _msgHistory.length - 1;
       } else {
         _msgHistoryIndex--;
       }
