@@ -23,6 +23,7 @@ AgentSmith 是一个本地/私有部署的桌面 AI 智能体。它基于 FastAP
 | 网页能力 | `web_search` 搜索网页（Bing → 搜狗 → DuckDuckGo 逐级 fallback），`web_fetch` 抓取正文 |
 | Git 工具 | 查看状态、diff、日志、show、worktree；按明确指令 add/commit/push/revert/merge/checkout |
 | Shell 命令 | `run_shell` 执行 shell 命令（bash/zsh/sh/powershell/cmd），自动跨平台适配，内置安全拦截 |
+| 浏览器自动化 | 内置 Playwright 浏览器，支持导航、点击、填表、截图、JS 执行等操作；截图通过 token URL 访问，避免路径泄露 |
 | 子代理 | `delegate_task` 串行 + `delegate_tasks_parallel` 并行委派 coder/reviewer/debugger/searcher；**支持实时日志流**展示执行过程 |
 | Skills | 加载 `SKILL.md`，兼容 YAML frontmatter 和 oh-my-openagent / Superpowers 风格技能；内置 `database-interaction` 技能支持自然语言数据库交互 |
 | 长期记忆 | 按用户隔离保存长期偏好、项目事实和常用环境信息 |
@@ -817,6 +818,7 @@ desktop-agent/
 │       ├── shell_tools.py      # Shell 命令执行（跨平台，安全拦截）
 │       ├── git_tools.py        # Git 工具（含白名单安全验证）
 │       ├── web_tools.py        # 搜索和网页抓取
+│       ├── browser_tools.py    # 浏览器自动化（Playwright，截图 token URL）
 │       ├── memory_tools.py     # 记忆工具
 │       ├── system_tools.py     # 系统信息和 Skills 列表
 │       └── database_tool.py    # 数据库交互工具（db_schema, db_query, db_connections）
