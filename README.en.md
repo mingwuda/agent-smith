@@ -20,6 +20,8 @@ It works well as a personal or intranet team assistant for reading and writing w
 | Python execution | Run Python code and return output; very large output is summarized with head and tail excerpts |
 | Web tools | `web_search` for search and `web_fetch` for page text, with retries and fallback requests |
 | Git tools | Inspect status, diff, log, show, worktree; add, commit, push, revert, merge, checkout only on explicit user request |
+| Shell commands | `run_shell` for cross-platform shell commands (bash/zsh/sh/powershell/cmd), with built-in safety guards |
+| Browser automation | Built-in Playwright browser for navigation, clicking, filling forms, screenshots, and JS evaluation; screenshots served via token URL to prevent path leaks |
 | Subagents | `delegate_task` for serial + `delegate_tasks_parallel` for parallel delegation to coder/reviewer/debugger agents |
 | Skills | Loads `SKILL.md`, compatible with YAML frontmatter and common oh-my-openagent / Superpowers-style skills; built-in `database-interaction` skill for natural-language database queries |
 | Long-term memory | Stores user preferences, project facts, and reusable environment notes per user |
@@ -565,8 +567,10 @@ desktop-agent/
 │   └── tools/
 │       ├── file_tools.py       # File tools
 │       ├── code_tools.py       # Python execution
+│       ├── shell_tools.py      # Shell command execution (cross-platform, safety guards)
 │       ├── git_tools.py        # Git tools with allowlist security
 │       ├── web_tools.py        # Search and page fetch
+│       ├── browser_tools.py    # Browser automation (Playwright, screenshot token URL)
 │       ├── memory_tools.py     # Memory tools
 │       ├── system_tools.py     # System info and Skills list
 │       └── database_tool.py    # Database interaction tools (db_schema, db_query, db_connections)
