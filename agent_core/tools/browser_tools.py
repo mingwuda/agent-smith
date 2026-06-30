@@ -351,11 +351,9 @@ def browser_screenshot(full_page: bool = True) -> str:
         info = await _page_info(page)
         parts = [f"📸 已截图\n\n{info}\n\n"]
         
-        # 使用 HTTP URL
-        if ss.get("path"):
-            from urllib.parse import quote
-            path_encoded = quote(ss['path'], safe='')
-            parts.append(f"![截图](/api/screenshot?path={path_encoded})\n\n")
+        # 使用 token URL
+        if ss.get("token"):
+            parts.append(f"![截图](/api/screenshot?token={ss['token']})\n\n")
         
         if ss.get("size"):
             parts.append(f"尺寸: {ss['size']}\n")
@@ -433,6 +431,117 @@ def browser_takeover() -> str:
         return f"❌ 浏览器初始化失败: {type(e).__name__}: {e}"
 
 
+@tool
+def browser_drag(source: str, target: str) -> str:
+    """将页面元素拖拽到目标元素上（Drag-and-Drop）。
+
+    用于实现拖拽排序、滑块验证、文件拖放等交互。
+
+    参数:
+      source: 被拖拽元素的 CSS 选择器
+      target: 目标元素的 CSS 选择器
+    """
+    async def _run():
+        page = await _ensure_browser()
+        try:
+            src_el = await page.wait_for_selector(source, timeout=10000)
+            if not src_el:
+                return f"❌ 未找到源元素: {source}"
+            tgt_el = await page.wait_for_selector(target, timeout=10000)
+            if not tgt_el:
+                return f"❌ 未找到目标元素: {target}"
+            
+            # 获取源元素位置信息
+            src_box = await src_el.bounding_box()
+            await src_el.drag_to(tgt_el, timeout=10000)
+            await asyncio.sleep(0.5)
+            
+            info = await _page_info(page)
+            screenshot = await _save_screenshot(page)
+            result = f"✅ 已将 {source} 拖拽到 {target}\n\n{info}\n\n"
+            if screenshot.get("token"):
+                result += f"![截图](/api/screenshot?token={screenshot['token']})\n\n"
+            return result
+        except Exception as e:
+            return f"❌ 拖拽失败: {type(e).__name__}: {e}"
+
+    try:
+        return _run_async(_run())
+    except Exception as e:
+        return f"❌ 拖拽失败: {type(e).__name__}: {e}"
+
+
+@tool
+def browser_slide(selector: str, offset_x: int, offset_y: int = 0) -> str:
+    """水平或垂直滑动页面元素（模拟鼠标拖拽），常用于滑块验证码。
+
+    通过模拟人类操作轨迹逐步移动鼠标，避免被反爬机制检测。
+    支持任意方向的滑动（水平、垂直或斜向）。
+
+    参数:
+      selector: 滑块元素的 CSS 选择器
+      offset_x: 水平滑动的像素距离（正数向右，负数向左）
+      offset_y: 垂直滑动的像素距离（正数向下，负数向上），默认 0
+    """
+    async def _run():
+        page = await _ensure_browser()
+        try:
+            el = await page.wait_for_selector(selector, timeout=10000)
+            if not el:
+                return f"❌ 未找到滑块元素: {selector}"
+            
+            box = await el.bounding_box()
+            if not box:
+                return f"❌ 无法获取元素位置: {selector}"
+            
+            # 起始位置：元素中心
+            start_x = box["x"] + box["width"] / 2
+            start_y = box["y"] + box["height"] / 2
+            end_x = start_x + offset_x
+            end_y = start_y + offset_y
+            
+            logger.info(f"🖱️ 开始滑动: ({start_x:.0f}, {start_y:.0f}) → ({end_x:.0f}, {end_y:.0f})")
+            
+            # 模拟人类滑动轨迹：先快速移动大部分距离，再缓慢微调
+            await page.mouse.move(start_x, start_y)
+            await page.mouse.down()
+            
+            # 生成人类化的运动轨迹（贝塞尔曲线模拟）
+            steps = max(20, min(60, abs(offset_x) // 5 + abs(offset_y) // 5))
+            for i in range(1, steps + 1):
+                t = i / steps
+                # 缓动函数：先快后慢（ease-out）
+                eased = 1 - (1 - t) ** 2
+                # 添加微小随机抖动，模拟人手的不稳定性
+                import random
+                jitter_x = random.uniform(-1.5, 1.5)
+                jitter_y = random.uniform(-1.5, 1.5)
+                x = start_x + offset_x * eased + jitter_x
+                y = start_y + offset_y * eased + jitter_y
+                await page.mouse.move(x, y)
+                await asyncio.sleep(random.uniform(0.005, 0.015))
+            
+            await page.mouse.up()
+            await asyncio.sleep(0.5)
+            
+            logger.info("✅ 滑动完成")
+            info = await _page_info(page)
+            screenshot = await _save_screenshot(page)
+            result = f"✅ 已滑动 {selector} ({offset_x}px, {offset_y}px)\n\n{info}\n\n"
+            if screenshot.get("token"):
+                result += f"![截图](/api/screenshot?token={screenshot['token']})\n\n"
+            if screenshot.get("size"):
+                result += f"页面尺寸: {screenshot['size']}\n"
+            return result
+        except Exception as e:
+            return f"❌ 滑动失败: {type(e).__name__}: {e}"
+
+    try:
+        return _run_async(_run())
+    except Exception as e:
+        return f"❌ 滑动失败: {type(e).__name__}: {e}"
+
+
 TOOLS = [
     browser_navigate,
     browser_click,
@@ -443,4 +552,6 @@ TOOLS = [
     browser_evaluate,
     browser_wait,
     browser_takeover,
+    browser_drag,
+    browser_slide,
 ]
