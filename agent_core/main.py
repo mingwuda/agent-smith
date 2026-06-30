@@ -1760,8 +1760,8 @@ def get_screenshot(token: str = "", path: str = "", request: Request = None):
         path: 截图文件的绝对路径（兼容旧版）
     """
     uid = _get_current_user(request)
-    config = AgentConfig.load()
-    workspace = Path(config.workspace).expanduser().resolve()
+    # 使用用户工作区（与浏览器工具保存截图时使用的路径一致）
+    workspace = _workspace_for_user(uid)
     
     # 优先使用 token 查找（基于文件名的确定性方案）
     if token:
