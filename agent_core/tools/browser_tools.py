@@ -9,7 +9,6 @@ import logging
 import os
 import threading
 import time
-import uuid
 from pathlib import Path
 from typing import Optional
 
@@ -88,14 +87,6 @@ _page_lock: Optional[asyncio.Lock] = None  # 延迟初始化
 
 # 工作区（用于保存截图）
 _workspace: Optional[Path] = None
-
-# token → 路径映射表，防止 LLM 看到绝对路径后错误引用
-_screenshot_tokens: dict[str, str] = {}
-
-
-def lookup_screenshot(token: str) -> Optional[str]:
-    """通过 token 查找截图路径（供 main.py 的 /api/screenshot 端点使用）"""
-    return _screenshot_tokens.get(token)
 
 # 进程退出时清理浏览器资源
 import atexit
@@ -181,10 +172,8 @@ async def _save_screenshot(page) -> dict:
         path_str = str(screenshot_path)
         result["path"] = path_str
         
-        # 生成 token，避免在 URL 中暴露绝对路径
-        token = uuid.uuid4().hex[:16]
-        _screenshot_tokens[token] = path_str
-        result["token"] = token
+        # token = 文件名（不包含扩展名），端点通过 workspace/.browser_screenshots/{token}.png 查找
+        result["token"] = screenshot_path.stem
         
         # 获取图片尺寸
         try:

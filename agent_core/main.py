@@ -1752,33 +1752,27 @@ def download_user_image(name: str, request: Request, uid: str = ""):
 # ---------- 浏览器截图文件访问 ----------
 
 @app.get("/api/screenshot")
-def get_screenshot(path: str = "", token: str = "", request: Request = None):
+def get_screenshot(token: str = "", path: str = "", request: Request = None):
     """访问浏览器截图文件。
     
     参数:
-        token: 截图 token（优先使用）
+        token: 截图文件名（不含路径），如 screenshot_1234567890
         path: 截图文件的绝对路径（兼容旧版）
     """
     uid = _get_current_user(request)
     config = AgentConfig.load()
     workspace = Path(config.workspace).expanduser().resolve()
     
-    # 优先使用 token 查找
+    # 优先使用 token 查找（基于文件名的确定性方案）
     if token:
-        from agent_core.tools.browser_tools import lookup_screenshot
-        path_str = lookup_screenshot(token)
-        if not path_str:
-            raise HTTPException(404, "截图 token 不存在或已过期")
-        target = Path(path_str)
-        if not target.exists() or not target.is_file():
-            raise HTTPException(404, "截图文件不存在")
-        # 安全校验
+        target = workspace / ".browser_screenshots" / f"{token}.png"
+        target = target.resolve()
         try:
             target.relative_to(workspace)
         except ValueError:
             raise HTTPException(403, "不允许访问该路径")
-        if ".browser_screenshots" not in target.parts:
-            raise HTTPException(403, "只能访问浏览器截图文件")
+        if not target.exists() or not target.is_file():
+            raise HTTPException(404, "截图文件不存在")
         return FileResponse(target, media_type="image/png")
     
     # 兼容旧版 path 参数
