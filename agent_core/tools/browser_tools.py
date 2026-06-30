@@ -9,6 +9,7 @@ import logging
 import os
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Optional
 
@@ -87,6 +88,14 @@ _page_lock: Optional[asyncio.Lock] = None  # 延迟初始化
 
 # 工作区（用于保存截图）
 _workspace: Optional[Path] = None
+
+# token → 路径映射表，防止 LLM 看到绝对路径后错误引用
+_screenshot_tokens: dict[str, str] = {}
+
+
+def lookup_screenshot(token: str) -> Optional[str]:
+    """通过 token 查找截图路径（供 main.py 的 /api/screenshot 端点使用）"""
+    return _screenshot_tokens.get(token)
 
 # 进程退出时清理浏览器资源
 import atexit
@@ -169,7 +178,13 @@ async def _save_screenshot(page) -> dict:
 
     if screenshot_path:
         screenshot_path.write_bytes(png_data)
-        result["path"] = str(screenshot_path)
+        path_str = str(screenshot_path)
+        result["path"] = path_str
+        
+        # 生成 token，避免在 URL 中暴露绝对路径
+        token = uuid.uuid4().hex[:16]
+        _screenshot_tokens[token] = path_str
+        result["token"] = token
         
         # 获取图片尺寸
         try:
@@ -222,11 +237,9 @@ def browser_navigate(url: str) -> str:
         screenshot = await _save_screenshot(page)
         result = f"✅ 已导航到 {url}\n\n{info}\n\n"
         
-        # 使用 HTTP URL（避免 base64 占用太多 token）
-        if screenshot.get("path"):
-            from urllib.parse import quote
-            path_encoded = quote(screenshot['path'], safe='')
-            result += f"![截图](/api/screenshot?path={path_encoded})\n\n"
+        # 使用 token URL（不暴露绝对路径，防止 LLM 错误引用）
+        if screenshot.get("token"):
+            result += f"![截图](/api/screenshot?token={screenshot['token']})\n\n"
         
         if screenshot.get("size"):
             result += f"页面尺寸: {screenshot['size']}\n"
@@ -254,11 +267,9 @@ def browser_click(selector: str) -> str:
             screenshot = await _save_screenshot(page)
             result = f"✅ 已点击: {selector}\n\n{info}\n\n"
             
-            # 使用 HTTP URL
-            if screenshot.get("path"):
-                from urllib.parse import quote
-                path_encoded = quote(screenshot['path'], safe='')
-                result += f"![截图](/api/screenshot?path={path_encoded})\n\n"
+            # 使用 token URL
+            if screenshot.get("token"):
+                result += f"![截图](/api/screenshot?token={screenshot['token']})\n\n"
             
             return result
         except Exception as e:
@@ -419,11 +430,9 @@ def browser_takeover() -> str:
         screenshot = await _save_screenshot(page)
         result = f"🌐 浏览器已就绪\n\n{info}\n\n"
         
-        # 使用 HTTP URL
-        if screenshot.get("path"):
-            from urllib.parse import quote
-            path_encoded = quote(screenshot['path'], safe='')
-            result += f"![截图](/api/screenshot?path={path_encoded})\n\n"
+        # 使用 token URL
+        if screenshot.get("token"):
+            result += f"![截图](/api/screenshot?token={screenshot['token']})\n\n"
         
         if screenshot.get("size"):
             result += f"页面尺寸: {screenshot['size']}\n"
