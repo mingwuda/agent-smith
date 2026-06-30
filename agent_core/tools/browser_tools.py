@@ -154,10 +154,7 @@ async def _close_browser():
 
 
 async def _save_screenshot(page) -> dict:
-    """截取当前页面截图并返回 base64 和元信息（异步版本，在事件循环内直接 await）"""
-    import io
-    from PIL import Image as PILImage
-
+    """截取当前页面截图并保存到工作区（异步版本）"""
     timestamp = int(time.time())
     screenshot_path = None
     if _workspace:
@@ -167,28 +164,22 @@ async def _save_screenshot(page) -> dict:
 
     result = {"timestamp": timestamp}
 
-    # 直接在事件循环中 await（避免死锁）
+    # 截图并保存
     png_data = await page.screenshot(full_page=True, timeout=30000)
 
-    # 保存到工作区
     if screenshot_path:
         screenshot_path.write_bytes(png_data)
         result["path"] = str(screenshot_path)
-
-    # 生成 base64 缩略图（CPU 密集型，放到线程池）
-    try:
-        img = PILImage.open(io.BytesIO(png_data))
-        w, h = img.size
-        result["size"] = f"{w}x{h}"
-        if w > 800:
-            ratio = 800 / w
-            new_h = int(h * ratio)
-            img = img.resize((800, new_h), PILImage.LANCZOS)
-        buf = io.BytesIO()
-        img.save(buf, format="PNG", optimize=True)
-        result["thumbnail_b64"] = base64.b64encode(buf.getvalue()).decode()
-    except Exception as e:
-        result["thumbnail_error"] = str(e)
+        
+        # 获取图片尺寸
+        try:
+            import io
+            from PIL import Image as PILImage
+            img = PILImage.open(io.BytesIO(png_data))
+            w, h = img.size
+            result["size"] = f"{w}x{h}"
+        except Exception:
+            pass
 
     return result
 
@@ -231,11 +222,8 @@ def browser_navigate(url: str) -> str:
         screenshot = await _save_screenshot(page)
         result = f"✅ 已导航到 {url}\n\n{info}\n\n"
         
-        # 优先使用 base64 缩略图（直接嵌入 Markdown，无需 HTTP 请求）
-        if screenshot.get("thumbnail_b64"):
-            result += f"![截图](data:image/png;base64,{screenshot['thumbnail_b64']})\n\n"
-        elif screenshot.get("path"):
-            # 降级方案：使用 HTTP URL
+        # 使用 HTTP URL（避免 base64 占用太多 token）
+        if screenshot.get("path"):
             from urllib.parse import quote
             path_encoded = quote(screenshot['path'], safe='')
             result += f"![截图](/api/screenshot?path={path_encoded})\n\n"
@@ -267,10 +255,8 @@ def browser_click(selector: str) -> str:
             screenshot = await _save_screenshot(page)
             result = f"✅ 已点击: {selector}\n\n{info}\n\n"
             
-            # 优先使用 base64 缩略图
-            if screenshot.get("thumbnail_b64"):
-                result += f"![截图](data:image/png;base64,{screenshot['thumbnail_b64']})\n\n"
-            elif screenshot.get("path"):
+            # 使用 HTTP URL
+            if screenshot.get("path"):
                 from urllib.parse import quote
                 path_encoded = quote(screenshot['path'], safe='')
                 result += f"![截图](/api/screenshot?path={path_encoded})\n\n"
@@ -367,10 +353,8 @@ def browser_screenshot(full_page: bool = True) -> str:
         info = await _page_info(page)
         parts = [f"📸 已截图\n\n{info}\n\n"]
         
-        # 优先使用 base64 缩略图
-        if ss.get("thumbnail_b64"):
-            parts.append(f"![截图](data:image/png;base64,{ss['thumbnail_b64']})\n\n")
-        elif ss.get("path"):
+        # 使用 HTTP URL
+        if ss.get("path"):
             from urllib.parse import quote
             path_encoded = quote(ss['path'], safe='')
             parts.append(f"![截图](/api/screenshot?path={path_encoded})\n\n")
@@ -438,10 +422,8 @@ def browser_takeover() -> str:
         screenshot = await _save_screenshot(page)
         result = f"🌐 浏览器已就绪\n\n{info}\n\n"
         
-        # 优先使用 base64 缩略图
-        if screenshot.get("thumbnail_b64"):
-            result += f"![截图](data:image/png;base64,{screenshot['thumbnail_b64']})\n\n"
-        elif screenshot.get("path"):
+        # 使用 HTTP URL
+        if screenshot.get("path"):
             from urllib.parse import quote
             path_encoded = quote(screenshot['path'], safe='')
             result += f"![截图](/api/screenshot?path={path_encoded})\n\n"

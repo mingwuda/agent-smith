@@ -244,3 +244,29 @@
   #loading-bar .bar-track .bar-fill { height:100%; width:0; background:linear-gradient(90deg,#007aff,#30d158); border-radius:2px; animation:loadingSweep 1.5s ease infinite; }
   @keyframes loadingSweep { 0% { width:0; margin-left:0; } 50% { width:60%; margin-left:20%; } 100% { width:0; margin-left:100%; } }
   #loading-bar .label { white-space:nowrap; font-size:12px; color:#007aff; font-weight:500; }
+
+  /* 工具结果 Markdown 渲染 */
+  .tool-result-markdown {
+    padding: 8px;
+    background: #f8f8fa;
+    border-radius: 6px;
+    font-size: 13px;
+    line-height: 1.6;
+    max-height: 500px;
+    overflow-y: auto;
+  }
+  .tool-result-markdown img {
+    max-width: 100%;
+    height: auto;
+    border-radius: 6px;
+    margin: 8px 0;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+  }
+  .tool-result-markdown pre {
+    background: #1c1c1e;
+    color: #e8e8ed;
+    padding: 10px;
+    border-radius: 6px;
+    overflow-x: auto;
+    font-size: 12px;
+  }

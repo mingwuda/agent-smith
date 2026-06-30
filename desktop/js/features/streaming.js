@@ -633,8 +633,19 @@ function handleStreamEvent(data) {
           if (data.result_full && data.result_full.length > 400) {
             fullResult = data.result_full;
           }
-          outArea.innerHTML = '<div class="tool-section-label">结果</div>' +
-            `<pre class="tool-code-block" style="${isError ? 'color:#fca5a5;' : ''}max-height:400px;overflow-y:auto;">${escapeHtml(unescapeDisplay(String(fullResult)))}</pre>`;
+          
+          // 检测是否包含 Markdown 图片语法
+          var hasMarkdownImage = /!\[.*?\]\(.*?\)/.test(fullResult);
+          
+          if (hasMarkdownImage) {
+            // 包含图片，使用 Markdown 渲染
+            outArea.innerHTML = '<div class="tool-section-label">结果</div>' +
+              `<div class="tool-result-markdown">${renderMarkdown(unescapeDisplay(String(fullResult)))}</div>`;
+          } else {
+            // 纯文本，使用 <pre> 显示
+            outArea.innerHTML = '<div class="tool-section-label">结果</div>' +
+              `<pre class="tool-code-block" style="${isError ? 'color:#fca5a5;' : ''}max-height:400px;overflow-y:auto;">${escapeHtml(unescapeDisplay(String(fullResult)))}</pre>`;
+          }
 
           // ── 工作区外文件写入授权 ──
           var resultStr = String(fullResult);
