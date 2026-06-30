@@ -1749,6 +1749,34 @@ def download_user_image(name: str, request: Request, uid: str = ""):
     return FileResponse(resolved, media_type="image/png")
 
 
+# ---------- 浏览器截图文件访问 ----------
+
+@app.get("/api/screenshot")
+def get_screenshot(path: str, request: Request):
+    """访问浏览器截图文件。
+    
+    参数:
+        path: 截图文件的绝对路径（必须是工作区内的 .browser_screenshots 目录）
+    """
+    uid = _get_current_user(request)
+    config = AgentConfig.load()
+    workspace = Path(config.workspace).expanduser().resolve()
+    
+    # 解析路径并校验安全性
+    try:
+        target = Path(path).expanduser().resolve()
+        # 确保路径在工作区内
+        target.relative_to(workspace)
+        # 确保是 .browser_screenshots 目录
+        if ".browser_screenshots" not in target.parts:
+            raise HTTPException(403, "只能访问浏览器截图文件")
+        if not target.exists() or not target.is_file():
+            raise HTTPException(404, "截图文件不存在")
+        return FileResponse(target, media_type="image/png")
+    except (ValueError, RuntimeError, OSError) as exc:
+        raise HTTPException(403, "不允许访问该路径") from exc
+
+
 def _user_image_urls(uid: str, image_paths: list[str], request: Request) -> list[str]:
     """将本地图片路径转换为可下载的 HTTP URL，供 LLM 工具使用。"""
     base_url = str(request.base_url).rstrip("/")

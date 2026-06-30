@@ -229,13 +229,15 @@ def browser_navigate(url: str) -> str:
 
         info = await _page_info(page)
         screenshot = await _save_screenshot(page)
-        result = f"✅ 已导航到 {url}\n{info}\n"
+        result = f"✅ 已导航到 {url}\n\n{info}\n\n"
         if screenshot.get("path"):
+            # 使用 HTTP URL 供前端渲染
+            from urllib.parse import quote
+            path_encoded = quote(screenshot['path'], safe='')
+            result += f"![截图](/api/screenshot?path={path_encoded})\n"
             result += f"截图已保存: {screenshot['path']}\n"
         if screenshot.get("size"):
             result += f"页面尺寸: {screenshot['size']}\n"
-        if screenshot.get("thumbnail_b64"):
-            result += f"[图片: data:image/png;base64,{screenshot['thumbnail_b64'][:80]}...]"
         return result
 
     try:
@@ -258,8 +260,11 @@ def browser_click(selector: str) -> str:
             await asyncio.sleep(0.5)  # 等待可能的页面响应
             info = await _page_info(page)
             screenshot = await _save_screenshot(page)
-            result = f"✅ 已点击: {selector}\n{info}\n"
+            result = f"✅ 已点击: {selector}\n\n{info}\n\n"
             if screenshot.get("path"):
+                from urllib.parse import quote
+                path_encoded = quote(screenshot['path'], safe='')
+                result += f"![截图](/api/screenshot?path={path_encoded})\n"
                 result += f"截图已保存: {screenshot['path']}\n"
             return result
         except Exception as e:
@@ -350,14 +355,15 @@ def browser_screenshot(full_page: bool = True) -> str:
         page = await _ensure_browser()
         ss = await _save_screenshot(page)
         info = await _page_info(page)
-        parts = [f"📸 已截图\n{info}"]
+        parts = [f"📸 已截图\n\n{info}\n\n"]
         if ss.get("path"):
-            parts.append(f"已保存: {ss['path']}")
+            from urllib.parse import quote
+            path_encoded = quote(ss['path'], safe='')
+            parts.append(f"![截图](/api/screenshot?path={path_encoded})\n")
+            parts.append(f"已保存: {ss['path']}\n")
         if ss.get("size"):
-            parts.append(f"尺寸: {ss['size']}")
-        if ss.get("thumbnail_b64"):
-            parts.append(f"![screenshot](data:image/png;base64,{ss['thumbnail_b64']})")
-        return "\n".join(parts)
+            parts.append(f"尺寸: {ss['size']}\n")
+        return "".join(parts)
 
     try:
         return _run_async(_run())
@@ -415,11 +421,15 @@ def browser_takeover() -> str:
         page = await _ensure_browser()
         info = await _page_info(page)
         screenshot = await _save_screenshot(page)
-        result = f"🌐 浏览器已就绪\n{info}\n"
+        result = f"🌐 浏览器已就绪\n\n{info}\n\n"
+        if screenshot.get("path"):
+            from urllib.parse import quote
+            path_encoded = quote(screenshot['path'], safe='')
+            result += f"![截图](/api/screenshot?path={path_encoded})\n"
         if screenshot.get("size"):
             result += f"页面尺寸: {screenshot['size']}\n"
-        if screenshot.get("thumbnail_b64"):
-            result += f"![status](data:image/png;base64,{screenshot['thumbnail_b64']})"
+        if screenshot.get("path"):
+            result += f"截图已保存: {screenshot['path']}\n"
         return result
 
     try:
