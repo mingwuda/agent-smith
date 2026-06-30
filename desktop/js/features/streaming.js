@@ -4,6 +4,7 @@
 // ---------- 全局变量 ----------
 
 var _currentPythonOutEl = null; // 当前 run_python 的实时日志容器
+var _lastToolImageHtml = null; // 最近一次工具结果的图片 Markdown
 
 // ---------- Typing / Loading 指示器 ----------
 
@@ -638,6 +639,12 @@ function handleStreamEvent(data) {
           var hasMarkdownImage = /!\[.*?\]\(.*?\)/.test(fullResult);
           
           if (hasMarkdownImage) {
+            // 提取图片 URL 并保存，供最终消息注入
+            var imgMatch = String(fullResult).match(/!\[.*?\]\((.*?)\)/);
+            if (imgMatch) {
+              _lastToolImageHtml = '<a href="' + escapeHtml(imgMatch[1]) + '"><img src="' + escapeHtml(imgMatch[1]) + '" style="max-width:100%;border-radius:6px;margin:8px 0;"></a>';
+            }
+            
             // 包含图片，使用 Markdown 渲染
             outArea.innerHTML = '<div class="tool-section-label">结果</div>' +
               `<div class="tool-result-markdown">${renderMarkdown(unescapeDisplay(String(fullResult)))}</div>`;
@@ -824,9 +831,16 @@ function handleStreamEvent(data) {
         }
       }
       if (currentBotMsgEl && data.content) {
-        currentBotMsgEl.innerHTML = renderMarkdown(data.content);
+        // 在最终消息前注入截图（如果有工具图片且最终回复没含图片）
+        var finalHtml = renderMarkdown(data.content);
+        if (_lastToolImageHtml && data.content.indexOf('![') === -1) {
+          finalHtml = '<div style="margin-bottom:12px;">' + _lastToolImageHtml + '</div>' + finalHtml;
+        }
+        currentBotMsgEl.innerHTML = finalHtml;
         currentFinalContent = data.content;
       }
+      // 重置工具图片缓存
+      _lastToolImageHtml = null;
       smartScroll(container);
       break;
   }
