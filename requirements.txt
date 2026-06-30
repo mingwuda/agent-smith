@@ -16,3 +16,5 @@ click>=8.1.0
 psycopg2-binary>=2.9.0
 pymysql>=1.1.0
 qrcode[pil]>=7.4,<8.0
+playwright>=1.40.0
+Pillow>=10.0.0

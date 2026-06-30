@@ -1,0 +1,377 @@
+"""浏览器自动化工具（基于 Playwright）
+
+支持页面导航、元素交互、截图和前端 E2E 测试。
+"""
+import asyncio
+import base64
+import logging
+import os
+import time
+from pathlib import Path
+from typing import Optional
+
+from langchain_core.tools import tool
+
+logger = logging.getLogger(__name__)
+
+
+def _run_async(coro) -> any:
+    """在同步上下文中执行异步协程。
+    工具在 LangGraph 线程池中运行，可以安全地创建新的事件循环。"""
+    try:
+        loop = asyncio.get_running_loop()
+        # 已经有运行中的事件循环（主线程），通过 create_task + wait
+        task = asyncio.run_coroutine_threadsafe(coro, loop)
+        return task.result(timeout=60)
+    except RuntimeError:
+        # 没有运行中的事件循环，创建一个新的
+        return asyncio.run(coro)
+
+# 全局浏览器实例（跨工具调用复用）
+_browser = None
+_browser_context = None
+_page = None
+_playwright = None
+_page_lock = asyncio.Lock()
+
+# 工作区（用于保存截图）
+_workspace: Optional[Path] = None
+
+
+def set_workspace(path: Path):
+    global _workspace
+    _workspace = path.expanduser().resolve()
+
+
+async def _ensure_browser():
+    """惰性初始化浏览器实例（每个进程只启动一次）"""
+    global _browser, _browser_context, _page, _playwright
+    if _page is not None:
+        return _page
+
+    from playwright.async_api import async_playwright
+
+    _playwright = await async_playwright().start()
+    headless = os.environ.get("BROWSER_HEADLESS", "1") == "1"
+    _browser = await _playwright.chromium.launch(
+        headless=headless,
+        args=[
+            "--no-sandbox",
+            "--disable-gpu",
+            "--disable-dev-shm-usage",
+        ],
+    )
+    _browser_context = await _browser.new_context(
+        viewport={"width": 1280, "height": 720},
+        user_agent=(
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/125.0.0.0 Safari/537.36"
+        ),
+    )
+    _page = await _browser_context.new_page()
+    return _page
+
+
+async def _close_browser():
+    """关闭浏览器实例"""
+    global _browser, _browser_context, _page, _playwright
+    try:
+        if _browser_context:
+            await _browser_context.close()
+        if _browser:
+            await _browser.close()
+        if _playwright:
+            await _playwright.stop()
+    except Exception:
+        pass
+    finally:
+        _browser = None
+        _browser_context = None
+        _page = None
+        _playwright = None
+
+
+def _save_screenshot(page) -> dict:
+    """截取当前页面截图并返回 base64 和元信息"""
+    import io
+    from PIL import Image as PILImage
+
+    timestamp = int(time.time())
+    screenshot_path = None
+    if _workspace:
+        screenshot_dir = _workspace / ".browser_screenshots"
+        screenshot_dir.mkdir(parents=True, exist_ok=True)
+        screenshot_path = screenshot_dir / f"screenshot_{timestamp}.png"
+
+    result = {"timestamp": timestamp}
+
+    # 同步截图（playwright 异步操作在独立事件循环中运行）
+    png_data = _run_async(page.screenshot(full_page=True))
+
+    # 保存到工作区
+    if screenshot_path:
+        screenshot_path.write_bytes(png_data)
+        result["path"] = str(screenshot_path)
+
+    # 生成 base64 缩略图（压缩到 800px 宽以便传输）
+    try:
+        img = PILImage.open(io.BytesIO(png_data))
+        w, h = img.size
+        result["size"] = f"{w}x{h}"
+        if w > 800:
+            ratio = 800 / w
+            new_h = int(h * ratio)
+            img = img.resize((800, new_h), PILImage.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, format="PNG", optimize=True)
+        result["thumbnail_b64"] = base64.b64encode(buf.getvalue()).decode()
+    except Exception as e:
+        result["thumbnail_error"] = str(e)
+
+    return result
+
+
+def _page_info(page) -> str:
+    """提取当前页面关键信息"""
+    try:
+        loop = asyncio.get_running_loop()
+        title = asyncio.run_coroutine_threadsafe(page.title(), loop).result(timeout=10)
+        url = asyncio.run_coroutine_threadsafe(
+            asyncio.wait_for(page.evaluate("window.location.href"), timeout=5), loop
+        ).result(timeout=10)
+        return f"当前页面: {title}\n当前 URL: {url}"
+    except Exception:
+        return "（无法获取页面信息）"
+
+
+@tool
+def browser_navigate(url: str) -> str:
+    """导航到指定 URL 并返回页面标题和截图。
+
+    参数:
+      url: 完整的网页地址（包含 http:// 或 https://）
+    """
+    async def _run():
+        page = await _ensure_browser()
+        try:
+            await page.goto(url, wait_until="networkidle", timeout=30000)
+        except Exception:
+            # networkidle 可能超时，但页面可能已加载
+            try:
+                await page.wait_for_load_state("domcontentloaded", timeout=10000)
+            except Exception:
+                pass
+
+        info = _page_info(page)
+        screenshot = _save_screenshot(page)
+        result = f"✅ 已导航到 {url}\n{info}\n"
+        if screenshot.get("path"):
+            result += f"截图已保存: {screenshot['path']}\n"
+        if screenshot.get("size"):
+            result += f"页面尺寸: {screenshot['size']}\n"
+        if screenshot.get("thumbnail_b64"):
+            result += f"[图片: data:image/png;base64,{screenshot['thumbnail_b64'][:80]}...]"
+        return result
+
+    try:
+        return _run_async(_run())
+    except Exception as e:
+        return f"❌ 导航失败: {type(e).__name__}: {e}"
+
+
+@tool
+def browser_click(selector: str) -> str:
+    """点击页面中指定的元素。
+
+    参数:
+      selector: CSS 选择器（如 #submit-btn, button.primary, a[href="/login"]）
+    """
+    async def _run():
+        page = await _ensure_browser()
+        try:
+            await page.click(selector, timeout=10000)
+            await asyncio.sleep(0.5)  # 等待可能的页面响应
+            info = _page_info(page)
+            screenshot = _save_screenshot(page)
+            result = f"✅ 已点击: {selector}\n{info}\n"
+            if screenshot.get("path"):
+                result += f"截图已保存: {screenshot['path']}\n"
+            return result
+        except Exception as e:
+            return f"❌ 点击失败: {type(e).__name__}: {e}"
+
+    try:
+        return _run_async(_run())
+    except Exception as e:
+        return f"❌ 点击失败: {type(e).__name__}: {e}"
+
+
+@tool
+def browser_fill(selector: str, value: str) -> str:
+    """在页面输入框中填入文本。
+
+    参数:
+      selector: CSS 选择器（如 #username, input[name="email"]）
+      value: 要填入的文本内容
+    """
+    async def _run():
+        page = await _ensure_browser()
+        try:
+            await page.fill(selector, value, timeout=10000)
+            return f"✅ 已填入: {selector} = \"{value[:50]}{'...' if len(value) > 50 else ''}\""
+        except Exception as e:
+            return f"❌ 填入失败: {type(e).__name__}: {e}"
+
+    try:
+        return _run_async(_run())
+    except Exception as e:
+        return f"❌ 填入失败: {type(e).__name__}: {e}"
+
+
+@tool
+def browser_select(selector: str, value: str) -> str:
+    """选择下拉框中的选项。
+
+    参数:
+      selector: <select> 元素的 CSS 选择器
+      value: 要选择的 option 的 value 或 label
+    """
+    async def _run():
+        page = await _ensure_browser()
+        try:
+            await page.select_option(selector, value, timeout=10000)
+            return f"✅ 已选择: {selector} = {value}"
+        except Exception as e:
+            return f"❌ 选择失败: {type(e).__name__}: {e}"
+
+    try:
+        return _run_async(_run())
+    except Exception as e:
+        return f"❌ 选择失败: {type(e).__name__}: {e}"
+
+
+@tool
+def browser_get_text(selector: str) -> str:
+    """获取页面中指定元素的文本内容。
+
+    参数:
+      selector: CSS 选择器
+    """
+    async def _run():
+        page = await _ensure_browser()
+        try:
+            element = await page.wait_for_selector(selector, timeout=10000)
+            if not element:
+                return f"❌ 未找到元素: {selector}"
+            text = await element.inner_text()
+            return text[:5000] + ("\n...（内容较长，已截断）" if len(text) > 5000 else "")
+        except Exception as e:
+            return f"❌ 获取文本失败: {type(e).__name__}: {e}"
+
+    try:
+        return _run_async(_run())
+    except Exception as e:
+        return f"❌ 获取文本失败: {type(e).__name__}: {e}"
+
+
+@tool
+def browser_screenshot(full_page: bool = True) -> str:
+    """截取当前浏览器页面的截图。
+
+    参数:
+      full_page: 是否截取完整页面（包括滚动部分），默认 true
+    """
+    async def _run():
+        page = await _ensure_browser()
+        ss = _save_screenshot(page)
+        info = _page_info(page)
+        parts = [f"📸 已截图\n{info}"]
+        if ss.get("path"):
+            parts.append(f"已保存: {ss['path']}")
+        if ss.get("size"):
+            parts.append(f"尺寸: {ss['size']}")
+        if ss.get("thumbnail_b64"):
+            parts.append(f"![screenshot](data:image/png;base64,{ss['thumbnail_b64']})")
+        return "\n".join(parts)
+
+    try:
+        return _run_async(_run())
+    except Exception as e:
+        return f"❌ 截图失败: {type(e).__name__}: {e}"
+
+
+@tool
+def browser_evaluate(script: str) -> str:
+    """在浏览器中执行 JavaScript 并返回结果。
+
+    用于获取页面数据、检查元素状态、调用前端函数等。
+
+    参数:
+      script: JavaScript 代码字符串（如 "document.title"、"JSON.stringify(window.__INITIAL_STATE__)"）
+    """
+    async def _run():
+        page = await _ensure_browser()
+        try:
+            result = await page.evaluate(script)
+            text = str(result)
+            return text[:5000] + ("\n...（结果较长，已截断）" if len(text) > 5000 else "")
+        except Exception as e:
+            return f"❌ JS 执行失败: {type(e).__name__}: {e}"
+
+    try:
+        return _run_async(_run())
+    except Exception as e:
+        return f"❌ JS 执行失败: {type(e).__name__}: {e}"
+
+
+@tool
+def browser_wait(ms: int = 2000) -> str:
+    """等待指定毫秒数，常用于等待页面渲染或动画完成。
+
+    参数:
+      ms: 等待毫秒数（默认 2000）
+    """
+    async def _run():
+        page = await _ensure_browser()
+        await asyncio.sleep(ms / 1000)
+        info = _page_info(page)
+        return f"⏳ 已等待 {ms}ms\n{info}"
+
+    try:
+        return _run_async(_run())
+    except Exception as e:
+        return f"❌ 等待失败: {type(e).__name__}: {e}"
+
+
+@tool
+def browser_takeover() -> str:
+    """获取当前浏览器的完整控制权，返回当前页面状态。"""
+    async def _run():
+        page = await _ensure_browser()
+        info = _page_info(page)
+        screenshot = _save_screenshot(page)
+        result = f"🌐 浏览器已就绪\n{info}\n"
+        if screenshot.get("size"):
+            result += f"页面尺寸: {screenshot['size']}\n"
+        if screenshot.get("thumbnail_b64"):
+            result += f"![status](data:image/png;base64,{screenshot['thumbnail_b64']})"
+        return result
+
+    try:
+        return _run_async(_run())
+    except Exception as e:
+        return f"❌ 浏览器初始化失败: {type(e).__name__}: {e}"
+
+
+TOOLS = [
+    browser_navigate,
+    browser_click,
+    browser_fill,
+    browser_select,
+    browser_get_text,
+    browser_screenshot,
+    browser_evaluate,
+    browser_wait,
+    browser_takeover,
+]
