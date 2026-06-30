@@ -153,8 +153,8 @@ async def _close_browser():
         _playwright = None
 
 
-def _save_screenshot(page) -> dict:
-    """截取当前页面截图并返回 base64 和元信息"""
+async def _save_screenshot(page) -> dict:
+    """截取当前页面截图并返回 base64 和元信息（异步版本，在事件循环内直接 await）"""
     import io
     from PIL import Image as PILImage
 
@@ -167,15 +167,15 @@ def _save_screenshot(page) -> dict:
 
     result = {"timestamp": timestamp}
 
-    # 同步截图（playwright 异步操作在独立事件循环中运行）
-    png_data = _run_async(page.screenshot(full_page=True))
+    # 直接在事件循环中 await（避免死锁）
+    png_data = await page.screenshot(full_page=True, timeout=30000)
 
     # 保存到工作区
     if screenshot_path:
         screenshot_path.write_bytes(png_data)
         result["path"] = str(screenshot_path)
 
-    # 生成 base64 缩略图（压缩到 800px 宽以便传输）
+    # 生成 base64 缩略图（CPU 密集型，放到线程池）
     try:
         img = PILImage.open(io.BytesIO(png_data))
         w, h = img.size
@@ -193,17 +193,13 @@ def _save_screenshot(page) -> dict:
     return result
 
 
-def _page_info(page) -> str:
-    """提取当前页面关键信息"""
+async def _page_info(page) -> str:
+    """提取当前页面关键信息（异步版本）"""
     try:
-        loop = _ensure_browser_loop()
-        title_future = asyncio.run_coroutine_threadsafe(page.title(), loop)
-        title = title_future.result(timeout=10)
-        
-        url_future = asyncio.run_coroutine_threadsafe(
-            asyncio.wait_for(page.evaluate("window.location.href"), timeout=5), loop
+        title = await asyncio.wait_for(page.title(), timeout=10)
+        url = await asyncio.wait_for(
+            page.evaluate("window.location.href"), timeout=10
         )
-        url = url_future.result(timeout=10)
         return f"当前页面: {title}\n当前 URL: {url}"
     except Exception as e:
         return f"（无法获取页面信息: {e}）"
@@ -231,8 +227,8 @@ def browser_navigate(url: str) -> str:
             logger.error(f"导航失败: {e}")
             return f"❌ 导航失败: {type(e).__name__}: {e}"
 
-        info = _page_info(page)
-        screenshot = _save_screenshot(page)
+        info = await _page_info(page)
+        screenshot = await _save_screenshot(page)
         result = f"✅ 已导航到 {url}\n{info}\n"
         if screenshot.get("path"):
             result += f"截图已保存: {screenshot['path']}\n"
@@ -260,8 +256,8 @@ def browser_click(selector: str) -> str:
         try:
             await page.click(selector, timeout=10000)
             await asyncio.sleep(0.5)  # 等待可能的页面响应
-            info = _page_info(page)
-            screenshot = _save_screenshot(page)
+            info = await _page_info(page)
+            screenshot = await _save_screenshot(page)
             result = f"✅ 已点击: {selector}\n{info}\n"
             if screenshot.get("path"):
                 result += f"截图已保存: {screenshot['path']}\n"
@@ -352,8 +348,8 @@ def browser_screenshot(full_page: bool = True) -> str:
     """
     async def _run():
         page = await _ensure_browser()
-        ss = _save_screenshot(page)
-        info = _page_info(page)
+        ss = await _save_screenshot(page)
+        info = await _page_info(page)
         parts = [f"📸 已截图\n{info}"]
         if ss.get("path"):
             parts.append(f"已保存: {ss['path']}")
@@ -403,7 +399,7 @@ def browser_wait(ms: int = 2000) -> str:
     async def _run():
         page = await _ensure_browser()
         await asyncio.sleep(ms / 1000)
-        info = _page_info(page)
+        info = await _page_info(page)
         return f"⏳ 已等待 {ms}ms\n{info}"
 
     try:
@@ -417,8 +413,8 @@ def browser_takeover() -> str:
     """获取当前浏览器的完整控制权，返回当前页面状态。"""
     async def _run():
         page = await _ensure_browser()
-        info = _page_info(page)
-        screenshot = _save_screenshot(page)
+        info = await _page_info(page)
+        screenshot = await _save_screenshot(page)
         result = f"🌐 浏览器已就绪\n{info}\n"
         if screenshot.get("size"):
             result += f"页面尺寸: {screenshot['size']}\n"
