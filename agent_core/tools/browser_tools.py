@@ -616,7 +616,7 @@ def _build_captcha_prompt() -> str:
 
 
 def _extract_json_from_text(text: str) -> Optional[dict]:
-    """从模型输出中提取 JSON（兼容 Markdown 包裹）。"""
+    """从模型输出中提取 JSON（兼容 Markdown 包裹和截断）。"""
     text = text.strip()
     # 去掉代码块围栏
     text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
@@ -629,10 +629,35 @@ def _extract_json_from_text(text: str) -> Optional[dict]:
     # 提取首个 { ... } 子串
     m = re.search(r"\{[\s\S]*\}", text)
     if m:
+        candidate = m.group(0)
         try:
-            return json.loads(m.group(0))
+            return json.loads(candidate)
         except json.JSONDecodeError:
-            return None
+            # 可能是截断的 JSON：尝试补全
+            pass
+    # 截断容错：找到第一个 {，然后按行尝试逐步关闭
+    brace_start = text.find("{")
+    if brace_start >= 0:
+        partial = text[brace_start:]
+        # 尝试用 parse 或修复器
+        try:
+            # 修复常见截断：末尾是 "explain": " 缺少闭合
+            # 补全闭合引号和括号
+            fixed = partial
+            # 如果以未闭合的字符串结束，关闭它
+            if fixed.count('"') % 2 == 1:
+                fixed += '"'
+            # 补全未闭合的 []
+            open_brackets = fixed.count("[") - fixed.count("]")
+            if open_brackets > 0:
+                fixed += "]" * open_brackets
+            # 补全未闭合的 {}
+            open_braces = fixed.count("{") - fixed.count("}")
+            if open_braces > 0:
+                fixed += "}" * open_braces
+            return json.loads(fixed)
+        except (json.JSONDecodeError, ValueError):
+            pass
     return None
 
 
@@ -649,7 +674,7 @@ async def _call_vision_llm(png_data: bytes, config: dict) -> str:
     payload = {
         "model": config["model"],
         "temperature": 0,
-        "max_tokens": 600,
+        "max_tokens": 1200,
         "messages": [
             {
                 "role": "user",
@@ -671,7 +696,11 @@ async def _call_vision_llm(png_data: bytes, config: dict) -> str:
         resp = await client.post(url, json=payload, headers=headers)
         resp.raise_for_status()
         data = resp.json()
-    return data["choices"][0]["message"]["content"]
+    content = data["choices"][0]["message"]["content"]
+    finish_reason = data["choices"][0].get("finish_reason", "")
+    if finish_reason == "length":
+        logger.warning("视觉 LLM 响应因 max_tokens 达到上限被截断 (finish_reason=length)")
+    return content
 
 
 def _image_dimensions(png_data: bytes) -> tuple[int, int]:
@@ -745,7 +774,9 @@ def browser_captcha_recognize(source: str = "page") -> str:
     参数:
       source: 识别图片来源，可选值
         - "page"（默认）：截取当前整页并识别
-        - "selector:<css_selector>"：截取指定元素区域
+        - "selector:<css_selector>"：截取指定元素区域（如 .captcha-img、#captcha-box、img[src*="captcha"]）
+
+        注意：截取整页时 LLM 可能被页面其他文字干扰，建议优先使用 selector 定位验证码图片。
 
     返回: JSON 字符串 + 友好说明，包含类型、置信度、字符或点击坐标。
     """
