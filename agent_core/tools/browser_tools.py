@@ -227,7 +227,6 @@ def browser_navigate(url: str) -> str:
             from urllib.parse import quote
             path_encoded = quote(screenshot['path'], safe='')
             result += f"![截图](/api/screenshot?path={path_encoded})\n\n"
-            result += f"截图已保存: {screenshot['path']}\n"
         
         if screenshot.get("size"):
             result += f"页面尺寸: {screenshot['size']}\n"
@@ -260,7 +259,6 @@ def browser_click(selector: str) -> str:
                 from urllib.parse import quote
                 path_encoded = quote(screenshot['path'], safe='')
                 result += f"![截图](/api/screenshot?path={path_encoded})\n\n"
-                result += f"截图已保存: {screenshot['path']}\n"
             
             return result
         except Exception as e:
@@ -358,7 +356,6 @@ def browser_screenshot(full_page: bool = True) -> str:
             from urllib.parse import quote
             path_encoded = quote(ss['path'], safe='')
             parts.append(f"![截图](/api/screenshot?path={path_encoded})\n\n")
-            parts.append(f"已保存: {ss['path']}\n")
         
         if ss.get("size"):
             parts.append(f"尺寸: {ss['size']}\n")
@@ -430,8 +427,6 @@ def browser_takeover() -> str:
         
         if screenshot.get("size"):
             result += f"页面尺寸: {screenshot['size']}\n"
-        if screenshot.get("path"):
-            result += f"截图已保存: {screenshot['path']}\n"
         return result
 
     try:
