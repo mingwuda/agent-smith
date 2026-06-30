@@ -1,17 +1,22 @@
 """浏览器自动化工具（基于 Playwright）
 
-支持页面导航、元素交互、截图和前端 E2E 测试。
+支持页面导航、元素交互、截图、验证码识别和前端 E2E 测试。
 """
 import asyncio
 import base64
 import concurrent.futures
+import io
+import json
 import logging
 import os
+import random
+import re
 import threading
 import time
 from pathlib import Path
 from typing import Optional
 
+import httpx
 from langchain_core.tools import tool
 
 logger = logging.getLogger(__name__)
@@ -542,6 +547,328 @@ def browser_slide(selector: str, offset_x: int, offset_y: int = 0) -> str:
         return f"❌ 滑动失败: {type(e).__name__}: {e}"
 
 
+# ── 验证码识别（多模态 LLM） ─────────────────────────────────
+
+# 系统级 LLM 客户端缓存：避免每个验证码调用都重建连接
+_captcha_llm_client: Optional[httpx.AsyncClient] = None
+_captcha_llm_config: Optional[dict] = None
+
+
+def _get_captcha_config() -> dict:
+    """读取当前激活的模型配置（从 config.json）。"""
+    try:
+        from config import AgentConfig  # 延迟导入避免循环
+        cfg = AgentConfig.load()
+        return {
+            "base_url": cfg.base_url or "https://api.openai.com/v1",
+            "api_key": cfg.api_key or "",
+            "model": cfg.model or "gpt-4o",
+        }
+    except Exception as e:
+        logger.warning("读取验证码模型配置失败: %s", e)
+        return {"base_url": "https://api.openai.com/v1", "api_key": "", "model": "gpt-4o"}
+
+
+def _build_captcha_prompt() -> str:
+    """构造多模态验证码识别 prompt。
+
+    期望返回 JSON：
+    {
+      "type": "click" | "text" | "slider" | "unknown",
+      "chars": "abc123",                  // text 类型：直接给出字母/数字
+      "clicks": [
+        {"char": "风", "x": 234, "y": 156}, // click 类型：依次点击的字符和坐标
+        ...
+      ],
+      "confidence": 0.0~1.0,
+      "explain": "..."
+    }
+    """
+    return (
+        "你是一个验证码识别专家。请观察图片中的验证码并判断其类型。\n\n"
+        "可能类型：\n"
+        "1. 文字输入验证码（type=text）：图片中显示一个或多个扭曲的字母/数字，"
+        "用户需要按图片中的字符顺序输入。识别后输出 chars 字段（不含空格）。\n"
+        "2. 文字点选验证码（type=click）：图片显示 1-6 个汉字或字符，"
+        "页面提示用户按顺序依次点击。识别后：\n"
+        "   - 在 clicks 数组中按页面要求的点击顺序给出每个字符及其在图片中的中心点像素坐标\n"
+        "   - 图片原始宽高用 w/h 字段输出\n"
+        "3. 滑块验证码（type=slider）：图片显示一个滑块缺口，返回 type=slider 即可，"
+        "可附加说明缺口位置。\n"
+        "4. 看图选物验证码（type=click）：图片要求按文字顺序点击物品，"
+        "同样输出 clicks 列表。\n\n"
+        "重要：\n"
+        "- 像素坐标 (x, y) 是相对于图片左上角的整数\n"
+        "- clicks 顺序必须严格遵守页面文字提示\n"
+        "- 不要猜测看不清的字符，宁可降低 confidence\n"
+        "- 字符之间有引号包裹的也按视觉顺序识别\n\n"
+        "严格返回 JSON（不要包含其他文字或 Markdown 标记）：\n"
+        "{\n"
+        '  "type": "click|text|slider|unknown",\n'
+        '  "chars": "字母数字字符串",\n'
+        '  "clicks": [{"char": "字", "x": 0, "y": 0}],\n'
+        '  "w": 图片宽度,\n'
+        '  "h": 图片高度,\n'
+        '  "confidence": 0.0,\n'
+        '  "explain": "识别说明"\n'
+        "}"
+    )
+
+
+def _extract_json_from_text(text: str) -> Optional[dict]:
+    """从模型输出中提取 JSON（兼容 Markdown 包裹）。"""
+    text = text.strip()
+    # 去掉代码块围栏
+    text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s*```$", "", text)
+    # 尝试整体解析
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    # 提取首个 { ... } 子串
+    m = re.search(r"\{[\s\S]*\}", text)
+    if m:
+        try:
+            return json.loads(m.group(0))
+        except json.JSONDecodeError:
+            return None
+    return None
+
+
+async def _call_vision_llm(png_data: bytes, config: dict) -> str:
+    """调用多模态 LLM 识别验证码。返回原始文本。"""
+    base_url = config["base_url"].rstrip("/")
+    if not base_url.endswith("/v1"):
+        # 自动补全 /v1（若用户填的是根 URL）
+        if "/v1" not in base_url:
+            base_url = base_url + "/v1"
+    url = f"{base_url}/chat/completions"
+
+    b64 = base64.b64encode(png_data).decode()
+    payload = {
+        "model": config["model"],
+        "temperature": 0,
+        "max_tokens": 600,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/png;base64,{b64}"},
+                    },
+                    {"type": "text", "text": _build_captcha_prompt()},
+                ],
+            }
+        ],
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {config['api_key']}" if config["api_key"] else "Bearer none",
+    }
+    async with httpx.AsyncClient(timeout=60, trust_env=False) as client:
+        resp = await client.post(url, json=payload, headers=headers)
+        resp.raise_for_status()
+        data = resp.json()
+    return data["choices"][0]["message"]["content"]
+
+
+def _image_dimensions(png_data: bytes) -> tuple[int, int]:
+    """读取 PNG 尺寸（无 Pillow 时基于 IHDR 头解析）。"""
+    try:
+        from PIL import Image as PILImage
+        img = PILImage.open(io.BytesIO(png_data))
+        return img.size
+    except Exception:
+        pass
+    # 兜底：从 PNG 头读取
+    try:
+        w = int.from_bytes(png_data[16:20], "big")
+        h = int.from_bytes(png_data[20:24], "big")
+        return w, h
+    except Exception:
+        return 0, 0
+
+
+def _format_result(parsed: dict, img_w: int, img_h: int) -> str:
+    """把识别结果格式化为给 Agent 的可读文本。"""
+    ctype = (parsed.get("type") or "unknown").lower()
+    conf = parsed.get("confidence", 0)
+    explain = parsed.get("explain", "")
+
+    lines = [f"🔐 验证码类型: {ctype}    置信度: {conf}"]
+    lines.append(f"📐 验证码尺寸: {img_w} x {img_h}")
+
+    if ctype == "text":
+        chars = str(parsed.get("chars", "")).strip()
+        lines.append(f"🔤 识别字符: `{chars}`")
+        lines.append(f"→ 调用 browser_fill(captcha_selector, \"{chars}\") 填入")
+    elif ctype == "click":
+        clicks = parsed.get("clicks") or []
+        if not clicks:
+            lines.append("⚠️ 未识别到点击目标")
+        else:
+            lines.append(f"🎯 共 {len(clicks)} 个点击目标（按页面提示的顺序）:")
+            for i, c in enumerate(clicks, 1):
+                if not isinstance(c, dict):
+                    continue
+                char = c.get("char", "?")
+                x = c.get("x", 0)
+                y = c.get("y", 0)
+                # 坐标按图片原始尺寸输出
+                lines.append(f"  {i}. `{char}` @ ({x}, {y})")
+            lines.append(
+                "→ 在视口中找到验证码图片元素，"
+                f"使用 page.mouse.click(element_box.x + {x or 0} * scale, ...) 依次点击"
+            )
+    elif ctype == "slider":
+        lines.append("🧩 滑块验证码：先识别缺口位置，再用 browser_slide 拖动滑块")
+    else:
+        lines.append("❓ 无法识别验证码类型，请人工介入或刷新验证码重试")
+
+    if explain:
+        lines.append(f"💡 {explain}")
+    return "\n".join(lines)
+
+
+@tool
+def browser_captcha_recognize(source: str = "page") -> str:
+    """识别当前浏览器页面中的验证码图片（基于多模态大模型）。
+
+    适用于以下场景的登录/注册流程：
+      - 简单字母/数字验证码：直接返回要输入的字符
+      - 文字点选验证码（"请依次点击 X Y Z"）：返回字符和点击坐标
+      - 滑块验证码：标记为 slider 类型，告知需要拖动
+      - 看图选物验证码：与点选相同处理
+
+    参数:
+      source: 识别图片来源，可选值
+        - "page"（默认）：截取当前整页并识别
+        - "selector:<css_selector>"：截取指定元素区域
+
+    返回: JSON 字符串 + 友好说明，包含类型、置信度、字符或点击坐标。
+    """
+    async def _run():
+        page = await _ensure_browser()
+        try:
+            # 1. 截取验证码图片
+            if source == "page":
+                png_data = await page.screenshot(full_page=False, timeout=30000)
+            elif source.startswith("selector:"):
+                sel = source[len("selector:"):].strip()
+                el = await page.wait_for_selector(sel, timeout=10000)
+                if not el:
+                    return f"❌ 未找到元素: {sel}"
+                png_data = await el.screenshot(timeout=30000)
+            else:
+                return f"❌ 不支持的 source: {source}"
+
+            img_w, img_h = _image_dimensions(png_data)
+            logger.info("🔍 验证码图片尺寸: %dx%d (%d bytes)", img_w, img_h, len(png_data))
+
+            # 2. 调用多模态 LLM 识别
+            config = _get_captcha_config()
+            if not config.get("api_key"):
+                return (
+                    "❌ 未配置 LLM API Key。\n"
+                    "请在设置中配置模型 API Key 后重试。\n"
+                    "(Settings → 选择 Provider → 填入 API Key)"
+                )
+
+            try:
+                text = await _call_vision_llm(png_data, config)
+            except httpx.HTTPStatusError as e:
+                return f"❌ 调用视觉 LLM 失败: HTTP {e.response.status_code} {e.response.text[:200]}"
+            except Exception as e:
+                return f"❌ 调用视觉 LLM 异常: {type(e).__name__}: {e}"
+
+            logger.info("🧠 视觉 LLM 原始响应: %s", text[:300])
+            parsed = _extract_json_from_text(text)
+            if not parsed:
+                return (
+                    "⚠️ 视觉 LLM 返回无法解析的内容。\n"
+                    f"原始输出:\n{text[:500]}\n\n"
+                    "可重试或人工识别后用 browser_fill 填入。"
+                )
+
+            return _format_result(parsed, img_w, img_h)
+        except Exception as e:
+            return f"❌ 验证码识别失败: {type(e).__name__}: {e}"
+
+    try:
+        return _run_async(_run())
+    except Exception as e:
+        return f"❌ 验证码识别失败: {type(e).__name__}: {e}"
+
+
+@tool
+def browser_captcha_click_sequence(
+    selector: str, clicks: str, image_w: int = 0, image_h: int = 0
+) -> str:
+    """在验证码图片区域上按指定顺序模拟点击（用于点选型验证码）。
+
+    参数:
+      selector: 验证码图片元素的 CSS 选择器（用于计算缩放比例）
+      clicks: JSON 字符串，格式 '[{"char":"字","x":100,"y":50}, ...]'
+              x/y 是相对图片原始像素的坐标，工具会自动换算到视口坐标
+      image_w: 验证码图片原始宽度（来自 browser_captcha_recognize 的输出）
+      image_h: 验证码图片原始高度
+
+    返回: 每次点击的结果
+    """
+    async def _run():
+        page = await _ensure_browser()
+        try:
+            data = json.loads(clicks) if isinstance(clicks, str) else clicks
+            if not isinstance(data, list) or not data:
+                return "❌ clicks 参数必须是 JSON 数组"
+
+            el = await page.wait_for_selector(selector, timeout=10000)
+            if not el:
+                return f"❌ 未找到验证码元素: {selector}"
+            box = await el.bounding_box()
+            if not box:
+                return f"❌ 无法获取元素位置: {selector}"
+
+            # 截图实际尺寸 vs 原始尺寸的比例
+            actual_w = int(box["width"])
+            actual_h = int(box["height"])
+            if image_w and image_h:
+                scale_x = actual_w / image_w
+                scale_y = actual_h / image_h
+            else:
+                scale_x = scale_y = 1.0
+
+            log = [f"🎯 即将在 {selector} 上点击 {len(data)} 次 (scale={scale_x:.2f}x{scale_y:.2f})"]
+            for i, c in enumerate(data, 1):
+                if not isinstance(c, dict):
+                    continue
+                x = float(c.get("x", 0)) * scale_x + box["x"]
+                y = float(c.get("y", 0)) * scale_y + box["y"]
+                char = c.get("char", "?")
+                # 加入微小随机抖动，更像真人
+                jx = random.uniform(-1.5, 1.5)
+                jy = random.uniform(-1.5, 1.5)
+                await page.mouse.click(x + jx, y + jy)
+                await asyncio.sleep(random.uniform(0.3, 0.7))
+                log.append(f"  {i}. 点击 `{char}` @ ({int(x)}, {int(y)})")
+
+            await asyncio.sleep(0.5)
+            screenshot = await _save_screenshot(page)
+            result = "\n".join(log) + "\n\n✅ 点击序列完成\n"
+            if screenshot.get("token"):
+                result += f"![截图](/api/screenshot?token={screenshot['token']})\n"
+            return result
+        except Exception as e:
+            return f"❌ 点击序列失败: {type(e).__name__}: {e}"
+
+    try:
+        return _run_async(_run())
+    except Exception as e:
+        return f"❌ 点击序列失败: {type(e).__name__}: {e}"
+
+
 TOOLS = [
     browser_navigate,
     browser_click,
@@ -554,4 +881,6 @@ TOOLS = [
     browser_takeover,
     browser_drag,
     browser_slide,
+    browser_captcha_recognize,
+    browser_captcha_click_sequence,
 ]
