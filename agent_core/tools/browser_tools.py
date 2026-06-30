@@ -4,8 +4,10 @@
 """
 import asyncio
 import base64
+import concurrent.futures
 import logging
 import os
+import threading
 import time
 from pathlib import Path
 from typing import Optional
@@ -14,28 +16,81 @@ from langchain_core.tools import tool
 
 logger = logging.getLogger(__name__)
 
+# 专用浏览器线程和事件循环，避免与主线程事件循环冲突
+_browser_loop: Optional[asyncio.AbstractEventLoop] = None
+_browser_thread: Optional[threading.Thread] = None
+_loop_lock = threading.Lock()
+
+
+def _ensure_browser_loop():
+    """启动专用浏览器事件循环线程（如果未启动）"""
+    global _browser_loop, _browser_thread
+    
+    with _loop_lock:
+        if _browser_loop is not None and _browser_loop.is_running():
+            return _browser_loop
+        
+        # 创建新事件循环
+        _browser_loop = asyncio.new_event_loop()
+        
+        def _run_loop():
+            asyncio.set_event_loop(_browser_loop)
+            _browser_loop.run_forever()
+        
+        _browser_thread = threading.Thread(
+            target=_run_loop,
+            daemon=True,
+            name="browser-event-loop"
+        )
+        _browser_thread.start()
+        
+        # 等待事件循环启动
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            if _browser_loop.is_running():
+                break
+            time.sleep(0.05)
+        
+        if not _browser_loop.is_running():
+            raise RuntimeError("浏览器事件循环启动失败")
+        
+        return _browser_loop
+
 
 def _run_async(coro) -> any:
     """在同步上下文中执行异步协程。
-    工具在 LangGraph 线程池中运行，可以安全地创建新的事件循环。"""
-    try:
-        loop = asyncio.get_running_loop()
-        # 已经有运行中的事件循环（主线程），通过 create_task + wait
-        task = asyncio.run_coroutine_threadsafe(coro, loop)
-        return task.result(timeout=60)
-    except RuntimeError:
-        # 没有运行中的事件循环，创建一个新的
-        return asyncio.run(coro)
+    
+    使用专用浏览器线程的事件循环，避免与主线程事件循环冲突。
+    """
+    loop = _ensure_browser_loop()
+    future = asyncio.run_coroutine_threadsafe(coro, loop)
+    return future.result(timeout=90)
+
+
+def _stop_browser_loop():
+    """停止浏览器事件循环（进程退出时调用）"""
+    global _browser_loop, _browser_thread
+    if _browser_loop is not None:
+        _browser_loop.call_soon_threadsafe(_browser_loop.stop)
+        if _browser_thread is not None:
+            _browser_thread.join(timeout=5)
+        _browser_loop = None
+        _browser_thread = None
+
 
 # 全局浏览器实例（跨工具调用复用）
 _browser = None
 _browser_context = None
 _page = None
 _playwright = None
-_page_lock = asyncio.Lock()
+_page_lock: Optional[asyncio.Lock] = None  # 延迟初始化
 
 # 工作区（用于保存截图）
 _workspace: Optional[Path] = None
+
+# 进程退出时清理浏览器资源
+import atexit
+atexit.register(_stop_browser_loop)
 
 
 def set_workspace(path: Path):
@@ -45,7 +100,7 @@ def set_workspace(path: Path):
 
 async def _ensure_browser():
     """惰性初始化浏览器实例（每个进程只启动一次）"""
-    global _browser, _browser_context, _page, _playwright
+    global _browser, _browser_context, _page, _playwright, _page_lock
     if _page is not None:
         return _page
 
@@ -70,6 +125,12 @@ async def _ensure_browser():
         ),
     )
     _page = await _browser_context.new_page()
+    
+    # 在当前事件循环中创建锁
+    if _page_lock is None:
+        _page_lock = asyncio.Lock()
+    
+    logger.info("✅ 浏览器已启动")
     return _page
 
 
@@ -135,14 +196,17 @@ def _save_screenshot(page) -> dict:
 def _page_info(page) -> str:
     """提取当前页面关键信息"""
     try:
-        loop = asyncio.get_running_loop()
-        title = asyncio.run_coroutine_threadsafe(page.title(), loop).result(timeout=10)
-        url = asyncio.run_coroutine_threadsafe(
+        loop = _ensure_browser_loop()
+        title_future = asyncio.run_coroutine_threadsafe(page.title(), loop)
+        title = title_future.result(timeout=10)
+        
+        url_future = asyncio.run_coroutine_threadsafe(
             asyncio.wait_for(page.evaluate("window.location.href"), timeout=5), loop
-        ).result(timeout=10)
+        )
+        url = url_future.result(timeout=10)
         return f"当前页面: {title}\n当前 URL: {url}"
-    except Exception:
-        return "（无法获取页面信息）"
+    except Exception as e:
+        return f"（无法获取页面信息: {e}）"
 
 
 @tool
@@ -155,13 +219,17 @@ def browser_navigate(url: str) -> str:
     async def _run():
         page = await _ensure_browser()
         try:
-            await page.goto(url, wait_until="networkidle", timeout=30000)
-        except Exception:
-            # networkidle 可能超时，但页面可能已加载
+            logger.info(f"🌐 正在导航到: {url}")
+            # 先尝试 networkidle，失败后用 domcontentloaded 兜底
+            await page.goto(url, wait_until="domcontentloaded", timeout=60000)
             try:
-                await page.wait_for_load_state("domcontentloaded", timeout=10000)
+                await page.wait_for_load_state("networkidle", timeout=10000)
             except Exception:
-                pass
+                logger.info("networkidle 超时，但页面已加载（domcontentloaded）")
+            logger.info(f"✅ 导航完成: {url}")
+        except Exception as e:
+            logger.error(f"导航失败: {e}")
+            return f"❌ 导航失败: {type(e).__name__}: {e}"
 
         info = _page_info(page)
         screenshot = _save_screenshot(page)
