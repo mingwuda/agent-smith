@@ -217,7 +217,7 @@ def browser_navigate(url: str) -> str:
         try:
             logger.info(f"🌐 正在导航到: {url}")
             # 先尝试 networkidle，失败后用 domcontentloaded 兜底
-            await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+            await page.goto(url, wait_until="domcontentloaded", timeout=120000)
             try:
                 await page.wait_for_load_state("networkidle", timeout=10000)
             except Exception:
@@ -769,6 +769,141 @@ def _extract_json_from_text(text: str) -> Optional[dict]:
     return None
 
 
+def _normalize_captcha_result(parsed: dict, img_w: int, img_h: int) -> dict:
+    """把模型返回收敛成工具能安全消费的形状。"""
+    ctype = str(parsed.get("type") or "unknown").strip().lower()
+    if ctype in {"文字", "ocr", "code"}:
+        ctype = "text"
+    elif ctype in {"点选", "icon", "icons"}:
+        ctype = "click"
+    elif ctype in {"slide", "drag"}:
+        ctype = "slider"
+    elif ctype not in {"text", "click", "slider", "unknown"}:
+        ctype = "unknown"
+    parsed["type"] = ctype
+
+    try:
+        parsed["confidence"] = max(0.0, min(1.0, float(parsed.get("confidence", 0) or 0)))
+    except (TypeError, ValueError):
+        parsed["confidence"] = 0.0
+
+    if ctype == "text":
+        parsed["chars"] = re.sub(r"\s+", "", str(parsed.get("chars") or ""))
+
+    if ctype == "click":
+        clicks = []
+        for c in parsed.get("clicks") or []:
+            if not isinstance(c, dict):
+                continue
+            try:
+                x = float(c.get("x"))
+                y = float(c.get("y"))
+            except (TypeError, ValueError):
+                continue
+            if img_w > 0:
+                x = max(0, min(img_w - 1, x))
+            if img_h > 0:
+                y = max(0, min(img_h - 1, y))
+            clicks.append({"char": str(c.get("char") or c.get("label") or "?"), "x": round(x), "y": round(y)})
+        parsed["clicks"] = clicks
+
+    return parsed
+
+
+def _offset_clicks(parsed: dict, offset_x: float, offset_y: float) -> dict:
+    """把裁剪图坐标换算回视口坐标。"""
+    if parsed.get("type") != "click" or not (offset_x or offset_y):
+        return parsed
+    parsed = dict(parsed)
+    parsed["clicks"] = [
+        {**c, "x": round(float(c.get("x", 0)) + offset_x), "y": round(float(c.get("y", 0)) + offset_y)}
+        for c in parsed.get("clicks") or []
+        if isinstance(c, dict)
+    ]
+    return parsed
+
+
+def _captcha_should_send_max_tokens(base_url: str) -> bool:
+    return "stepfun.com" not in base_url
+
+
+async def _captcha_instruction_hint(page) -> str:
+    """扫描页面上的验证码指示文字（如“请依次点击XXX”）。"""
+    return await page.evaluate("""
+    (() => {
+      const priorityKeywords = ['请依次点击', '依次点击', '按顺序点击', '请点击以下', '点击下图'];
+      const secondaryKeywords = ['点选验证', '点击验证', '滑块验证', '验证码', 'captcha', 'verify'];
+      const texts = [];
+      const els = document.querySelectorAll('p, span, div, label, h1, h2, h3, i, b, strong, .captcha-tip, .verify-tip, .nc-lang-cnt, .slider-captcha');
+      for (const el of els) {
+        const t = (el.textContent || '').trim().replace(/\\s+/g, ' ');
+        if (t.length > 2 && t.length < 160 && el.offsetParent !== null) {
+          if (priorityKeywords.some(k => t.includes(k))) texts.unshift('[指令] ' + t);
+          else if (secondaryKeywords.some(k => t.toLowerCase().includes(k))) texts.push('[相关] ' + t);
+        }
+      }
+      return [...new Set(texts)].slice(0, 8).join(' | ');
+    })()
+    """)
+
+
+async def _detect_captcha_clip(page) -> Optional[dict]:
+    """在整页模式下尝试裁出验证码区域，失败就退回普通视口截图。"""
+    # ponytail: DOM 关键词启发式，适合常见登录验证码；复杂自绘/跨域 iframe 以后再升级成可配置候选选择器。
+    return await page.evaluate("""
+    (() => {
+      const kw = /captcha|verify|verification|validate|vcode|verify.?code|验证码|点选|滑块|刷新|换一批/i;
+      const vw = window.innerWidth, vh = window.innerHeight;
+      const visible = el => {
+        const r = el.getBoundingClientRect();
+        const style = getComputedStyle(el);
+        return r.width >= 40 && r.height >= 20 && r.bottom > 0 && r.right > 0 && r.top < vh && r.left < vw &&
+               style.visibility !== 'hidden' && style.display !== 'none' && style.opacity !== '0';
+      };
+      const score = el => {
+        const r = el.getBoundingClientRect();
+        const hay = [el.id, el.className, el.getAttribute('src'), el.getAttribute('alt'), el.getAttribute('title'), el.textContent]
+          .join(' ').slice(0, 500);
+        let s = kw.test(hay) ? 80 : 0;
+        if (['IMG', 'CANVAS'].includes(el.tagName)) s += 25;
+        if (r.width >= 120 && r.width <= 520 && r.height >= 30 && r.height <= 420) s += 20;
+        if (/刷新|换一批|captcha|verify|验证码/i.test(hay)) s += 15;
+        return s;
+      };
+      const candidates = [...document.querySelectorAll('img, canvas, svg, [class], [id], input, button')]
+        .filter(visible)
+        .map(el => ({el, score: score(el)}))
+        .filter(x => x.score > 0)
+        .sort((a, b) => b.score - a.score);
+      if (!candidates.length) return null;
+      let el = candidates[0].el;
+      for (let i = 0; i < 3 && el.parentElement; i++) {
+        const r = el.getBoundingClientRect();
+        const pr = el.parentElement.getBoundingClientRect();
+        const parentText = (el.parentElement.textContent || '').slice(0, 300);
+        if (kw.test(parentText) && pr.width <= 620 && pr.height <= 520 && pr.width * pr.height <= Math.max(r.width * r.height * 8, 60000)) {
+          el = el.parentElement;
+        }
+      }
+      const r = el.getBoundingClientRect();
+      const pad = 12;
+      const bottomPad = 64;
+      const left = Math.max(0, r.left - pad), top = Math.max(0, r.top - pad);
+      const right = Math.min(vw, r.right + pad), bottom = Math.min(vh, r.bottom + pad + bottomPad);
+      if (right - left < 40 || bottom - top < 20) return null;
+      return {
+        x: left + window.scrollX,
+        y: top + window.scrollY,
+        width: right - left,
+        height: bottom - top,
+        viewportX: left,
+        viewportY: top,
+        selector: el.id ? '#' + CSS.escape(el.id) : ''
+      };
+    })()
+    """)
+
+
 async def _call_vision_llm(png_data: bytes, config: dict, instruction_hint: str = "", img_w: int = 0, img_h: int = 0, is_page_level: bool = False) -> str:
     """调用多模态 LLM 识别验证码。返回原始文本。
 
@@ -796,7 +931,6 @@ async def _call_vision_llm(png_data: bytes, config: dict, instruction_hint: str 
     payload = {
         "model": config["model"],
         "temperature": 0,
-        "max_tokens": 8192,
         "messages": [
             {
                 "role": "user",
@@ -810,21 +944,32 @@ async def _call_vision_llm(png_data: bytes, config: dict, instruction_hint: str 
             }
         ],
     }
+    if _captcha_should_send_max_tokens(base_url):
+        payload["max_tokens"] = 1024
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {config['api_key']}" if config["api_key"] else "Bearer none",
     }
-    async with httpx.AsyncClient(timeout=60, trust_env=False) as client:
+    async with httpx.AsyncClient(timeout=120, trust_env=False) as client:
         resp = await client.post(url, json=payload, headers=headers)
         resp.raise_for_status()
         data = resp.json()
     content = data["choices"][0]["message"]["content"]
     finish_reason = data["choices"][0].get("finish_reason", "")
     if finish_reason == "length":
-        logger.warning("视觉 LLM 响应因 max_tokens 达到上限被截断 (finish_reason=length), 已从 4096 增大到 8192")
+        logger.warning("视觉 LLM 响应因 max_tokens 达到上限被截断 (finish_reason=length)")
         if not content or len(content.strip()) < 10:
-            logger.error("截断后内容为空！prompt 太长或模型输出限制过低: prompt_len=%d, response_empty=%s",
-                         len(prompt), not content)
+            logger.error("截断后内容为空: prompt_len=%d, response_empty=%s", len(prompt), not content)
+            if "max_tokens" in payload:
+                logger.info("视觉 LLM 空响应，去掉 max_tokens 后重试一次")
+                payload.pop("max_tokens", None)
+                async with httpx.AsyncClient(timeout=120, trust_env=False) as client:
+                    resp = await client.post(url, json=payload, headers=headers)
+                    resp.raise_for_status()
+                    data = resp.json()
+                content = data["choices"][0]["message"]["content"]
+                finish_reason = data["choices"][0].get("finish_reason", "")
+                logger.info("视觉 LLM 重试结果: finish_reason=%s, content_len=%d", finish_reason, len(content or ""))
     return content
 
 
@@ -932,8 +1077,14 @@ def browser_captcha_recognize(source: str = "page") -> str:
         page = await _ensure_browser()
         try:
             # 1. 截取验证码图片
+            clip_info = None
             if source == "page":
-                png_data = await page.screenshot(full_page=False, timeout=30000)
+                clip_info = await _detect_captcha_clip(page)
+                if clip_info:
+                    clip = {k: clip_info[k] for k in ("x", "y", "width", "height")}
+                    png_data = await page.screenshot(clip=clip, timeout=30000)
+                else:
+                    png_data = await page.screenshot(full_page=False, timeout=30000)
             elif source.startswith("selector:"):
                 sel = source[len("selector:"):].strip()
                 await _try_scroll_into_view(page, sel)
@@ -948,26 +1099,7 @@ def browser_captcha_recognize(source: str = "page") -> str:
             logger.info("🔍 验证码图片尺寸: %dx%d (%d bytes)", img_w, img_h, len(png_data))
 
             # 2. 扫描页面上的验证码指示文字（如"请依次点击XXX"）
-            instruction_hint = await page.evaluate("""
-            (() => {
-            /* 扫描页面上的验证码指示文字 */
-            const priorityKeywords = ['请依次点击', '依次点击', '按顺序点击', '请点击以下'];
-            const secondaryKeywords = ['点选验证', '点击验证', '验证码', '发送验证码', 'captcha'];
-            const texts = [];
-            const els = document.querySelectorAll('p, span, div, label, h1, h2, h3, i, b, strong, .captcha-tip, .verify-tip, .nc-lang-cnt, .slider-captcha');
-            for (const el of els) {
-              const t = el.textContent.trim();
-              if (t.length > 2 && t.length < 120 && el.offsetParent !== null) {
-                if (priorityKeywords.some(k => t.includes(k))) {
-                  texts.unshift('[指令] ' + t); // 优先文本放前面
-                } else if (secondaryKeywords.some(k => t.includes(k))) {
-                  texts.push('[相关] ' + t);
-                }
-              }
-            }
-            return [...new Set(texts)].join(' | ');
-            })()
-            """) if source != "page" else ""
+            instruction_hint = await _captcha_instruction_hint(page)
             if instruction_hint:
                 logger.info("📝 捕获到验证码提示文字: %s", instruction_hint[:150])
 
@@ -997,7 +1129,14 @@ def browser_captcha_recognize(source: str = "page") -> str:
                 )
 
             try:
-                text = await _call_vision_llm(png_data, config, instruction_hint, img_w, img_h, is_page_level=(source == "page"))
+                text = await _call_vision_llm(
+                    png_data,
+                    config,
+                    instruction_hint,
+                    img_w,
+                    img_h,
+                    is_page_level=(source == "page" and not clip_info),
+                )
             except httpx.HTTPStatusError as e:
                 err = f"❌ 调用视觉 LLM 失败: HTTP {e.response.status_code} {e.response.text[:200]}"
                 if img_token:
@@ -1021,8 +1160,17 @@ def browser_captcha_recognize(source: str = "page") -> str:
                     result += f"\n\n![截图](/api/screenshot?token={img_token})"
                 return result
 
+            parsed = _normalize_captcha_result(parsed, img_w, img_h)
+            result_w, result_h = img_w, img_h
+            if source == "page" and clip_info:
+                parsed = _offset_clicks(parsed, clip_info.get("viewportX", 0), clip_info.get("viewportY", 0))
+                viewport = await page.evaluate("({w: window.innerWidth, h: window.innerHeight})")
+                result_w, result_h = int(viewport["w"]), int(viewport["h"])
+
             # 4. 将识别结果截图也附上，方便 Agent 确认
-            fmt = _format_result(parsed, img_w, img_h, source)
+            fmt = _format_result(parsed, result_w, result_h, source)
+            if source == "page" and clip_info:
+                fmt += "\n📎 已自动裁剪疑似验证码区域识别，点击坐标已换算为当前视口坐标"
             if img_token:
                 fmt += f"\n\n![识别来源](/api/screenshot?token={img_token})"
             return fmt
