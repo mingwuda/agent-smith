@@ -688,7 +688,9 @@ def _build_captcha_prompt(is_page_level: bool = False) -> str:
             "- 很多网站的图标点选验证码看起来像装饰性图标面板（建筑剪影、动物、水果、"
             "交通标志等），但只要带有\"刷新/换一批\"按钮，就极可能是验证码。\n"
             "- 不要因为图标看起来像 UI 装饰元素就判断为 unknown。\n"
-            "- 如果图片右侧或中间有一个带刷新按钮的图标区域，优先判断为 click。\n\n"
+            "- 如果图片右侧或中间有一个带刷新按钮的图标区域，优先判断为 click。\n"
+            "- ⭐ 只输出要求点击的图标，不要列出验证码区域中的所有图标。"
+            "通常页面只要求点击 2~3 个。如果看到 6~9 个图标，只有其中几个是需要点的。\n\n"
             "返回 JSON 格式：\n"
             '{"type":"click|text|slider|unknown","chars":"","clicks":[{"char":"汉字或图标名","x":0,"y":0}],"w":宽度,"h":高度,"confidence":0.0,"explain":"说明"}\n'
             "只输出 JSON，不要 Markdown 包裹。"
@@ -710,7 +712,10 @@ def _build_captcha_prompt(is_page_level: bool = False) -> str:
         "看起来像装饰元素，但它们是可点击的验证码目标。\n"
         "- 如果图片中有\"刷新/换一批\"按钮、\"请按顺序点击\"等提示文字，"
         "即使图标看起来像 UI 装饰，也一定是 click 类型验证码。\n"
-        "- 不要因为图标风格简洁现代就判断为 unknown。\n\n"
+        "- 不要因为图标风格简洁现代就判断为 unknown。\n"
+        "- ⭐ 只输出要求点击的图标，不要列出验证码区域中的所有图标。"
+        "验证码区域可能展示 6~9 个图标，但通常只要求点击其中 2~3 个。\n"
+        "优先参考页面提示文字（instruction_hint）来确认点击目标。\n\n"
         "重要：坐标 (x,y) 相对于图片左上角，看不清就降低 confidence。\n\n"
         "返回 JSON 格式：\n"
         '{"type":"click|text|slider|unknown","chars":"","clicks":[{"char":"汉字或图标名","x":0,"y":0}],"w":宽度,"h":高度,"confidence":0.0,"explain":"说明"}\n'
@@ -886,6 +891,13 @@ def _format_result(parsed: dict, img_w: int, img_h: int, source: str = "page") -
                     f"  browser_captcha_click_sequence(selector=\"{sel}\", "
                     f"clicks='{clicks_json}', "
                     f"image_w={img_w}, image_h={img_h})"
+                )
+            # 低置信度时建议刷新验证码重试
+            if conf < 0.5:
+                lines.append(
+                    "⚠️ 置信度较低（坐标可能不可靠）。建议先点击验证码的刷新/换一批按钮"
+                    "获取新验证码，再重新调用 browser_captcha_recognize 识别。\n"
+                    "  刷新工具: browser_captcha_refresh(selector=\"验证码容器选择器\")"
                 )
     elif ctype == "slider":
         lines.append("🧩 滑块验证码：先识别缺口位置，再用 browser_slide 拖动滑块")
@@ -1143,6 +1155,78 @@ def browser_click_captcha(clicks: str) -> str:
 
 
 @tool
+def browser_captcha_refresh(selector: str = "") -> str:
+    """刷新验证码图片（点击验证码区域的刷新/换一批按钮），获取新的验证码重新识别。
+
+    在 browser_captcha_recognize 返回的置信度较低（<0.5）时调用。
+    会先尝试在指定容器内找刷新按钮，找不到则在整个页面中搜索。
+
+    参数:
+      selector: 验证码容器的 CSS 选择器（如 .captcha-box、#captcha），
+                传入后优先在容器内查找刷新按钮
+
+    返回: 刷新结果和新验证码截图。
+    """
+    async def _run():
+        page = await _ensure_browser()
+        try:
+            refresh_btn = None
+            # 如果给了容器选择器，先在容器内找
+            if selector:
+                container = await page.query_selector(selector)
+                if container:
+                    # 在容器内查找刷新/换一批/retry 按钮
+                    for btn_text in ["刷新", "换一批", "⟳", "↻", "🔄"]:
+                        btn = await container.query_selector(
+                            f"button, a, span, i, div, img"
+                        )
+                        # 遍历子元素查找包含刷新文本的
+                        all_inner = await container.query_selector_all("*")
+                        for el in all_inner:
+                            text = (await el.inner_text()).strip()
+                            alt = await el.get_attribute("alt") or ""
+                            cls = await el.get_attribute("class") or ""
+                            if any(k in text or k in alt or k in cls for k in ["刷新", "换一批", "refresh", "retry", "reload"]):
+                                refresh_btn = el
+                                break
+                        if refresh_btn:
+                            break
+
+            # 没找到则在全局找
+            if not refresh_btn:
+                candidates = await page.query_selector_all(
+                    'button:has-text("刷新"), button:has-text("换一批"), '
+                    'a:has-text("刷新"), a:has-text("换一批"), '
+                    '[class*="refresh"], [class*="reload"], [class*="retry"]'
+                )
+                for el in candidates:
+                    if await el.is_visible():
+                        refresh_btn = el
+                        break
+
+            if not refresh_btn:
+                return "❌ 未找到刷新/换一批按钮，请尝试手动刷新页面或点击验证码区域"
+
+            await refresh_btn.click()
+            await asyncio.sleep(1.0)  # 等待新验证码加载
+
+            info = await _page_info(page)
+            screenshot = await _save_screenshot(page)
+            result = f"✅ 验证码已刷新\n\n{info}\n\n"
+            if screenshot.get("token"):
+                result += f"![截图](/api/screenshot?token={screenshot['token']})\n\n"
+            result += "💡 请重新调用 browser_captcha_recognize 识别新验证码"
+            return result
+        except Exception as e:
+            return f"❌ 刷新验证码失败: {type(e).__name__}: {e}"
+
+    try:
+        return _run_async(_run())
+    except Exception as e:
+        return f"❌ 刷新验证码失败: {type(e).__name__}: {e}"
+
+
+@tool
 def browser_captcha_scan_grid(grid_rows: int = 9, grid_cols: int = 16) -> str:
     """在页面上叠加网格参考线并截图，辅助视觉模型精确定位图标验证码中的点击坐标。
 
@@ -1328,5 +1412,6 @@ TOOLS = [
     browser_captcha_recognize,
     browser_captcha_click_sequence,
     browser_click_captcha,
+    browser_captcha_refresh,
     browser_captcha_scan_grid,
 ]
