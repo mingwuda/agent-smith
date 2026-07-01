@@ -791,7 +791,7 @@ async def _call_vision_llm(png_data: bytes, config: dict, instruction_hint: str 
     payload = {
         "model": config["model"],
         "temperature": 0,
-        "max_tokens": 4096,
+        "max_tokens": 8192,
         "messages": [
             {
                 "role": "user",
@@ -816,7 +816,10 @@ async def _call_vision_llm(png_data: bytes, config: dict, instruction_hint: str 
     content = data["choices"][0]["message"]["content"]
     finish_reason = data["choices"][0].get("finish_reason", "")
     if finish_reason == "length":
-        logger.warning("视觉 LLM 响应因 max_tokens 达到上限被截断 (finish_reason=length)")
+        logger.warning("视觉 LLM 响应因 max_tokens 达到上限被截断 (finish_reason=length), 已从 4096 增大到 8192")
+        if not content or len(content.strip()) < 10:
+            logger.error("截断后内容为空！prompt 太长或模型输出限制过低: prompt_len=%d, response_empty=%s",
+                         len(prompt), not content)
     return content
 
 
