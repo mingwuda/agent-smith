@@ -621,7 +621,7 @@ class DesktopAgent:
         except Exception:
             return None
 
-    def _record_model_usage(self, input_tokens: int, output_tokens: int, cached_tokens: int = 0, source: str = "llm"):
+    def _record_model_usage(self, input_tokens: int, output_tokens: int, cached_tokens: int = 0, source: str = "llm", thread_id: str = ""):
         if input_tokens <= 0 and output_tokens <= 0:
             return
         self.tracker.record_model_call(
@@ -630,16 +630,16 @@ class DesktopAgent:
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             cached_input_tokens=cached_tokens,
-            thread_id=self._thread_id,
+            thread_id=thread_id or self._thread_id,
             source=source,
         )
 
-    def _record_tool_call(self, tool_name: str):
+    def _record_tool_call(self, tool_name: str, thread_id: str = ""):
         self.tracker.record_tool_call(
             tool_name=tool_name,
             provider=self.config.active_provider,
             model=self.config.model,
-            thread_id=self._thread_id,
+            thread_id=thread_id or self._thread_id,
         )
 
     def _run_config(self) -> dict:
@@ -703,9 +703,18 @@ class DesktopAgent:
         if changed:
             await graph.aupdate_state(run_config, {"messages": checkpoint_replacement(stripped)})
 
-    def _thread_key(self) -> str:
-        return f"{self._user_id}:{self._thread_id}"
+    def _thread_key(self, thread_id: str = "") -> str:
+        tid = thread_id or self._thread_id
+        return f"{self._user_id}:{tid}"
     
+    def _run_config(self, thread_key: str = "") -> dict:
+        if not thread_key:
+            thread_key = self._thread_key()
+        return {
+            "configurable": {"thread_id": thread_key},
+            "recursion_limit": max(1, int(self.config.recursion_limit or 60)),
+        }
+
     def _rebuild_graph(self):
         self._graph = self._create_graph()
     
@@ -715,12 +724,18 @@ class DesktopAgent:
         history: Optional[list[dict]] = None,
         attachments: Optional[list[dict]] = None,
         model_override: str = "",
+        thread_id: str = "",
     ) -> tuple[str, list[dict]]:
-        """处理用户消息，返回 (最终回复, 中间步骤列表)"""
-        config = self._run_config()
+        """处理用户消息，返回 (最终回复, 中间步骤列表)
+
+        参数:
+          thread_id: 当前会话 ID，取代全局 self._thread_id（支持并发）
+        """
+        tid = thread_id or self._thread_id
+        config = self._run_config(tid)
         graph = self._create_graph(model_override) if model_override else self._graph
         input_messages = []
-        thread_key = self._thread_key()
+        thread_key = self._thread_key(tid)
         await self._repair_checkpoint_tool_history(config, graph)
         await self._strip_checkpoint_images(config, graph)
         if thread_key not in self._hydrated_threads:
@@ -746,7 +761,7 @@ class DesktopAgent:
             steps = _extract_steps_from_messages(messages[current_start:])
             for step in steps:
                 if step.get("type") == "tool_result":
-                    self._record_tool_call(step.get("tool") or "unknown")
+                    self._record_tool_call(step.get("tool") or "unknown", thread_id=tid)
             
             # 提取 AI 的最后一条消息作为最终回复
             final_content = "（Agent 未产生输出）"
@@ -754,14 +769,14 @@ class DesktopAgent:
                 if hasattr(msg, "content") and msg.type == "ai" and msg.content:
                     input_tok, output_tok, cached_tok = _extract_usage_tokens(msg)
                     if input_tok > 0 or output_tok > 0:
-                        self._record_model_usage(input_tok, output_tok, cached_tok, source="agent_response")
+                        self._record_model_usage(input_tok, output_tok, cached_tok, source="agent_response", thread_id=tid)
                     else:
                         self.tracker.record_model_call(
                             provider=self.config.active_provider,
                             model=self.config.model,
                             input_tokens=0,
                             output_tokens=0,
-                            thread_id=self._thread_id,
+                            thread_id=tid,
                             source="agent_response",
                             estimated=True,
                         )
@@ -838,12 +853,18 @@ class DesktopAgent:
         history: Optional[list[dict]] = None,
         attachments: Optional[list[dict]] = None,
         model_override: str = "",
+        thread_id: str = "",
     ) -> AsyncGenerator[str, None]:
-        """流式处理用户消息，yield SSE 格式事件"""
-        run_config = self._run_config()
+        """流式处理用户消息，yield SSE 格式事件
+
+        参数:
+          thread_id: 当前会话 ID，取代全局 self._thread_id（支持并发）
+        """
+        tid = thread_id or self._thread_id
+        run_config = self._run_config(tid)
         graph = self._create_graph(model_override) if model_override else self._graph
         input_messages = []
-        thread_key = self._thread_key()
+        thread_key = self._thread_key(tid)
         await self._repair_checkpoint_tool_history(run_config, graph)
         await self._strip_checkpoint_images(run_config, graph)
         if thread_key not in self._hydrated_threads:
@@ -1037,7 +1058,7 @@ class DesktopAgent:
                     step_for_tool = tinfo["step"] if tinfo else 0
                     is_error = bool(output_str.strip().startswith("❌"))
                     
-                    self._record_tool_call(tool_name)
+                    self._record_tool_call(tool_name, thread_id=tid)
 
                     # 提取内嵌的 diff 数据（从完整输出中查找，不受截断影响）
                     diff_data = None
@@ -1107,7 +1128,7 @@ class DesktopAgent:
                     output = event.get("data", {}).get("output")
                     input_tok, output_tok, cached_tok = _extract_usage_tokens(output)
                     if input_tok > 0 or output_tok > 0:
-                        self._record_model_usage(input_tok, output_tok, cached_tok, source="chat_model_end")
+                        self._record_model_usage(input_tok, output_tok, cached_tok, source="chat_model_end", thread_id=tid)
                         usage_recorded = True
         
         except asyncio.CancelledError:
@@ -1170,7 +1191,7 @@ class DesktopAgent:
                         model=self.config.model,
                         input_tokens=0,
                         output_tokens=0,
-                        thread_id=self._thread_id,
+                        thread_id=tid,
                         source="chat_model_end",
                         estimated=True,
                     )

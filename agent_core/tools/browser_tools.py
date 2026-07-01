@@ -72,6 +72,21 @@ def _run_async(coro) -> any:
     return future.result(timeout=90)
 
 
+def _run_browser(coro) -> any:
+    """在浏览器线程执行协程，全程持有 _page_lock 防止并发冲突。
+
+    所有浏览器操作都应通过此函数而非 _run_async 调用，以确保
+    多请求并发时不竞争同一个浏览器页面。
+    """
+    async def _locked():
+        global _page_lock
+        if _page_lock is None:
+            _page_lock = asyncio.Lock()
+        async with _page_lock:
+            return await coro
+    return _run_async(_locked())
+
+
 def _stop_browser_loop():
     """停止浏览器事件循环（进程退出时调用）"""
     global _browser_loop, _browser_thread
@@ -240,7 +255,7 @@ def browser_navigate(url: str) -> str:
         return result
 
     try:
-        return _run_async(_run())
+        return _run_browser(_run())
     except Exception as e:
         return f"❌ 导航失败: {type(e).__name__}: {e}"
 
@@ -270,7 +285,7 @@ def browser_click(selector: str) -> str:
             return f"❌ 点击失败: {type(e).__name__}: {e}"
 
     try:
-        return _run_async(_run())
+        return _run_browser(_run())
     except Exception as e:
         return f"❌ 点击失败: {type(e).__name__}: {e}"
 
@@ -292,7 +307,7 @@ def browser_fill(selector: str, value: str) -> str:
             return f"❌ 填入失败: {type(e).__name__}: {e}"
 
     try:
-        return _run_async(_run())
+        return _run_browser(_run())
     except Exception as e:
         return f"❌ 填入失败: {type(e).__name__}: {e}"
 
@@ -314,7 +329,7 @@ def browser_select(selector: str, value: str) -> str:
             return f"❌ 选择失败: {type(e).__name__}: {e}"
 
     try:
-        return _run_async(_run())
+        return _run_browser(_run())
     except Exception as e:
         return f"❌ 选择失败: {type(e).__name__}: {e}"
 
@@ -338,7 +353,7 @@ def browser_get_text(selector: str) -> str:
             return f"❌ 获取文本失败: {type(e).__name__}: {e}"
 
     try:
-        return _run_async(_run())
+        return _run_browser(_run())
     except Exception as e:
         return f"❌ 获取文本失败: {type(e).__name__}: {e}"
 
@@ -365,7 +380,7 @@ def browser_screenshot(full_page: bool = True) -> str:
         return "".join(parts)
 
     try:
-        return _run_async(_run())
+        return _run_browser(_run())
     except Exception as e:
         return f"❌ 截图失败: {type(e).__name__}: {e}"
 
@@ -389,7 +404,7 @@ def browser_evaluate(script: str) -> str:
             return f"❌ JS 执行失败: {type(e).__name__}: {e}"
 
     try:
-        return _run_async(_run())
+        return _run_browser(_run())
     except Exception as e:
         return f"❌ JS 执行失败: {type(e).__name__}: {e}"
 
@@ -408,7 +423,7 @@ def browser_wait(ms: int = 2000) -> str:
         return f"⏳ 已等待 {ms}ms\n{info}"
 
     try:
-        return _run_async(_run())
+        return _run_browser(_run())
     except Exception as e:
         return f"❌ 等待失败: {type(e).__name__}: {e}"
 
@@ -457,7 +472,7 @@ def browser_scroll_to(selector: str = "", x: int = -1, y: int = -1) -> str:
             return f"❌ 滚动失败: {type(e).__name__}: {e}"
 
     try:
-        return _run_async(_run())
+        return _run_browser(_run())
     except Exception as e:
         return f"❌ 滚动失败: {type(e).__name__}: {e}"
 
@@ -491,7 +506,7 @@ def browser_wait_for_element(selector: str, timeout: int = 15000) -> str:
             return f"❌ 等待元素失败: {type(e).__name__}: {e}"
 
     try:
-        return _run_async(_run())
+        return _run_browser(_run())
     except Exception as e:
         return f"❌ 等待元素失败: {type(e).__name__}: {e}"
 
@@ -514,7 +529,7 @@ def browser_takeover() -> str:
         return result
 
     try:
-        return _run_async(_run())
+        return _run_browser(_run())
     except Exception as e:
         return f"❌ 浏览器初始化失败: {type(e).__name__}: {e}"
 
@@ -554,7 +569,7 @@ def browser_drag(source: str, target: str) -> str:
             return f"❌ 拖拽失败: {type(e).__name__}: {e}"
 
     try:
-        return _run_async(_run())
+        return _run_browser(_run())
     except Exception as e:
         return f"❌ 拖拽失败: {type(e).__name__}: {e}"
 
@@ -625,7 +640,7 @@ def browser_slide(selector: str, offset_x: int, offset_y: int = 0) -> str:
             return f"❌ 滑动失败: {type(e).__name__}: {e}"
 
     try:
-        return _run_async(_run())
+        return _run_browser(_run())
     except Exception as e:
         return f"❌ 滑动失败: {type(e).__name__}: {e}"
 
@@ -1178,7 +1193,7 @@ def browser_captcha_recognize(source: str = "page") -> str:
             return f"❌ 验证码识别失败: {type(e).__name__}: {e}"
 
     try:
-        return _run_async(_run())
+        return _run_browser(_run())
     except Exception as e:
         return f"❌ 验证码识别失败: {type(e).__name__}: {e}"
 
@@ -1245,7 +1260,7 @@ def browser_captcha_click_sequence(
             return f"❌ 点击序列失败: {type(e).__name__}: {e}"
 
     try:
-        return _run_async(_run())
+        return _run_browser(_run())
     except Exception as e:
         return f"❌ 点击序列失败: {type(e).__name__}: {e}"
 
@@ -1297,7 +1312,7 @@ def browser_click_captcha(clicks: str) -> str:
             return f"❌ 点击验证码失败: {type(e).__name__}: {e}"
 
     try:
-        return _run_async(_run())
+        return _run_browser(_run())
     except Exception as e:
         return f"❌ 点击验证码失败: {type(e).__name__}: {e}"
 
@@ -1369,7 +1384,7 @@ def browser_captcha_refresh(selector: str = "") -> str:
             return f"❌ 刷新验证码失败: {type(e).__name__}: {e}"
 
     try:
-        return _run_async(_run())
+        return _run_browser(_run())
     except Exception as e:
         return f"❌ 刷新验证码失败: {type(e).__name__}: {e}"
 
@@ -1538,7 +1553,7 @@ def browser_captcha_scan_grid(grid_rows: int = 9, grid_cols: int = 16) -> str:
             return f"❌ 网格扫描失败: {type(e).__name__}: {e}"
 
     try:
-        return _run_async(_run())
+        return _run_browser(_run())
     except Exception as e:
         return f"❌ 网格扫描失败: {type(e).__name__}: {e}"
 

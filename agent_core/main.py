@@ -1116,12 +1116,12 @@ async def run_agent(req: RunRequest, request: Request):
         _save_assistant_result(uid, session_id, req.message, result)
         return RunResponse(result=result, steps=[])
 
-    agent.switch_thread(session_id)
     result, steps = await agent.run(
         agent_message,
         history=history_messages,
         attachments=attachments,
         model_override=model_override,
+        thread_id=session_id,
     )
     artifact_paths = [
         str(step.get("args", {}).get("path", ""))
@@ -1213,7 +1213,6 @@ async def run_agent_stream(req: RunRequest, request: Request):
             headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
         )
 
-    agent.switch_thread(session_id)
     artifact_paths: list[str] = []
     collected_steps: list[dict] = []  # 收集步骤卡片数据，将存入历史
     
@@ -1229,6 +1228,7 @@ async def run_agent_stream(req: RunRequest, request: Request):
             history=history_messages,
             attachments=attachments,
             model_override=model_override,
+            thread_id=session_id,
         )
         try:
             async for sse_event in stream:
