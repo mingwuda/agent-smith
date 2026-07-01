@@ -900,6 +900,224 @@ def browser_captcha_click_sequence(
         return f"❌ 点击序列失败: {type(e).__name__}: {e}"
 
 
+@tool
+def browser_click_captcha(clicks: str) -> str:
+    """在页面上按坐标序列依次点击（用于图标点选型验证码，无需 CSS 选择器）。
+
+    和 browser_captcha_click_sequence 的区别：
+      - 不需要 CSS 选择器，坐标直接相对于当前视口
+      - browser_captcha_recognize 识别页面 captcha 后可直接使用返回的坐标
+
+    参数:
+      clicks: JSON 字符串，格式 '[{"char":"字","x":100,"y":50}, ...]'
+              x/y 是相对于当前浏览器视口左上角的像素坐标
+
+    使用流程：
+      1. 调用 browser_captcha_recognize(source="page") 识别验证码
+      2. 将返回的坐标传入此工具执行点击
+    """
+    async def _run():
+        page = await _ensure_browser()
+        try:
+            data = json.loads(clicks) if isinstance(clicks, str) else clicks
+            if not isinstance(data, list) or not data:
+                return "❌ clicks 参数必须是 JSON 数组"
+
+            log = [f"🎯 即将在视口上点击 {len(data)} 次（坐标相对于视口左上角）"]
+            for i, c in enumerate(data, 1):
+                if not isinstance(c, dict):
+                    continue
+                x = float(c.get("x", 0))
+                y = float(c.get("y", 0))
+                char = c.get("char", "?")
+                # 加入微小随机抖动，更像真人
+                jx = random.uniform(-1.5, 1.5)
+                jy = random.uniform(-1.5, 1.5)
+                await page.mouse.click(x + jx, y + jy)
+                await asyncio.sleep(random.uniform(0.3, 0.7))
+                log.append(f"  {i}. 点击 `{char}` @ ({int(x)}, {int(y)})")
+
+            await asyncio.sleep(0.5)
+            screenshot = await _save_screenshot(page)
+            result = "\n".join(log) + "\n\n✅ 点击序列完成\n"
+            if screenshot.get("token"):
+                result += f"![截图](/api/screenshot?token={screenshot['token']})\n"
+            return result
+        except Exception as e:
+            return f"❌ 点击验证码失败: {type(e).__name__}: {e}"
+
+    try:
+        return _run_async(_run())
+    except Exception as e:
+        return f"❌ 点击验证码失败: {type(e).__name__}: {e}"
+
+
+@tool
+def browser_captcha_scan_grid(grid_rows: int = 6, grid_cols: int = 6) -> str:
+    """在页面上叠加网格参考线并截图，辅助视觉模型精确定位图标验证码中的点击坐标。
+
+    用于「请按顺序点击图中指定图标」类型的验证码。流程：
+      1. 在页面视口上临时绘制 A1~F6 网格线
+      2. 截图（网格可见）
+      3. 移除网格覆盖层
+      4. 返回截图 + 网格坐标说明
+
+    视觉 LLM 看到带网格的截图后，可以回答如：
+      "皇冠在 B3 格，眼睛在 D1 格，手掌在 A4 格"
+    然后你将这些网格引用转换为 {x,y} 坐标，再用 browser_click_captcha 执行点击。
+
+    参数:
+      grid_rows: 网格行数，默认 6（行标签 1~6）
+      grid_cols: 网格列数，默认 6（列标签 A~F）
+
+    返回: 带网格的截图和坐标映射说明。
+    """
+    async def _run():
+        page = await _ensure_browser()
+        try:
+            # 获取视口大小
+            viewport = await page.evaluate("({w: window.innerWidth, h: window.innerHeight})")
+            vw, vh = viewport["w"], viewport["h"]
+
+            # 生成列标签 A,B,C,...
+            col_labels = [chr(65 + i) for i in range(grid_cols)]
+            row_labels = [str(i + 1) for i in range(grid_rows)]
+
+            # 计算每个网格单元尺寸
+            cell_w = vw / grid_cols
+            cell_h = vh / grid_rows
+
+            # 通过 JS 注入网格覆盖层
+            overlay_js = """
+            (() => {
+              const existing = document.getElementById('__captcha_grid_overlay');
+              if (existing) existing.remove();
+
+              const overlay = document.createElement('div');
+              overlay.id = '__captcha_grid_overlay';
+              overlay.style.cssText = 'position:fixed;top:0;left:0;width:100vw;height:100vh;pointer-events:none;z-index:999999;';
+              document.body.appendChild(overlay);
+
+              const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+              svg.setAttribute('width', '100%');
+              svg.setAttribute('height', '100%');
+              svg.style.cssText = 'width:100vw;height:100vh;';
+              overlay.appendChild(svg);
+
+              const lines = %s;
+              const rows = %d;
+              const cols = %d;
+              const cw = 100 / cols;
+              const rh = 100 / rows;
+
+              // 绘制网格线
+              for (let r = 0; r <= rows; r++) {
+                const y = (r / rows) * 100;
+                const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                line.setAttribute('x1', '0%%');  line.setAttribute('y1', y + '%%');
+                line.setAttribute('x2', '100%%'); line.setAttribute('y2', y + '%%');
+                line.setAttribute('stroke', 'rgba(255,0,0,0.5)'); line.setAttribute('stroke-width', '1');
+                svg.appendChild(line);
+              }
+              for (let c = 0; c <= cols; c++) {
+                const x = (c / cols) * 100;
+                const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                line.setAttribute('x1', x + '%%');  line.setAttribute('y1', '0%%');
+                line.setAttribute('x2', x + '%%');  line.setAttribute('y2', '100%%');
+                line.setAttribute('stroke', 'rgba(255,0,0,0.5)'); line.setAttribute('stroke-width', '1');
+                svg.appendChild(line);
+              }
+
+              // 绘制标签（列 A B C...，行 1 2 3...）
+              const ns = 'http://www.w3.org/2000/svg';
+              const colLabels = %s;
+              const rowLabels = %s;
+              for (let c = 0; c < cols; c++) {
+                const txt = document.createElementNS(ns, 'text');
+                txt.setAttribute('x', ((c + 0.5) / cols) * 100 + '%%');
+                txt.setAttribute('y', '16px');
+                txt.setAttribute('text-anchor', 'middle');
+                txt.setAttribute('fill', 'rgba(255,0,0,0.8)');
+                txt.setAttribute('font-size', '14px');
+                txt.setAttribute('font-weight', 'bold');
+                txt.textContent = colLabels[c];
+                svg.appendChild(txt);
+              }
+              for (let r = 0; r < rows; r++) {
+                const txt = document.createElementNS(ns, 'text');
+                txt.setAttribute('x', '12px');
+                txt.setAttribute('y', ((r + 0.5) / rows) * 100 + '%%');
+                txt.setAttribute('dominant-baseline', 'middle');
+                txt.setAttribute('fill', 'rgba(255,0,0,0.8)');
+                txt.setAttribute('font-size', '14px');
+                txt.setAttribute('font-weight', 'bold');
+                txt.textContent = rowLabels[r];
+                svg.appendChild(txt);
+              }
+
+              return {vw: window.innerWidth, vh: window.innerHeight};
+            })()
+            """ % (json.dumps([]), grid_rows, grid_cols, json.dumps(col_labels), json.dumps(row_labels))
+
+            result = await page.evaluate(overlay_js)
+            await asyncio.sleep(0.3)  # 等待 SVG 渲染
+
+            # 截图（带网格）
+            png_data = await page.screenshot(full_page=False, timeout=30000)
+
+            # 移除覆盖层
+            await page.evaluate("""
+              const el = document.getElementById('__captcha_grid_overlay');
+              if (el) el.remove();
+            """)
+
+            # 保存截图
+            timestamp = int(time.time())
+            if _workspace:
+                screenshot_dir = _workspace / ".browser_screenshots"
+                screenshot_dir.mkdir(parents=True, exist_ok=True)
+                screenshot_path = screenshot_dir / f"screenshot_grid_{timestamp}.png"
+                screenshot_path.write_bytes(png_data)
+                token = screenshot_path.stem
+            else:
+                token = ""
+
+            # 构建坐标映射说明
+            lines = [
+                f"✅ 已生成 {grid_rows}×{grid_cols} 网格截图",
+                f"📐 视口尺寸: {vw}×{vh}",
+                f"📏 每格: {cell_w:.0f}×{cell_h:.0f} 像素",
+                "",
+                "网格坐标（列 A~{}，行 1~{}）：".format(col_labels[-1], grid_rows),
+                "",
+                "格子坐标计算（像素，相对于视口左上角）：",
+            ]
+            for r in range(min(grid_rows, 3)):  # 只显示前3行的示例
+                for c in range(min(grid_cols, 3)):
+                    cell_label = f"{col_labels[c]}{row_labels[r]}"
+                    cx = int(c * cell_w + cell_w / 2)
+                    cy = int(r * cell_h + cell_h / 2)
+                    lines.append(f"  {cell_label} → 中心点 ({cx}, {cy})")
+                if grid_cols > 3:
+                    lines.append(f"  ...")
+            lines.append("")
+            lines.append("💡 识别后如 '皇冠在 B3，眼睛在 D1，手掌在 A4'")
+            lines.append("→ 调用 browser_click_captcha 传入坐标即可")
+
+            if token:
+                lines.append(f"![网格截图](/api/screenshot?token={token})")
+
+            return "\n".join(lines)
+
+        except Exception as e:
+            return f"❌ 网格扫描失败: {type(e).__name__}: {e}"
+
+    try:
+        return _run_async(_run())
+    except Exception as e:
+        return f"❌ 网格扫描失败: {type(e).__name__}: {e}"
+
+
 TOOLS = [
     browser_navigate,
     browser_click,
@@ -914,4 +1132,6 @@ TOOLS = [
     browser_slide,
     browser_captcha_recognize,
     browser_captcha_click_sequence,
+    browser_click_captcha,
+    browser_captcha_scan_grid,
 ]
