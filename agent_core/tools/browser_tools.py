@@ -688,12 +688,13 @@ def _build_captcha_prompt() -> str:
         "识别图片中的验证码类型并返回 JSON。\n\n"
         "类型：\n"
         "1. text：扭曲字母/数字，输出 chars。\n"
-        "2. click：文字点选或图标点选（如依次点击 皇冠、眼睛、手掌），"
-        "输出 clicks 数组，含每个目标字符/图标名和中心像素坐标。\n"
+        "2. click：文字点选或图标点选（如依次点击指定图标或汉字），"
+        "输出 clicks 数组，含每个目标的名称和中心像素坐标。\n"
+        "   - 如果页面提示了点击顺序，按提示顺序输出\n"
+        "   - 半透明干扰图标忽略，只识别视觉上清晰的目标\n"
         "3. slider：滑块缺口。\n\n"
         "重要：\n"
         "- 坐标 (x,y) 相对于图片左上角\n"
-        "- clicks 顺序严格遵守页面提示\n"
         "- 看不清就降低 confidence\n\n"
         "返回 JSON 格式：\n"
         '{"type":"click|text|slider|unknown","chars":"","clicks":[{"char":"字/图标","x":0,"y":0}],"w":宽度,"h":高度,"confidence":0.0,"explain":"说明"}\n'
@@ -747,7 +748,7 @@ def _extract_json_from_text(text: str) -> Optional[dict]:
     return None
 
 
-async def _call_vision_llm(png_data: bytes, config: dict) -> str:
+async def _call_vision_llm(png_data: bytes, config: dict, instruction_hint: str = "") -> str:
     """调用多模态 LLM 识别验证码。返回原始文本。"""
     base_url = config["base_url"].rstrip("/")
     if not base_url.endswith("/v1"):
@@ -757,6 +758,10 @@ async def _call_vision_llm(png_data: bytes, config: dict) -> str:
     url = f"{base_url}/chat/completions"
 
     b64 = base64.b64encode(png_data).decode()
+    prompt = _build_captcha_prompt()
+    if instruction_hint:
+        prompt += f"\n\n页面提示文字：{instruction_hint}\n注意：图中按此顺序点击。"
+
     payload = {
         "model": config["model"],
         "temperature": 0,
@@ -885,7 +890,29 @@ def browser_captcha_recognize(source: str = "page") -> str:
             img_w, img_h = _image_dimensions(png_data)
             logger.info("🔍 验证码图片尺寸: %dx%d (%d bytes)", img_w, img_h, len(png_data))
 
-            # 2. 保存截图到工作区，方便 Agent 查看识别的是什么图片
+            # 2. 扫描页面上的验证码指示文字（如"请依次点击XXX"）
+            instruction_hint = await page.evaluate("""
+            () => {
+              const keywords = ['请依次点击', '依次点击', '请点击', '点击验证', '验证码', 'captcha'];
+              const texts = [];
+              // 扫描所有可见文本元素
+              const els = document.querySelectorAll('p, span, div, label, h1, h2, h3, i, b, strong, .captcha-tip, .verify-tip');
+              for (const el of els) {
+                const t = el.textContent.trim();
+                if (t.length > 2 && t.length < 100 && keywords.some(k => t.includes(k))) {
+                  if (el.offsetParent !== null) { // 仅可见元素
+                    texts.push(t);
+                  }
+                }
+              }
+              // 去重
+              return [...new Set(texts)].join(' | ');
+            }
+            """) if source != "page" else ""
+            if instruction_hint:
+                logger.info("📝 捕获到验证码提示文字: %s", instruction_hint[:150])
+
+            # 3. 保存截图到工作区，方便 Agent 查看识别的是什么图片
             img_token = ""
             if _workspace:
                 screenshot_dir = _workspace / ".browser_screenshots"
@@ -895,7 +922,7 @@ def browser_captcha_recognize(source: str = "page") -> str:
                 cap_path.write_bytes(png_data)
                 img_token = cap_path.stem
 
-            # 3. 调用多模态 LLM 识别
+            # 4. 调用多模态 LLM 识别（附带页面提示文字）
             config = _get_captcha_config()
             if not config.get("api_key"):
                 if img_token:
@@ -911,7 +938,7 @@ def browser_captcha_recognize(source: str = "page") -> str:
                 )
 
             try:
-                text = await _call_vision_llm(png_data, config)
+                text = await _call_vision_llm(png_data, config, instruction_hint)
             except httpx.HTTPStatusError as e:
                 err = f"❌ 调用视觉 LLM 失败: HTTP {e.response.status_code} {e.response.text[:200]}"
                 if img_token:
