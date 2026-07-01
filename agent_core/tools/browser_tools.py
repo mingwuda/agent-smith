@@ -1143,22 +1143,25 @@ def browser_click_captcha(clicks: str) -> str:
 
 
 @tool
-def browser_captcha_scan_grid(grid_rows: int = 6, grid_cols: int = 6) -> str:
+def browser_captcha_scan_grid(grid_rows: int = 9, grid_cols: int = 16) -> str:
     """在页面上叠加网格参考线并截图，辅助视觉模型精确定位图标验证码中的点击坐标。
 
     用于「请按顺序点击图中指定图标」类型的验证码。流程：
-      1. 在页面视口上临时绘制 A1~F6 网格线
+      1. 在页面视口上临时绘制 A1~P9 网格线（默认 16×9）
       2. 截图（网格可见）
       3. 移除网格覆盖层
       4. 返回截图 + 网格坐标说明
+
+    默认 16 列×9 行（列 A~P，行 1~9），每格约 80×80 像素，适合精确定位小图标。
+    对于全页 1280×720 的截图，推荐 16×9 或 12×8，不建议低于 6×6。
 
     视觉 LLM 看到带网格的截图后，可以回答如：
       "皇冠在 B3 格，眼睛在 D1 格，手掌在 A4 格"
     然后你将这些网格引用转换为 {x,y} 坐标，再用 browser_click_captcha 执行点击。
 
     参数:
-      grid_rows: 网格行数，默认 6（行标签 1~6）
-      grid_cols: 网格列数，默认 6（列标签 A~F）
+      grid_rows: 网格行数，默认 9（行标签 1~9）
+      grid_cols: 网格列数，默认 16（列标签 A~P）
 
     返回: 带网格的截图和坐标映射说明。
     """
