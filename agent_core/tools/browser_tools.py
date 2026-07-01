@@ -414,6 +414,89 @@ def browser_wait(ms: int = 2000) -> str:
 
 
 @tool
+def browser_scroll_to(selector: str = "", x: int = -1, y: int = -1) -> str:
+    """滚动页面到指定元素或坐标位置。
+
+    用于页面上元素未在当前视口中可见时，先滚动到目标位置再操作。
+    支持两种模式：
+      1. CSS 选择器模式：传入 selector，自动滚动直到元素可见
+      2. 坐标模式：传入 x, y 坐标直接滚动到该位置
+
+    参数:
+      selector: CSS 选择器（如 #captcha-box、.footer）
+      x: 目标 X 坐标（配合 y 使用，selector 为空时生效）
+      y: 目标 Y 坐标
+
+    返回: 滚动后的页面位置信息。
+    """
+    async def _run():
+        page = await _ensure_browser()
+        try:
+            if selector:
+                el = await page.wait_for_selector(selector, timeout=10000)
+                if not el:
+                    return f"❌ 未找到元素: {selector}"
+                await el.scroll_into_view_if_needed()
+                await asyncio.sleep(0.3)
+                box = await el.bounding_box()
+                info = f"✅ 已滚动到元素: {selector}"
+                if box:
+                    info += f"\n元素位置: ({int(box['x'])}, {int(box['y'])}) 尺寸: {int(box['width'])}×{int(box['height'])}"
+            elif x >= 0 or y >= 0:
+                sx = max(0, x)
+                sy = max(0, y)
+                await page.evaluate(f"window.scrollTo({sx}, {sy})")
+                await asyncio.sleep(0.3)
+                info = f"✅ 已滚动到坐标: ({sx}, {sy})"
+            else:
+                return "❌ 请提供 selector 或 x/y 坐标"
+
+            page_info = await _page_info(page)
+            return f"{info}\n\n{page_info}"
+        except Exception as e:
+            return f"❌ 滚动失败: {type(e).__name__}: {e}"
+
+    try:
+        return _run_async(_run())
+    except Exception as e:
+        return f"❌ 滚动失败: {type(e).__name__}: {e}"
+
+
+@tool
+def browser_wait_for_element(selector: str, timeout: int = 15000) -> str:
+    """等待页面中指定元素出现并变为可见。
+
+    用于页面是 SPA/动态加载时，等待某个元素（如登录按钮、验证码区域）
+    加载完成后再进行后续操作。
+
+    参数:
+      selector: CSS 选择器
+      timeout: 超时毫秒数，默认 15000（15 秒）
+
+    返回: 元素状态信息。
+    """
+    async def _run():
+        page = await _ensure_browser()
+        try:
+            el = await page.wait_for_selector(selector, timeout=timeout, state="visible")
+            if not el:
+                return f"❌ 超时未找到元素: {selector}（{timeout}ms）"
+            box = await el.bounding_box()
+            tag = await page.evaluate("(el) => el.tagName.toLowerCase()", el)
+            info = f"✅ 元素已可见: {selector}\n标签: <{tag}>"
+            if box:
+                info += f"\n位置: ({int(box['x'])}, {int(box['y'])}) 尺寸: {int(box['width'])}×{int(box['height'])}"
+            return info
+        except Exception as e:
+            return f"❌ 等待元素失败: {type(e).__name__}: {e}"
+
+    try:
+        return _run_async(_run())
+    except Exception as e:
+        return f"❌ 等待元素失败: {type(e).__name__}: {e}"
+
+
+@tool
 def browser_takeover() -> str:
     """获取当前浏览器的完整控制权，返回当前页面状态。"""
     async def _run():
@@ -557,7 +640,13 @@ _captcha_llm_config: Optional[dict] = None
 def _get_captcha_config() -> dict:
     """读取当前激活的模型配置（从 config.json）。"""
     try:
-        from config import AgentConfig  # 延迟导入避免循环
+                # 动态查找 config 模块（兼容 agent_core/ 和 project_root/ 两种启动方式）
+        import importlib
+        try:
+            cfg_mod = importlib.import_module("config")
+        except ImportError:
+            cfg_mod = importlib.import_module("agent_core.config")
+        AgentConfig = cfg_mod.AgentConfig
         cfg = AgentConfig.load()
         return {
             "base_url": cfg.base_url or "https://api.openai.com/v1",
@@ -593,9 +682,14 @@ def _build_captcha_prompt() -> str:
         "页面提示用户按顺序依次点击。识别后：\n"
         "   - 在 clicks 数组中按页面要求的点击顺序给出每个字符及其在图片中的中心点像素坐标\n"
         "   - 图片原始宽高用 w/h 字段输出\n"
-        "3. 滑块验证码（type=slider）：图片显示一个滑块缺口，返回 type=slider 即可，"
+        "3. 图标点选验证码（type=click）：页面上散布多个半透明图标（如皇冠、眼睛、手势等），"
+        "要求按指定顺序依次点击。识别后：\n"
+        "   - 在 clicks 数组中按点击顺序给出每个图标的**名称**和**中心点像素坐标**\n"
+        "   - char 字段写图标名称（如 皇冠、眼睛、手掌）\n"
+        "   - 注意背景中可能有多个相似的半透明干扰图标，只点击视觉上最清晰的目标\n"
+        "4. 滑块验证码（type=slider）：图片显示一个滑块缺口，返回 type=slider 即可，"
         "可附加说明缺口位置。\n"
-        "4. 看图选物验证码（type=click）：图片要求按文字顺序点击物品，"
+        "5. 看图选物验证码（type=click）：图片要求按文字顺序点击物品，"
         "同样输出 clicks 列表。\n\n"
         "重要：\n"
         "- 像素坐标 (x, y) 是相对于图片左上角的整数\n"
@@ -606,7 +700,7 @@ def _build_captcha_prompt() -> str:
         "{\n"
         '  "type": "click|text|slider|unknown",\n'
         '  "chars": "字母数字字符串",\n'
-        '  "clicks": [{"char": "字", "x": 0, "y": 0}],\n'
+        '  "clicks": [{"char": "字/图标名", "x": 中心x坐标, "y": 中心y坐标}],\n'
         '  "w": 图片宽度,\n'
         '  "h": 图片高度,\n'
         '  "confidence": 0.0,\n'
@@ -1128,6 +1222,8 @@ TOOLS = [
     browser_evaluate,
     browser_wait,
     browser_takeover,
+    browser_scroll_to,
+    browser_wait_for_element,
     browser_drag,
     browser_slide,
     browser_captcha_recognize,
