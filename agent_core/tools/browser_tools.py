@@ -685,38 +685,19 @@ def _build_captcha_prompt() -> str:
     }
     """
     return (
-        "你是一个验证码识别专家。请观察图片中的验证码并判断其类型。\n\n"
-        "可能类型：\n"
-        "1. 文字输入验证码（type=text）：图片中显示一个或多个扭曲的字母/数字，"
-        "用户需要按图片中的字符顺序输入。识别后输出 chars 字段（不含空格）。\n"
-        "2. 文字点选验证码（type=click）：图片显示 1-6 个汉字或字符，"
-        "页面提示用户按顺序依次点击。识别后：\n"
-        "   - 在 clicks 数组中按页面要求的点击顺序给出每个字符及其在图片中的中心点像素坐标\n"
-        "   - 图片原始宽高用 w/h 字段输出\n"
-        "3. 图标点选验证码（type=click）：页面上散布多个半透明图标（如皇冠、眼睛、手势等），"
-        "要求按指定顺序依次点击。识别后：\n"
-        "   - 在 clicks 数组中按点击顺序给出每个图标的**名称**和**中心点像素坐标**\n"
-        "   - char 字段写图标名称（如 皇冠、眼睛、手掌）\n"
-        "   - 注意背景中可能有多个相似的半透明干扰图标，只点击视觉上最清晰的目标\n"
-        "4. 滑块验证码（type=slider）：图片显示一个滑块缺口，返回 type=slider 即可，"
-        "可附加说明缺口位置。\n"
-        "5. 看图选物验证码（type=click）：图片要求按文字顺序点击物品，"
-        "同样输出 clicks 列表。\n\n"
+        "识别图片中的验证码类型并返回 JSON。\n\n"
+        "类型：\n"
+        "1. text：扭曲字母/数字，输出 chars。\n"
+        "2. click：文字点选或图标点选（如依次点击 皇冠、眼睛、手掌），"
+        "输出 clicks 数组，含每个目标字符/图标名和中心像素坐标。\n"
+        "3. slider：滑块缺口。\n\n"
         "重要：\n"
-        "- 像素坐标 (x, y) 是相对于图片左上角的整数\n"
-        "- clicks 顺序必须严格遵守页面文字提示\n"
-        "- 不要猜测看不清的字符，宁可降低 confidence\n"
-        "- 字符之间有引号包裹的也按视觉顺序识别\n\n"
-        "严格返回 JSON（不要包含其他文字或 Markdown 标记）：\n"
-        "{\n"
-        '  "type": "click|text|slider|unknown",\n'
-        '  "chars": "字母数字字符串",\n'
-        '  "clicks": [{"char": "字/图标名", "x": 中心x坐标, "y": 中心y坐标}],\n'
-        '  "w": 图片宽度,\n'
-        '  "h": 图片高度,\n'
-        '  "confidence": 0.0,\n'
-        '  "explain": "识别说明"\n'
-        "}"
+        "- 坐标 (x,y) 相对于图片左上角\n"
+        "- clicks 顺序严格遵守页面提示\n"
+        "- 看不清就降低 confidence\n\n"
+        "返回 JSON 格式：\n"
+        '{"type":"click|text|slider|unknown","chars":"","clicks":[{"char":"字/图标","x":0,"y":0}],"w":宽度,"h":高度,"confidence":0.0,"explain":"说明"}\n'
+        "只输出 JSON，不要 Markdown 包裹。"
     )
 
 
@@ -779,7 +760,7 @@ async def _call_vision_llm(png_data: bytes, config: dict) -> str:
     payload = {
         "model": config["model"],
         "temperature": 0,
-        "max_tokens": 2000,
+        "max_tokens": 4096,
         "messages": [
             {
                 "role": "user",
