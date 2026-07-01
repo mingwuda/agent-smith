@@ -630,6 +630,17 @@ def browser_slide(selector: str, offset_x: int, offset_y: int = 0) -> str:
         return f"❌ 滑动失败: {type(e).__name__}: {e}"
 
 
+async def _try_scroll_into_view(page, selector: str):
+    """尝试将元素滚动到视口内，captcha 识别前调用（忽略失败）"""
+    try:
+        el = await page.query_selector(selector)
+        if el:
+            await el.scroll_into_view_if_needed()
+            await asyncio.sleep(0.2)
+    except Exception:
+        pass
+
+
 # ── 验证码识别（多模态 LLM） ─────────────────────────────────
 
 # 系统级 LLM 客户端缓存：避免每个验证码调用都重建连接
@@ -768,7 +779,7 @@ async def _call_vision_llm(png_data: bytes, config: dict) -> str:
     payload = {
         "model": config["model"],
         "temperature": 0,
-        "max_tokens": 1200,
+        "max_tokens": 2000,
         "messages": [
             {
                 "role": "user",
@@ -882,6 +893,7 @@ def browser_captcha_recognize(source: str = "page") -> str:
                 png_data = await page.screenshot(full_page=False, timeout=30000)
             elif source.startswith("selector:"):
                 sel = source[len("selector:"):].strip()
+                await _try_scroll_into_view(page, sel)
                 el = await page.wait_for_selector(sel, timeout=10000)
                 if not el:
                     return f"❌ 未找到元素: {sel}"
@@ -892,9 +904,25 @@ def browser_captcha_recognize(source: str = "page") -> str:
             img_w, img_h = _image_dimensions(png_data)
             logger.info("🔍 验证码图片尺寸: %dx%d (%d bytes)", img_w, img_h, len(png_data))
 
-            # 2. 调用多模态 LLM 识别
+            # 2. 保存截图到工作区，方便 Agent 查看识别的是什么图片
+            img_token = ""
+            if _workspace:
+                screenshot_dir = _workspace / ".browser_screenshots"
+                screenshot_dir.mkdir(parents=True, exist_ok=True)
+                ts = int(time.time())
+                cap_path = screenshot_dir / f"captcha_{ts}.png"
+                cap_path.write_bytes(png_data)
+                img_token = cap_path.stem
+
+            # 3. 调用多模态 LLM 识别
             config = _get_captcha_config()
             if not config.get("api_key"):
+                if img_token:
+                    return (
+                        "❌ 未配置 LLM API Key。\n"
+                        "请在设置中配置模型 API Key 后重试。\n\n"
+                        f"![截图](/api/screenshot?token={img_token})"
+                    )
                 return (
                     "❌ 未配置 LLM API Key。\n"
                     "请在设置中配置模型 API Key 后重试。\n"
@@ -904,20 +932,33 @@ def browser_captcha_recognize(source: str = "page") -> str:
             try:
                 text = await _call_vision_llm(png_data, config)
             except httpx.HTTPStatusError as e:
-                return f"❌ 调用视觉 LLM 失败: HTTP {e.response.status_code} {e.response.text[:200]}"
+                err = f"❌ 调用视觉 LLM 失败: HTTP {e.response.status_code} {e.response.text[:200]}"
+                if img_token:
+                    err += f"\n\n![截图](/api/screenshot?token={img_token})"
+                return err
             except Exception as e:
-                return f"❌ 调用视觉 LLM 异常: {type(e).__name__}: {e}"
+                err = f"❌ 调用视觉 LLM 异常: {type(e).__name__}: {e}"
+                if img_token:
+                    err += f"\n\n![截图](/api/screenshot?token={img_token})"
+                return err
 
             logger.info("🧠 视觉 LLM 原始响应: %s", text[:300])
             parsed = _extract_json_from_text(text)
             if not parsed:
-                return (
+                result = (
                     "⚠️ 视觉 LLM 返回无法解析的内容。\n"
                     f"原始输出:\n{text[:500]}\n\n"
                     "可重试或人工识别后用 browser_fill 填入。"
                 )
+                if img_token:
+                    result += f"\n\n![截图](/api/screenshot?token={img_token})"
+                return result
 
-            return _format_result(parsed, img_w, img_h)
+            # 4. 将识别结果截图也附上，方便 Agent 确认
+            fmt = _format_result(parsed, img_w, img_h)
+            if img_token:
+                fmt += f"\n\n![识别来源](/api/screenshot?token={img_token})"
+            return fmt
         except Exception as e:
             return f"❌ 验证码识别失败: {type(e).__name__}: {e}"
 
