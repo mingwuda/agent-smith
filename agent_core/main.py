@@ -11,6 +11,7 @@ import shutil
 import sys
 import threading
 import time
+import uuid
 import webbrowser
 import zipfile
 from io import BytesIO
@@ -35,7 +36,7 @@ def _app_base_dir() -> Path:
         return Path(sys._MEIPASS)
     return Path(__file__).parent.parent
 
-from logger import setup_logging, get_logger
+from logger import setup_logging, get_logger, set_log_context, clear_log_context
 
 logger = get_logger(__name__)
 
@@ -1079,6 +1080,8 @@ async def run_agent(req: RunRequest, request: Request):
     
     uid = _resolve_user(request)
     session_id = req.thread_id
+    message_id = str(uuid.uuid4())
+    set_log_context(session_id=session_id, message_id=message_id)
     _apply_session_workspace(uid, session_id)
     session = await _ensure_session(uid, session_id)
     history_messages = session.get("messages", [])
@@ -1164,6 +1167,8 @@ async def run_agent_stream(req: RunRequest, request: Request):
     
     uid = _resolve_user(request)
     session_id = req.thread_id
+    message_id = str(uuid.uuid4())
+    set_log_context(session_id=session_id, message_id=message_id)
     _apply_session_workspace(uid, session_id)
     session = await _ensure_session(uid, session_id)
     history_messages = session.get("messages", [])

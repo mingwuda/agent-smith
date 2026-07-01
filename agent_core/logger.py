@@ -1,19 +1,26 @@
 """
 统一日志模块 —— 全局日志配置，支持 7 天滚动轮换。
 
+提供 `set_log_context()` / `clear_log_context()`，在请求处理开始时设定
+session_id 和 message_id，后续所有日志行自动携带上下文前缀。
+
 用法:
-    from logger import get_logger, setup_logging
+    from logger import get_logger, setup_logging, set_log_context, clear_log_context
 
     # 在服务入口处初始化
     setup_logging()
 
     # 各模块获取 logger
     logger = get_logger(__name__)
-    logger.info("服务启动成功")
-    logger.error("连接失败", exc_info=True)
+
+    # 在每个请求开始时设定上下文
+    set_log_context(session_id="abc123", message_id="uuid")
+    logger.info("服务启动成功")   # → 日志行末尾自动包含 [s:abc123] [m:uuid]
+    clear_log_context()
 """
 from __future__ import annotations
 
+import contextvars
 import logging
 import os
 import sys
@@ -32,6 +39,50 @@ _DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 # 单例标记：防止重复初始化
 _initialized = False
+
+# ── 线程安全（实际是协程安全）的日志上下文 ──
+_session_id_var: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "log_session_id", default=""
+)
+_message_id_var: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "log_message_id", default=""
+)
+
+
+def set_log_context(session_id: str = "", message_id: str = "") -> None:
+    """设置当前请求的日志上下文（session_id / message_id）。
+
+    之后所有日志行会自动带上 [s:xxx] [m:xxx] 前缀。
+    请求结束时调用 clear_log_context() 清除。
+    """
+    _session_id_var.set(session_id or "")
+    _message_id_var.set(message_id or "")
+
+
+def clear_log_context() -> None:
+    """清除当前请求的日志上下文。"""
+    _session_id_var.set("")
+    _message_id_var.set("")
+
+
+class _LogContextFilter(logging.Filter):
+    """日志过滤器：将当前请求的 session_id / message_id 注入日志记录。"""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        sid = _session_id_var.get("")
+        mid = _message_id_var.get("")
+        parts: list[str] = []
+        if sid:
+            parts.append(f"[s:{sid[:12]}]")
+        if mid:
+            parts.append(f"[m:{mid[:8]}]")
+        if parts:
+            record.msg = f"{' '.join(parts)} {record.msg}"
+        return True
+
+
+# 全局单例 Filter
+_LOG_CONTEXT_FILTER = _LogContextFilter()
 
 
 def setup_logging(
@@ -90,6 +141,7 @@ def setup_logging(
     )
     file_handler.setLevel(level)
     file_handler.setFormatter(logging.Formatter(_FILE_FORMAT, datefmt=_DATE_FORMAT))
+    file_handler.addFilter(_LOG_CONTEXT_FILTER)
     root.addHandler(file_handler)
 
     # ── 控制台 Handler ──
@@ -97,6 +149,7 @@ def setup_logging(
         console_handler = logging.StreamHandler(sys.stdout)
         console_handler.setLevel(level)
         console_handler.setFormatter(logging.Formatter(_CONSOLE_FORMAT, datefmt=_DATE_FORMAT))
+        console_handler.addFilter(_LOG_CONTEXT_FILTER)
         root.addHandler(console_handler)
 
     _initialized = True
