@@ -687,18 +687,19 @@ def _build_captcha_prompt() -> str:
     return (
         "识别图片中的验证码类型并返回 JSON。\n\n"
         "类型：\n"
-        "1. text：扭曲字母/数字，输出 chars。\n"
-        "2. click：文字点选或图标点选（如图标散落在图中不同位置需要依次点击），"
-        "输出 clicks 数组，含每个目标的名称和中心像素坐标。\n"
-        "   - 图标通常分散在图片的不同位置，仔细搜索全图\n"
-        "   - 半透明/灰色干扰图标忽略，只识别清晰的目标\n"
+        "1. text：扭曲字母或数字，输出 chars 字段。\n"
+        "2. click：点选验证码，图片中散落着一些**汉字字符**或**图标**，"
+        "需要按页面提示的顺序依次点击。输出 clicks 数组：\n"
+        "   - 如果是汉字点选，char 写实际的汉字字符（如 发、送、验）\n"
+        "   - 如果是图标点选，char 写图标名称（如 皇冠、眼睛、手掌）\n"
+        "   - 每个点击目标的坐标应分散在不同位置，不要集中在同一区域\n"
+        "   - 半透明干扰项忽略，只识别清晰的目标\n"
         "3. slider：滑块缺口。\n\n"
         "重要：\n"
         "- 坐标 (x,y) 相对于图片左上角\n"
-        "- 每个图标的坐标不应相同，它们分散在不同位置\n"
-        "- 看不清就降低 confidence\n\n"
+        "- 看不清就降低 confidence，不要编造\n\n"
         "返回 JSON 格式：\n"
-        '{"type":"click|text|slider|unknown","chars":"","clicks":[{"char":"字/图标","x":0,"y":0}],"w":宽度,"h":高度,"confidence":0.0,"explain":"说明"}\n'
+        '{"type":"click|text|slider|unknown","chars":"","clicks":[{"char":"汉字或图标名","x":0,"y":0}],"w":宽度,"h":高度,"confidence":0.0,"explain":"说明"}\n'
         "只输出 JSON，不要 Markdown 包裹。"
     )
 
@@ -904,21 +905,23 @@ def browser_captcha_recognize(source: str = "page") -> str:
             # 2. 扫描页面上的验证码指示文字（如"请依次点击XXX"）
             instruction_hint = await page.evaluate("""
             () => {
-              const keywords = ['请依次点击', '依次点击', '请点击', '点击验证', '验证码', 'captcha'];
-              const texts = [];
-              // 扫描所有可见文本元素
-              const els = document.querySelectorAll('p, span, div, label, h1, h2, h3, i, b, strong, .captcha-tip, .verify-tip');
-              for (const el of els) {
-                const t = el.textContent.trim();
-                if (t.length > 2 && t.length < 100 && keywords.some(k => t.includes(k))) {
-                  if (el.offsetParent !== null) { // 仅可见元素
-                    texts.push(t);
-                  }
+            /* 扫描页面上的验证码指示文字 */
+            const priorityKeywords = ['请依次点击', '依次点击', '按顺序点击', '请点击以下'];
+            const secondaryKeywords = ['点选验证', '点击验证', '验证码', '发送验证码', 'captcha'];
+            const texts = [];
+            const els = document.querySelectorAll('p, span, div, label, h1, h2, h3, i, b, strong, .captcha-tip, .verify-tip, .nc-lang-cnt, .slider-captcha');
+            for (const el of els) {
+              const t = el.textContent.trim();
+              if (t.length > 2 && t.length < 120 && el.offsetParent !== null) {
+                if (priorityKeywords.some(k => t.includes(k))) {
+                  texts.unshift('[指令] ' + t); // 优先文本放前面
+                } else if (secondaryKeywords.some(k => t.includes(k))) {
+                  texts.push('[相关] ' + t);
                 }
               }
-              // 去重
-              return [...new Set(texts)].join(' | ');
             }
+            return [...new Set(texts)].join(' | ');
+            })()
             """) if source != "page" else ""
             if instruction_hint:
                 logger.info("📝 捕获到验证码提示文字: %s", instruction_hint[:150])
@@ -1153,8 +1156,8 @@ def browser_captcha_scan_grid(grid_rows: int = 6, grid_cols: int = 6) -> str:
               document.body.appendChild(overlay);
 
               const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-              svg.setAttribute('width', '100%');
-              svg.setAttribute('height', '100%');
+              svg.setAttribute('width', '100%%');
+              svg.setAttribute('height', '100%%');
               svg.style.cssText = 'width:100vw;height:100vh;';
               overlay.appendChild(svg);
 
