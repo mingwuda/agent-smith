@@ -1,6 +1,9 @@
 """浏览器自动化工具（基于 Playwright）
 
 支持页面导航、元素交互、截图、验证码识别和前端 E2E 测试。
+
+线程隔离：每个 LangGraph 会话（thread_id）拥有独立的浏览器页面，
+避免不同会话之间的页面状态和截图串扰。
 """
 import asyncio
 import base64
@@ -17,6 +20,7 @@ from pathlib import Path
 from typing import Optional
 
 import httpx
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 
 logger = logging.getLogger(__name__)
@@ -72,17 +76,20 @@ def _run_async(coro) -> any:
     return future.result(timeout=90)
 
 
-def _run_browser(coro) -> any:
-    """在浏览器线程执行协程，全程持有 _page_lock 防止并发冲突。
+# 每会话独立页面锁，key=thread_id，确保同一会话的操作串行
+_page_locks: dict[str, asyncio.Lock] = {}
 
-    所有浏览器操作都应通过此函数而非 _run_async 调用，以确保
-    多请求并发时不竞争同一个浏览器页面。
+
+def _run_browser(coro, thread_id: str = "default") -> any:
+    """在浏览器线程执行协程，使用 thread_id 对应的页面锁防止同一会话的并发冲突。
+
+    不同 thread_id 的页面可并行操作，同一 thread_id 的操作串行执行。
     """
     async def _locked():
-        global _page_lock
-        if _page_lock is None:
-            _page_lock = asyncio.Lock()
-        async with _page_lock:
+        global _page_locks
+        if thread_id not in _page_locks:
+            _page_locks[thread_id] = asyncio.Lock()
+        async with _page_locks[thread_id]:
             return await coro
     return _run_async(_locked())
 
@@ -98,12 +105,13 @@ def _stop_browser_loop():
         _browser_thread = None
 
 
-# 全局浏览器实例（跨工具调用复用）
+# 全局浏览器实例（跨会话共享同一个 Chromium 进程）
 _browser = None
-_browser_context = None
-_page = None
 _playwright = None
-_page_lock: Optional[asyncio.Lock] = None  # 延迟初始化
+
+# 每个会话独立页面（key=thread_id，避免会话间页面状态串扰）
+_pages: dict[str, "Page"] = {}
+_contexts: dict[str, "BrowserContext"] = {}
 
 # 工作区（用于保存截图）
 _workspace: Optional[Path] = None
@@ -118,25 +126,37 @@ def set_workspace(path: Path):
     _workspace = path.expanduser().resolve()
 
 
-async def _ensure_browser():
-    """惰性初始化浏览器实例（每个进程只启动一次）"""
-    global _browser, _browser_context, _page, _playwright, _page_lock
-    if _page is not None:
-        return _page
+async def _ensure_browser(thread_id: str = "default"):
+    """惰性初始化浏览器实例，每个 thread_id 创建独立的上下文和页面。
+
+    浏览器进程（Chromium）全局唯一，但每个会话拥有独立的
+    BrowserContext（隔离 cookie/localStorage）和 Page。
+    """
+    global _browser, _playwright
+
+    # 已有该会话的页面 → 直接返回
+    if thread_id in _pages and _pages[thread_id] is not None:
+        return _pages[thread_id]
 
     from playwright.async_api import async_playwright
 
-    _playwright = await async_playwright().start()
-    headless = os.environ.get("BROWSER_HEADLESS", "1") == "1"
-    _browser = await _playwright.chromium.launch(
-        headless=headless,
-        args=[
-            "--no-sandbox",
-            "--disable-gpu",
-            "--disable-dev-shm-usage",
-        ],
-    )
-    _browser_context = await _browser.new_context(
+    # 首次启动浏览器（全局唯一，只启动一次）
+    if _browser is None:
+        # 在浏览器事件循环中用 asyncio.Lock 防止重复启动
+        _playwright = await async_playwright().start()
+        headless = os.environ.get("BROWSER_HEADLESS", "1") == "1"
+        _browser = await _playwright.chromium.launch(
+            headless=headless,
+            args=[
+                "--no-sandbox",
+                "--disable-gpu",
+                "--disable-dev-shm-usage",
+            ],
+        )
+        logger.info("✅ 浏览器已启动（全局共享）")
+
+    # 为该会话创建独立的 BrowserContext 和 Page
+    ctx = await _browser.new_context(
         viewport={"width": 1280, "height": 720},
         user_agent=(
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -144,22 +164,28 @@ async def _ensure_browser():
             "Chrome/125.0.0.0 Safari/537.36"
         ),
     )
-    _page = await _browser_context.new_page()
-    
-    # 在当前事件循环中创建锁
-    if _page_lock is None:
-        _page_lock = asyncio.Lock()
-    
-    logger.info("✅ 浏览器已启动")
-    return _page
+    page = await ctx.new_page()
+    _contexts[thread_id] = ctx
+    _pages[thread_id] = page
+
+    logger.info("✅ 已为会话 %s 创建独立浏览器页面", thread_id[:16])
+    return page
 
 
 async def _close_browser():
-    """关闭浏览器实例"""
-    global _browser, _browser_context, _page, _playwright
+    """关闭浏览器实例（释放所有会话的页面）"""
+    global _browser, _playwright, _pages, _contexts
     try:
-        if _browser_context:
-            await _browser_context.close()
+        # 关闭所有独立上下文和页面
+        for tid, ctx in list(_contexts.items()):
+            try:
+                await ctx.close()
+            except Exception:
+                pass
+        _contexts.clear()
+        _pages.clear()
+
+        # 关闭浏览器进程
         if _browser:
             await _browser.close()
         if _playwright:
@@ -168,9 +194,29 @@ async def _close_browser():
         pass
     finally:
         _browser = None
-        _browser_context = None
-        _page = None
         _playwright = None
+
+
+def release_browser_page(thread_id: str):
+    """释放指定会话的浏览器页面和上下文。
+
+    在会话结束时调用，释放不再使用的资源。
+    """
+    async def _release():
+        global _pages, _contexts, _page_locks
+        if thread_id in _contexts:
+            try:
+                await _contexts[thread_id].close()
+            except Exception:
+                pass
+            del _contexts[thread_id]
+        _pages.pop(thread_id, None)
+        _page_locks.pop(thread_id, None)
+        logger.info("🧹 已释放会话 %s 的浏览器页面", thread_id[:16])
+    try:
+        _run_async(_release())
+    except Exception:
+        pass
 
 
 async def _save_screenshot(page) -> dict:
@@ -221,14 +267,16 @@ async def _page_info(page) -> str:
 
 
 @tool
-def browser_navigate(url: str) -> str:
+def browser_navigate(url: str, config: RunnableConfig) -> str:
     """导航到指定 URL 并返回页面标题和截图。
 
     参数:
       url: 完整的网页地址（包含 http:// 或 https://）
     """
+    thread_id = config.get("configurable", {}).get("thread_id", "default")
+
     async def _run():
-        page = await _ensure_browser()
+        page = await _ensure_browser(thread_id)
         try:
             logger.info(f"🌐 正在导航到: {url}")
             # 先尝试 networkidle，失败后用 domcontentloaded 兜底
@@ -255,20 +303,22 @@ def browser_navigate(url: str) -> str:
         return result
 
     try:
-        return _run_browser(_run())
+        return _run_browser(_run(), thread_id)
     except Exception as e:
         return f"❌ 导航失败: {type(e).__name__}: {e}"
 
 
 @tool
-def browser_click(selector: str) -> str:
+def browser_click(selector: str, config: RunnableConfig) -> str:
     """点击页面中指定的元素。
 
     参数:
       selector: CSS 选择器（如 #submit-btn, button.primary, a[href="/login"]）
     """
+    thread_id = config.get("configurable", {}).get("thread_id", "default")
+
     async def _run():
-        page = await _ensure_browser()
+        page = await _ensure_browser(thread_id)
         try:
             await page.click(selector, timeout=10000)
             await asyncio.sleep(0.5)  # 等待可能的页面响应
@@ -285,21 +335,23 @@ def browser_click(selector: str) -> str:
             return f"❌ 点击失败: {type(e).__name__}: {e}"
 
     try:
-        return _run_browser(_run())
+        return _run_browser(_run(), thread_id)
     except Exception as e:
         return f"❌ 点击失败: {type(e).__name__}: {e}"
 
 
 @tool
-def browser_fill(selector: str, value: str) -> str:
+def browser_fill(selector: str, value: str, config: RunnableConfig) -> str:
     """在页面输入框中填入文本。
 
     参数:
       selector: CSS 选择器（如 #username, input[name="email"]）
       value: 要填入的文本内容
     """
+    thread_id = config.get("configurable", {}).get("thread_id", "default")
+
     async def _run():
-        page = await _ensure_browser()
+        page = await _ensure_browser(thread_id)
         try:
             await page.fill(selector, value, timeout=10000)
             return f"✅ 已填入: {selector} = \"{value[:50]}{'...' if len(value) > 50 else ''}\""
@@ -307,21 +359,23 @@ def browser_fill(selector: str, value: str) -> str:
             return f"❌ 填入失败: {type(e).__name__}: {e}"
 
     try:
-        return _run_browser(_run())
+        return _run_browser(_run(), thread_id)
     except Exception as e:
         return f"❌ 填入失败: {type(e).__name__}: {e}"
 
 
 @tool
-def browser_select(selector: str, value: str) -> str:
+def browser_select(selector: str, value: str, config: RunnableConfig) -> str:
     """选择下拉框中的选项。
 
     参数:
       selector: <select> 元素的 CSS 选择器
       value: 要选择的 option 的 value 或 label
     """
+    thread_id = config.get("configurable", {}).get("thread_id", "default")
+
     async def _run():
-        page = await _ensure_browser()
+        page = await _ensure_browser(thread_id)
         try:
             await page.select_option(selector, value, timeout=10000)
             return f"✅ 已选择: {selector} = {value}"
@@ -329,20 +383,22 @@ def browser_select(selector: str, value: str) -> str:
             return f"❌ 选择失败: {type(e).__name__}: {e}"
 
     try:
-        return _run_browser(_run())
+        return _run_browser(_run(), thread_id)
     except Exception as e:
         return f"❌ 选择失败: {type(e).__name__}: {e}"
 
 
 @tool
-def browser_get_text(selector: str) -> str:
+def browser_get_text(selector: str, config: RunnableConfig) -> str:
     """获取页面中指定元素的文本内容。
 
     参数:
       selector: CSS 选择器
     """
+    thread_id = config.get("configurable", {}).get("thread_id", "default")
+
     async def _run():
-        page = await _ensure_browser()
+        page = await _ensure_browser(thread_id)
         try:
             element = await page.wait_for_selector(selector, timeout=10000)
             if not element:
@@ -353,20 +409,22 @@ def browser_get_text(selector: str) -> str:
             return f"❌ 获取文本失败: {type(e).__name__}: {e}"
 
     try:
-        return _run_browser(_run())
+        return _run_browser(_run(), thread_id)
     except Exception as e:
         return f"❌ 获取文本失败: {type(e).__name__}: {e}"
 
 
 @tool
-def browser_screenshot(full_page: bool = True) -> str:
+def browser_screenshot(config: RunnableConfig, full_page: bool = True) -> str:
     """截取当前浏览器页面的截图。
 
     参数:
       full_page: 是否截取完整页面（包括滚动部分），默认 true
     """
+    thread_id = config.get("configurable", {}).get("thread_id", "default")
+
     async def _run():
-        page = await _ensure_browser()
+        page = await _ensure_browser(thread_id)
         ss = await _save_screenshot(page)
         info = await _page_info(page)
         parts = [f"📸 已截图\n\n{info}\n\n"]
@@ -380,13 +438,13 @@ def browser_screenshot(full_page: bool = True) -> str:
         return "".join(parts)
 
     try:
-        return _run_browser(_run())
+        return _run_browser(_run(), thread_id)
     except Exception as e:
         return f"❌ 截图失败: {type(e).__name__}: {e}"
 
 
 @tool
-def browser_evaluate(script: str) -> str:
+def browser_evaluate(script: str, config: RunnableConfig) -> str:
     """在浏览器中执行 JavaScript 并返回结果。
 
     用于获取页面数据、检查元素状态、调用前端函数等。
@@ -394,8 +452,10 @@ def browser_evaluate(script: str) -> str:
     参数:
       script: JavaScript 代码字符串（如 "document.title"、"JSON.stringify(window.__INITIAL_STATE__)"）
     """
+    thread_id = config.get("configurable", {}).get("thread_id", "default")
+
     async def _run():
-        page = await _ensure_browser()
+        page = await _ensure_browser(thread_id)
         try:
             result = await page.evaluate(script)
             text = str(result)
@@ -404,32 +464,34 @@ def browser_evaluate(script: str) -> str:
             return f"❌ JS 执行失败: {type(e).__name__}: {e}"
 
     try:
-        return _run_browser(_run())
+        return _run_browser(_run(), thread_id)
     except Exception as e:
         return f"❌ JS 执行失败: {type(e).__name__}: {e}"
 
 
 @tool
-def browser_wait(ms: int = 2000) -> str:
+def browser_wait(config: RunnableConfig, ms: int = 2000) -> str:
     """等待指定毫秒数，常用于等待页面渲染或动画完成。
 
     参数:
       ms: 等待毫秒数（默认 2000）
     """
+    thread_id = config.get("configurable", {}).get("thread_id", "default")
+
     async def _run():
-        page = await _ensure_browser()
+        page = await _ensure_browser(thread_id)
         await asyncio.sleep(ms / 1000)
         info = await _page_info(page)
         return f"⏳ 已等待 {ms}ms\n{info}"
 
     try:
-        return _run_browser(_run())
+        return _run_browser(_run(), thread_id)
     except Exception as e:
         return f"❌ 等待失败: {type(e).__name__}: {e}"
 
 
 @tool
-def browser_scroll_to(selector: str = "", x: int = -1, y: int = -1) -> str:
+def browser_scroll_to(config: RunnableConfig, selector: str = "", x: int = -1, y: int = -1) -> str:
     """滚动页面到指定元素或坐标位置。
 
     用于页面上元素未在当前视口中可见时，先滚动到目标位置再操作。
@@ -444,8 +506,10 @@ def browser_scroll_to(selector: str = "", x: int = -1, y: int = -1) -> str:
 
     返回: 滚动后的页面位置信息。
     """
+    thread_id = config.get("configurable", {}).get("thread_id", "default")
+
     async def _run():
-        page = await _ensure_browser()
+        page = await _ensure_browser(thread_id)
         try:
             if selector:
                 el = await page.wait_for_selector(selector, timeout=10000)
@@ -472,13 +536,13 @@ def browser_scroll_to(selector: str = "", x: int = -1, y: int = -1) -> str:
             return f"❌ 滚动失败: {type(e).__name__}: {e}"
 
     try:
-        return _run_browser(_run())
+        return _run_browser(_run(), thread_id)
     except Exception as e:
         return f"❌ 滚动失败: {type(e).__name__}: {e}"
 
 
 @tool
-def browser_wait_for_element(selector: str, timeout: int = 15000) -> str:
+def browser_wait_for_element(selector: str, config: RunnableConfig, timeout: int = 15000) -> str:
     """等待页面中指定元素出现并变为可见。
 
     用于页面是 SPA/动态加载时，等待某个元素（如登录按钮、验证码区域）
@@ -490,8 +554,10 @@ def browser_wait_for_element(selector: str, timeout: int = 15000) -> str:
 
     返回: 元素状态信息。
     """
+    thread_id = config.get("configurable", {}).get("thread_id", "default")
+
     async def _run():
-        page = await _ensure_browser()
+        page = await _ensure_browser(thread_id)
         try:
             el = await page.wait_for_selector(selector, timeout=timeout, state="visible")
             if not el:
@@ -506,16 +572,18 @@ def browser_wait_for_element(selector: str, timeout: int = 15000) -> str:
             return f"❌ 等待元素失败: {type(e).__name__}: {e}"
 
     try:
-        return _run_browser(_run())
+        return _run_browser(_run(), thread_id)
     except Exception as e:
         return f"❌ 等待元素失败: {type(e).__name__}: {e}"
 
 
 @tool
-def browser_takeover() -> str:
+def browser_takeover(config: RunnableConfig) -> str:
     """获取当前浏览器的完整控制权，返回当前页面状态。"""
+    thread_id = config.get("configurable", {}).get("thread_id", "default")
+
     async def _run():
-        page = await _ensure_browser()
+        page = await _ensure_browser(thread_id)
         info = await _page_info(page)
         screenshot = await _save_screenshot(page)
         result = f"🌐 浏览器已就绪\n\n{info}\n\n"
@@ -529,13 +597,13 @@ def browser_takeover() -> str:
         return result
 
     try:
-        return _run_browser(_run())
+        return _run_browser(_run(), thread_id)
     except Exception as e:
         return f"❌ 浏览器初始化失败: {type(e).__name__}: {e}"
 
 
 @tool
-def browser_drag(source: str, target: str) -> str:
+def browser_drag(source: str, target: str, config: RunnableConfig) -> str:
     """将页面元素拖拽到目标元素上（Drag-and-Drop）。
 
     用于实现拖拽排序、滑块验证、文件拖放等交互。
@@ -544,8 +612,10 @@ def browser_drag(source: str, target: str) -> str:
       source: 被拖拽元素的 CSS 选择器
       target: 目标元素的 CSS 选择器
     """
+    thread_id = config.get("configurable", {}).get("thread_id", "default")
+
     async def _run():
-        page = await _ensure_browser()
+        page = await _ensure_browser(thread_id)
         try:
             src_el = await page.wait_for_selector(source, timeout=10000)
             if not src_el:
@@ -569,13 +639,13 @@ def browser_drag(source: str, target: str) -> str:
             return f"❌ 拖拽失败: {type(e).__name__}: {e}"
 
     try:
-        return _run_browser(_run())
+        return _run_browser(_run(), thread_id)
     except Exception as e:
         return f"❌ 拖拽失败: {type(e).__name__}: {e}"
 
 
 @tool
-def browser_slide(selector: str, offset_x: int, offset_y: int = 0) -> str:
+def browser_slide(selector: str, offset_x: int, config: RunnableConfig, offset_y: int = 0) -> str:
     """水平或垂直滑动页面元素（模拟鼠标拖拽），常用于滑块验证码。
 
     通过模拟人类操作轨迹逐步移动鼠标，避免被反爬机制检测。
@@ -586,8 +656,10 @@ def browser_slide(selector: str, offset_x: int, offset_y: int = 0) -> str:
       offset_x: 水平滑动的像素距离（正数向右，负数向左）
       offset_y: 垂直滑动的像素距离（正数向下，负数向上），默认 0
     """
+    thread_id = config.get("configurable", {}).get("thread_id", "default")
+
     async def _run():
-        page = await _ensure_browser()
+        page = await _ensure_browser(thread_id)
         try:
             el = await page.wait_for_selector(selector, timeout=10000)
             if not el:
@@ -640,7 +712,7 @@ def browser_slide(selector: str, offset_x: int, offset_y: int = 0) -> str:
             return f"❌ 滑动失败: {type(e).__name__}: {e}"
 
     try:
-        return _run_browser(_run())
+        return _run_browser(_run(), thread_id)
     except Exception as e:
         return f"❌ 滑动失败: {type(e).__name__}: {e}"
 
@@ -689,6 +761,7 @@ def _build_captcha_prompt(is_page_level: bool = False) -> str:
     
     is_page_level=True 时只做类型检测，不做精确坐标定位（页面全图图标太小）。
     """
+    
     if is_page_level:
         return (
             "判断图片中是否包含验证码（CAPTCHA）元素并返回 JSON。\n\n"
@@ -929,6 +1002,7 @@ async def _call_vision_llm(png_data: bytes, config: dict, instruction_hint: str 
       img_w: 截图实际宽度（用于提示 LLM 坐标范围）
       img_h: 截图实际高度
     """
+    
     base_url = config["base_url"].rstrip("/")
     if not base_url.endswith("/v1"):
         if "/v1" not in base_url:
@@ -1012,6 +1086,7 @@ def _format_result(parsed: dict, img_w: int, img_h: int, source: str = "page") -
       - "page": 坐标相对于视口 → 引导调用 browser_click_captcha
       - "selector:...": 坐标相对于元素 → 引导调用 browser_captcha_click_sequence
     """
+    
     ctype = (parsed.get("type") or "unknown").lower()
     conf = parsed.get("confidence", 0)
     explain = parsed.get("explain", "")
@@ -1070,7 +1145,7 @@ def _format_result(parsed: dict, img_w: int, img_h: int, source: str = "page") -
 
 
 @tool
-def browser_captcha_recognize(source: str = "page") -> str:
+def browser_captcha_recognize(config: RunnableConfig, source: str = "page") -> str:
     """识别当前浏览器页面中的验证码图片（基于多模态大模型）。
 
     适用于以下场景的登录/注册流程：
@@ -1088,8 +1163,10 @@ def browser_captcha_recognize(source: str = "page") -> str:
 
     返回: JSON 字符串 + 友好说明，包含类型、置信度、字符或点击坐标。
     """
+    thread_id = config.get("configurable", {}).get("thread_id", "default")
+
     async def _run():
-        page = await _ensure_browser()
+        page = await _ensure_browser(thread_id)
         try:
             # 1. 截取验证码图片
             clip_info = None
@@ -1193,15 +1270,13 @@ def browser_captcha_recognize(source: str = "page") -> str:
             return f"❌ 验证码识别失败: {type(e).__name__}: {e}"
 
     try:
-        return _run_browser(_run())
+        return _run_browser(_run(), thread_id)
     except Exception as e:
         return f"❌ 验证码识别失败: {type(e).__name__}: {e}"
 
 
 @tool
-def browser_captcha_click_sequence(
-    selector: str, clicks: str, image_w: int = 0, image_h: int = 0
-) -> str:
+def browser_captcha_click_sequence(selector: str, clicks: str, config: RunnableConfig, image_w: int = 0, image_h: int = 0) -> str:
     """在验证码图片区域上按指定顺序模拟点击（用于点选型验证码）。
 
     参数:
@@ -1213,8 +1288,10 @@ def browser_captcha_click_sequence(
 
     返回: 每次点击的结果
     """
+    thread_id = config.get("configurable", {}).get("thread_id", "default")
+
     async def _run():
-        page = await _ensure_browser()
+        page = await _ensure_browser(thread_id)
         try:
             data = json.loads(clicks) if isinstance(clicks, str) else clicks
             if not isinstance(data, list) or not data:
@@ -1260,13 +1337,13 @@ def browser_captcha_click_sequence(
             return f"❌ 点击序列失败: {type(e).__name__}: {e}"
 
     try:
-        return _run_browser(_run())
+        return _run_browser(_run(), thread_id)
     except Exception as e:
         return f"❌ 点击序列失败: {type(e).__name__}: {e}"
 
 
 @tool
-def browser_click_captcha(clicks: str) -> str:
+def browser_click_captcha(clicks: str, config: RunnableConfig) -> str:
     """在页面上按坐标序列依次点击（用于图标点选型验证码，无需 CSS 选择器）。
 
     和 browser_captcha_click_sequence 的区别：
@@ -1281,8 +1358,10 @@ def browser_click_captcha(clicks: str) -> str:
       1. 调用 browser_captcha_recognize(source="page") 识别验证码
       2. 将返回的坐标传入此工具执行点击
     """
+    thread_id = config.get("configurable", {}).get("thread_id", "default")
+
     async def _run():
-        page = await _ensure_browser()
+        page = await _ensure_browser(thread_id)
         try:
             data = json.loads(clicks) if isinstance(clicks, str) else clicks
             if not isinstance(data, list) or not data:
@@ -1312,13 +1391,13 @@ def browser_click_captcha(clicks: str) -> str:
             return f"❌ 点击验证码失败: {type(e).__name__}: {e}"
 
     try:
-        return _run_browser(_run())
+        return _run_browser(_run(), thread_id)
     except Exception as e:
         return f"❌ 点击验证码失败: {type(e).__name__}: {e}"
 
 
 @tool
-def browser_captcha_refresh(selector: str = "") -> str:
+def browser_captcha_refresh(config: RunnableConfig, selector: str = "") -> str:
     """刷新验证码图片（点击验证码区域的刷新/换一批按钮），获取新的验证码重新识别。
 
     在 browser_captcha_recognize 返回的置信度较低（<0.5）时调用。
@@ -1330,8 +1409,10 @@ def browser_captcha_refresh(selector: str = "") -> str:
 
     返回: 刷新结果和新验证码截图。
     """
+    thread_id = config.get("configurable", {}).get("thread_id", "default")
+
     async def _run():
-        page = await _ensure_browser()
+        page = await _ensure_browser(thread_id)
         try:
             refresh_btn = None
             # 如果给了容器选择器，先在容器内找
@@ -1384,13 +1465,13 @@ def browser_captcha_refresh(selector: str = "") -> str:
             return f"❌ 刷新验证码失败: {type(e).__name__}: {e}"
 
     try:
-        return _run_browser(_run())
+        return _run_browser(_run(), thread_id)
     except Exception as e:
         return f"❌ 刷新验证码失败: {type(e).__name__}: {e}"
 
 
 @tool
-def browser_captcha_scan_grid(grid_rows: int = 9, grid_cols: int = 16) -> str:
+def browser_captcha_scan_grid(config: RunnableConfig, grid_rows: int = 9, grid_cols: int = 16) -> str:
     """在页面上叠加网格参考线并截图，辅助视觉模型精确定位图标验证码中的点击坐标。
 
     用于「请按顺序点击图中指定图标」类型的验证码。流程：
@@ -1412,8 +1493,10 @@ def browser_captcha_scan_grid(grid_rows: int = 9, grid_cols: int = 16) -> str:
 
     返回: 带网格的截图和坐标映射说明。
     """
+    thread_id = config.get("configurable", {}).get("thread_id", "default")
+
     async def _run():
-        page = await _ensure_browser()
+        page = await _ensure_browser(thread_id)
         try:
             # 获取视口大小
             viewport = await page.evaluate("({w: window.innerWidth, h: window.innerHeight})")
@@ -1553,7 +1636,7 @@ def browser_captcha_scan_grid(grid_rows: int = 9, grid_cols: int = 16) -> str:
             return f"❌ 网格扫描失败: {type(e).__name__}: {e}"
 
     try:
-        return _run_browser(_run())
+        return _run_browser(_run(), thread_id)
     except Exception as e:
         return f"❌ 网格扫描失败: {type(e).__name__}: {e}"
 

@@ -792,6 +792,12 @@ class DesktopAgent:
             self._hydrated_threads.add(thread_key)
             if attachments:
                 await self._strip_checkpoint_images(config, graph)
+            # 释放该会话的浏览器页面，避免跨会话页面状态串扰
+            try:
+                from tools.browser_tools import release_browser_page
+                release_browser_page(tid)
+            except Exception:
+                pass
 
     async def _stream_events_with_heartbeat(
         self,
@@ -1184,6 +1190,12 @@ class DesktopAgent:
             self._hydrated_threads.add(thread_key)
             if attachments:
                 await self._strip_checkpoint_images(run_config, graph)
+            # 释放该会话的浏览器页面，避免跨会话页面状态串扰
+            try:
+                from tools.browser_tools import release_browser_page
+                release_browser_page(tid)
+            except Exception:
+                pass
             if not loop_guard_triggered:
                 if not usage_recorded:
                     self.tracker.record_model_call(
