@@ -669,21 +669,6 @@ def _get_captcha_config() -> dict:
         return {"base_url": "https://api.openai.com/v1", "api_key": "", "model": "gpt-4o"}
 
 
-def _build_captcha_prompt() -> str:
-    """构造多模态验证码识别 prompt。
-
-    期望返回 JSON：
-    {
-      "type": "click" | "text" | "slider" | "unknown",
-      "chars": "abc123",                  // text 类型：直接给出字母/数字
-      "clicks": [
-        {"char": "风", "x": 234, "y": 156}, // click 类型：依次点击的字符和坐标
-        ...
-      ],
-      "confidence": 0.0~1.0,
-      "explain": "..."
-    }
-    """
 def _build_captcha_prompt(is_page_level: bool = False) -> str:
     """构造验证码识别 prompt。
     
@@ -804,7 +789,7 @@ async def _call_vision_llm(png_data: bytes, config: dict, instruction_hint: str 
                         "type": "image_url",
                         "image_url": {"url": f"data:image/png;base64,{b64}"},
                     },
-                    {"type": "text", "text": _build_captcha_prompt()},
+                    {"type": "text", "text": prompt},
                 ],
             }
         ],
@@ -841,8 +826,13 @@ def _image_dimensions(png_data: bytes) -> tuple[int, int]:
         return 0, 0
 
 
-def _format_result(parsed: dict, img_w: int, img_h: int) -> str:
-    """把识别结果格式化为给 Agent 的可读文本。"""
+def _format_result(parsed: dict, img_w: int, img_h: int, source: str = "page") -> str:
+    """把识别结果格式化为给 Agent 的可读文本。
+
+    source 参数用于生成正确的工具调用指引：
+      - "page": 坐标相对于视口 → 引导调用 browser_click_captcha
+      - "selector:...": 坐标相对于元素 → 引导调用 browser_captcha_click_sequence
+    """
     ctype = (parsed.get("type") or "unknown").lower()
     conf = parsed.get("confidence", 0)
     explain = parsed.get("explain", "")
@@ -868,10 +858,21 @@ def _format_result(parsed: dict, img_w: int, img_h: int) -> str:
                 y = c.get("y", 0)
                 # 坐标按图片原始尺寸输出
                 lines.append(f"  {i}. `{char}` @ ({x}, {y})")
-            lines.append(
-                "→ 在视口中找到验证码图片元素，"
-                f"使用 page.mouse.click(element_box.x + {x or 0} * scale, ...) 依次点击"
-            )
+            # 根据源模式给出正确的工具调用指引
+            clicks_json = json.dumps(clicks, ensure_ascii=False)
+            if source == "page":
+                lines.append(
+                    "→ 坐标相对于视口左上角，调用 browser_click_captcha 执行点击：\n"
+                    f"  browser_click_captcha(clicks='{clicks_json}')"
+                )
+            elif source.startswith("selector:"):
+                sel = source[len("selector:"):].strip()
+                lines.append(
+                    "→ 坐标相对于验证码元素左上角，调用 browser_captcha_click_sequence 执行点击：\n"
+                    f"  browser_captcha_click_sequence(selector=\"{sel}\", "
+                    f"clicks='{clicks_json}', "
+                    f"image_w={img_w}, image_h={img_h})"
+                )
     elif ctype == "slider":
         lines.append("🧩 滑块验证码：先识别缺口位置，再用 browser_slide 拖动滑块")
     else:
@@ -922,7 +923,7 @@ def browser_captcha_recognize(source: str = "page") -> str:
 
             # 2. 扫描页面上的验证码指示文字（如"请依次点击XXX"）
             instruction_hint = await page.evaluate("""
-            () => {
+            (() => {
             /* 扫描页面上的验证码指示文字 */
             const priorityKeywords = ['请依次点击', '依次点击', '按顺序点击', '请点击以下'];
             const secondaryKeywords = ['点选验证', '点击验证', '验证码', '发送验证码', 'captcha'];
@@ -995,7 +996,7 @@ def browser_captcha_recognize(source: str = "page") -> str:
                 return result
 
             # 4. 将识别结果截图也附上，方便 Agent 确认
-            fmt = _format_result(parsed, img_w, img_h)
+            fmt = _format_result(parsed, img_w, img_h, source)
             if img_token:
                 fmt += f"\n\n![识别来源](/api/screenshot?token={img_token})"
             return fmt
