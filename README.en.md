@@ -21,8 +21,9 @@ It works well as a personal or intranet team assistant for reading and writing w
 | Web tools | `web_search` for search and `web_fetch` for page text, with retries and fallback requests |
 | Git tools | Inspect status, diff, log, show, worktree; add, commit, push, revert, merge, checkout only on explicit user request |
 | Shell commands | `run_shell` for cross-platform shell commands (bash/zsh/sh/powershell/cmd), with built-in safety guards |
-| Browser automation | Built-in Playwright browser for navigation, clicking, filling forms, screenshots, and JS evaluation; screenshots served via token URL to prevent path leaks |
-| Subagents | `delegate_task` for serial + `delegate_tasks_parallel` for parallel delegation to coder/reviewer/debugger agents |
+| Browser automation | Built-in Playwright browser for navigation, clicking, form filling, screenshots, and JS evaluation; screenshots served via token URL to prevent path leaks |
+| Captcha recognition | Multi-modal vision LLM based captcha recognition supporting text sliders, icon-selection, and character-selection types; automatic element detection, coordinate scaling, and low-confidence retry with auto-refresh |
+| Subagents | `delegate_task` for serial + `delegate_tasks_parallel` for parallel delegation to coder/reviewer/debugger/searcher agents; real-time log streaming for execution visibility |
 | Skills | Loads `SKILL.md`, compatible with YAML frontmatter and common oh-my-openagent / Superpowers-style skills; built-in `database-interaction` skill for natural-language database queries |
 | Long-term memory | Stores user preferences, project facts, and reusable environment notes per user |
 | Database interaction | Built-in `dbcli` core library + CLI tool + Agent skill, supports SQLite / PostgreSQL / MySQL with natural-language queries, column-level and row-level permission control |
@@ -233,6 +234,49 @@ Markdown files include:
 - `Download`: download the raw file
 
 Other files only provide download links.
+
+### Browser Automation
+
+AgentSmith includes a built-in Playwright browser with full page interaction support:
+
+| Tool | Purpose |
+|------|---------|
+| `browser_navigate` | Navigate to a URL |
+| `browser_click` | Click an element matching a CSS selector |
+| `browser_fill` | Fill text into an input field |
+| `browser_select` | Select a dropdown option |
+| `browser_get_text` | Get the text content of an element |
+| `browser_screenshot` | Take a screenshot (full page or viewport) |
+| `browser_evaluate` | Execute JavaScript |
+| `browser_wait` | Wait for a specified duration |
+| `browser_scroll_to` | Scroll to an element or coordinates |
+| `browser_wait_for_element` | Wait for an element to appear/be visible |
+| `browser_drag` | Drag an element to a target |
+| `browser_slide` | Slide operation with human-like trajectory simulation |
+
+### Captcha Recognition
+
+Vision LLM-based captcha recognition supporting multiple types:
+
+| Captcha Type | Recognition Method |
+|-------------|-------------------|
+| Distorted text | Return chars directly, fill via `browser_fill` |
+| Character selection | Identify character positions, click in order |
+| Icon selection | Identify icon names and positions, click in order |
+| Slider | Mark type, guide `browser_slide` operation |
+
+**Toolchain:**
+
+1. `browser_captcha_recognize(source="page")` — Full-page captcha detection
+2. `browser_captcha_recognize(source="selector:#captcha")` — Element close-up for precise coordinates
+3. `browser_captcha_scan_grid(rows=9, cols=16)` — SVG grid overlay for precise icon positioning
+4. `browser_click_captcha(clicks=...)` — Viewport coordinate clicking
+5. `browser_captcha_click_sequence(selector, clicks, ...)` — Element-relative coordinate clicking
+6. `browser_captcha_refresh(selector)` — Auto-refresh and retry on low confidence
+
+**Low confidence handling:** When recognition confidence is below 0.5, the system suggests refreshing the captcha and retrying.
+
+**Log context:** Every log line carries `[s:sessionId] [m:messageId]` prefixes for session and message-level filtering.
 
 ---
 
@@ -570,7 +614,7 @@ desktop-agent/
 │       ├── shell_tools.py      # Shell command execution (cross-platform, safety guards)
 │       ├── git_tools.py        # Git tools with allowlist security
 │       ├── web_tools.py        # Search and page fetch
-│       ├── browser_tools.py    # Browser automation (Playwright, screenshot token URL)
+│       ├── browser_tools.py    # Browser automation + captcha recognition (Playwright, screenshot token URL)
 │       ├── memory_tools.py     # Memory tools
 │       ├── system_tools.py     # System info and Skills list
 │       └── database_tool.py    # Database interaction tools (db_schema, db_query, db_connections)

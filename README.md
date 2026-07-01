@@ -24,6 +24,7 @@ AgentSmith 是一个本地/私有部署的桌面 AI 智能体。它基于 FastAP
 | Git 工具 | 查看状态、diff、日志、show、worktree；按明确指令 add/commit/push/revert/merge/checkout |
 | Shell 命令 | `run_shell` 执行 shell 命令（bash/zsh/sh/powershell/cmd），自动跨平台适配，内置安全拦截 |
 | 浏览器自动化 | 内置 Playwright 浏览器，支持导航、点击、填表、截图、JS 执行等操作；截图通过 token URL 访问，避免路径泄露 |
+| 验证码识别 | 基于多模态大模型的验证码自动识别，支持扭曲文字/滑块/图标点选/汉字点选等类型；验证码元素自动定位、坐标自适应缩放、低置信度自动刷新重试 |
 | 子代理 | `delegate_task` 串行 + `delegate_tasks_parallel` 并行委派 coder/reviewer/debugger/searcher；**支持实时日志流**展示执行过程 |
 | Skills | 加载 `SKILL.md`，兼容 YAML frontmatter 和 oh-my-openagent / Superpowers 风格技能；内置 `database-interaction` 技能支持自然语言数据库交互 |
 | 长期记忆 | 按用户隔离保存长期偏好、项目事实和常用环境信息 |
@@ -249,6 +250,49 @@ git_revert       git_command
 - 默认 120 秒超时（最大 600 秒）
 - 输出超过 20000 字符时自动截断（保留头 8000 + 尾 8000）
 - 自动对比执行前后工作区文件变更并汇总
+
+### 浏览器自动化
+
+AgentSmith 内置 Playwright 浏览器，支持完整的页面交互流程：
+
+| 工具 | 用途 |
+|------|------|
+| `browser_navigate` | 导航到指定 URL |
+| `browser_click` | 点击 CSS 选择器匹配的元素 |
+| `browser_fill` | 在输入框中填入文本 |
+| `browser_select` | 选择下拉框选项 |
+| `browser_get_text` | 获取元素文本内容 |
+| `browser_screenshot` | 截图（全页或视口） |
+| `browser_evaluate` | 执行 JavaScript |
+| `browser_wait` | 等待指定时长 |
+| `browser_scroll_to` | 滚动页面到元素或坐标 |
+| `browser_wait_for_element` | 等待元素出现/可见 |
+| `browser_drag` | 拖拽元素到目标位置 |
+| `browser_slide` | 滑块操作（含人类化轨迹模拟） |
+
+### 验证码识别
+
+基于多模态大模型（如 step-3.7-flash、gpt-4o）的验证码自动识别与交互：
+
+| 验证码类型 | 识别方式 |
+|------------|----------|
+| 扭曲字母/数字 | 直接返回字符，调用 `browser_fill` 填入 |
+| 文字点选（汉字） | 识别汉字位置和顺序点击 |
+| 图标点选 | 识别图标名称和位置，按顺序点击 |
+| 滑块验证码 | 标记类型，引导 `browser_slide` 拖动 |
+
+**工具链：**
+
+1. `browser_captcha_recognize(source="page")` — 全页截图检测验证码
+2. `browser_captcha_recognize(source="selector:#captcha")` — 验证码元素特写截图，精确坐标
+3. `browser_captcha_scan_grid(rows=9, cols=16)` — 叠加 SVG 网格辅助定位
+4. `browser_click_captcha(clicks=...)` — 视口坐标点击
+5. `browser_captcha_click_sequence(selector, clicks, ...)` — 元素内坐标点击
+6. `browser_captcha_refresh(selector)` — 低置信度时自动刷新验证码重试
+
+**低置信度处理：** 识别置信度低于 0.5 时自动建议刷新验证码重试。
+
+**日志上下文：** 每条日志携带 `[s:sessionId] [m:messageId]` 前缀，支持按会话和消息维度检索。
 
 ### 文件工具边界
 
@@ -818,7 +862,7 @@ desktop-agent/
 │       ├── shell_tools.py      # Shell 命令执行（跨平台，安全拦截）
 │       ├── git_tools.py        # Git 工具（含白名单安全验证）
 │       ├── web_tools.py        # 搜索和网页抓取
-│       ├── browser_tools.py    # 浏览器自动化（Playwright，截图 token URL）
+│       ├── browser_tools.py    # 浏览器自动化 + 验证码识别（Playwright，截图 token URL）
 │       ├── memory_tools.py     # 记忆工具
 │       ├── system_tools.py     # 系统信息和 Skills 列表
 │       └── database_tool.py    # 数据库交互工具（db_schema, db_query, db_connections）
