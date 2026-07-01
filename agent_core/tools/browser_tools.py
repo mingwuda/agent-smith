@@ -684,20 +684,38 @@ def _build_captcha_prompt() -> str:
       "explain": "..."
     }
     """
+def _build_captcha_prompt(is_page_level: bool = False) -> str:
+    """构造验证码识别 prompt。
+    
+    is_page_level=True 时只做类型检测，不做精确坐标定位（页面全图图标太小）。
+    """
+    if is_page_level:
+        return (
+            "判断图片中是否包含验证码（CAPTCHA）元素并返回 JSON。\n\n"
+            "类型：\n"
+            "1. text：图片中有扭曲字母或数字验证码，输出 chars。\n"
+            "2. click：图片中有点选验证码（汉字或图标散落），输出 clicks 数组。\n"
+            "   注意：这是整页截图，图标很小。请尽可能给出每个目标的大致像素坐标。\n"
+            "   如果不确定精确位置，可以设置 confidence<0.7。\n"
+            "3. slider：滑块验证码。\n"
+            "4. unknown：没有任何验证码。\n\n"
+            "返回 JSON 格式：\n"
+            '{"type":"click|text|slider|unknown","chars":"","clicks":[{"char":"汉字或图标名","x":0,"y":0}],"w":宽度,"h":高度,"confidence":0.0,"explain":"说明"}\n'
+            "只输出 JSON，不要 Markdown 包裹。"
+        )
     return (
-        "识别图片中的验证码类型并返回 JSON。\n\n"
+        "识别图片中的验证码元素并返回精确坐标 JSON。\n\n"
+        "图片是验证码区域的特写截图（不是整页），请精确识别每个点击目标。\n\n"
         "类型：\n"
-        "1. text：扭曲字母或数字，输出 chars 字段。\n"
-        "2. click：点选验证码，图片中散落着一些**汉字字符**或**图标**，"
+        "1. click：点选验证码，图片中散落着汉字字符或图标，"
         "需要按页面提示的顺序依次点击。输出 clicks 数组：\n"
-        "   - 如果是汉字点选，char 写实际的汉字字符（如 发、送、验）\n"
-        "   - 如果是图标点选，char 写图标名称（如 皇冠、眼睛、手掌）\n"
-        "   - 每个点击目标的坐标应分散在不同位置，不要集中在同一区域\n"
-        "   - 半透明干扰项忽略，只识别清晰的目标\n"
-        "3. slider：滑块缺口。\n\n"
-        "重要：\n"
-        "- 坐标 (x,y) 相对于图片左上角\n"
-        "- 看不清就降低 confidence，不要编造\n\n"
+        "   - 汉字点选：char 写实际汉字（如 发、送、验）\n"
+        "   - 图标点选：char 写图标名称（如 皇冠、眼睛）\n"
+        "   - 目标分散在不同位置\n"
+        "2. text：扭曲字母数字，输出 chars。\n"
+        "3. slider：滑块缺口。\n"
+        "4. unknown：不是验证码。\n\n"
+        "重要：坐标 (x,y) 相对于图片左上角，看不清就降低 confidence。\n\n"
         "返回 JSON 格式：\n"
         '{"type":"click|text|slider|unknown","chars":"","clicks":[{"char":"汉字或图标名","x":0,"y":0}],"w":宽度,"h":高度,"confidence":0.0,"explain":"说明"}\n'
         "只输出 JSON，不要 Markdown 包裹。"
@@ -750,7 +768,7 @@ def _extract_json_from_text(text: str) -> Optional[dict]:
     return None
 
 
-async def _call_vision_llm(png_data: bytes, config: dict, instruction_hint: str = "", img_w: int = 0, img_h: int = 0) -> str:
+async def _call_vision_llm(png_data: bytes, config: dict, instruction_hint: str = "", img_w: int = 0, img_h: int = 0, is_page_level: bool = False) -> str:
     """调用多模态 LLM 识别验证码。返回原始文本。
 
     参数:
@@ -767,7 +785,7 @@ async def _call_vision_llm(png_data: bytes, config: dict, instruction_hint: str 
     url = f"{base_url}/chat/completions"
 
     b64 = base64.b64encode(png_data).decode()
-    prompt = _build_captcha_prompt()
+    prompt = _build_captcha_prompt(is_page_level)
     # 告知 LLM 实际图片尺寸，避免坐标偏离
     if img_w and img_h:
         prompt += f"\n\n图片实际尺寸: {img_w}x{img_h}"
@@ -952,7 +970,7 @@ def browser_captcha_recognize(source: str = "page") -> str:
                 )
 
             try:
-                text = await _call_vision_llm(png_data, config, instruction_hint, img_w, img_h)
+                text = await _call_vision_llm(png_data, config, instruction_hint, img_w, img_h, is_page_level=(source == "page"))
             except httpx.HTTPStatusError as e:
                 err = f"❌ 调用视觉 LLM 失败: HTTP {e.response.status_code} {e.response.text[:200]}"
                 if img_token:
