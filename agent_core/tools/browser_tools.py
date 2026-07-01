@@ -688,13 +688,14 @@ def _build_captcha_prompt() -> str:
         "识别图片中的验证码类型并返回 JSON。\n\n"
         "类型：\n"
         "1. text：扭曲字母/数字，输出 chars。\n"
-        "2. click：文字点选或图标点选（如依次点击指定图标或汉字），"
+        "2. click：文字点选或图标点选（如图标散落在图中不同位置需要依次点击），"
         "输出 clicks 数组，含每个目标的名称和中心像素坐标。\n"
-        "   - 如果页面提示了点击顺序，按提示顺序输出\n"
-        "   - 半透明干扰图标忽略，只识别视觉上清晰的目标\n"
+        "   - 图标通常分散在图片的不同位置，仔细搜索全图\n"
+        "   - 半透明/灰色干扰图标忽略，只识别清晰的目标\n"
         "3. slider：滑块缺口。\n\n"
         "重要：\n"
         "- 坐标 (x,y) 相对于图片左上角\n"
+        "- 每个图标的坐标不应相同，它们分散在不同位置\n"
         "- 看不清就降低 confidence\n\n"
         "返回 JSON 格式：\n"
         '{"type":"click|text|slider|unknown","chars":"","clicks":[{"char":"字/图标","x":0,"y":0}],"w":宽度,"h":高度,"confidence":0.0,"explain":"说明"}\n'
@@ -748,17 +749,27 @@ def _extract_json_from_text(text: str) -> Optional[dict]:
     return None
 
 
-async def _call_vision_llm(png_data: bytes, config: dict, instruction_hint: str = "") -> str:
-    """调用多模态 LLM 识别验证码。返回原始文本。"""
+async def _call_vision_llm(png_data: bytes, config: dict, instruction_hint: str = "", img_w: int = 0, img_h: int = 0) -> str:
+    """调用多模态 LLM 识别验证码。返回原始文本。
+
+    参数:
+      png_data: 截图 PNG 数据
+      config: 模型配置
+      instruction_hint: 页面上的验证码提示文字
+      img_w: 截图实际宽度（用于提示 LLM 坐标范围）
+      img_h: 截图实际高度
+    """
     base_url = config["base_url"].rstrip("/")
     if not base_url.endswith("/v1"):
-        # 自动补全 /v1（若用户填的是根 URL）
         if "/v1" not in base_url:
             base_url = base_url + "/v1"
     url = f"{base_url}/chat/completions"
 
     b64 = base64.b64encode(png_data).decode()
     prompt = _build_captcha_prompt()
+    # 告知 LLM 实际图片尺寸，避免坐标偏离
+    if img_w and img_h:
+        prompt += f"\n\n图片实际尺寸: {img_w}x{img_h}"
     if instruction_hint:
         prompt += f"\n\n页面提示文字：{instruction_hint}\n注意：图中按此顺序点击。"
 
@@ -938,7 +949,7 @@ def browser_captcha_recognize(source: str = "page") -> str:
                 )
 
             try:
-                text = await _call_vision_llm(png_data, config, instruction_hint)
+                text = await _call_vision_llm(png_data, config, instruction_hint, img_w, img_h)
             except httpx.HTTPStatusError as e:
                 err = f"❌ 调用视觉 LLM 失败: HTTP {e.response.status_code} {e.response.text[:200]}"
                 if img_token:
