@@ -201,6 +201,7 @@ def release_browser_page(thread_id: str):
     """释放指定会话的浏览器页面和上下文。
 
     在会话结束时调用，释放不再使用的资源。
+    非阻塞：将清理任务提交到浏览器事件循环后立即返回。
     如果浏览器从未启动过，直接返回（零开销）。
     """
     # 浏览器从未初始化 → 无任何需要清理的资源
@@ -219,7 +220,9 @@ def release_browser_page(thread_id: str):
         _page_locks.pop(thread_id, None)
         logger.info("🧹 已释放会话 %s 的浏览器页面", thread_id[:16])
     try:
-        _run_async(_release())
+        loop = _ensure_browser_loop()
+        # fire-and-forget: 不阻塞等待结果，避免在 finally 块中阻塞 SSE 流
+        asyncio.run_coroutine_threadsafe(_release(), loop)
     except Exception:
         pass
 
