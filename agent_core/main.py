@@ -2548,6 +2548,29 @@ if __name__ == "__main__":
     host = os.getenv("AGENT_HOST", "127.0.0.1")
     port = int(os.getenv("AGENT_PORT", "8899"))
     
+    # ── 端口冲突自动清理 ──
+    import subprocess, signal
+    try:
+        result = subprocess.run(
+            ["lsof", "-ti", f":{port}"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.stdout.strip():
+            pids = [int(p) for p in result.stdout.strip().split() if p.isdigit() and int(p) != os.getpid()]
+            if pids:
+                logger.warning("⚠️ 端口 %d 已被进程 %s 占用，正在关闭...", port, pids)
+                for pid in pids:
+                    try:
+                        os.kill(pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                time.sleep(0.5)
+                logger.info("✅ 已释放端口 %d", port)
+    except FileNotFoundError:
+        pass  # lsof 不可用（如容器精简环境），忽略
+    except Exception as e:
+        logger.warning("端口检测异常（忽略）: %s", e)
+    
     logger.info("🚀 启动桌面 AI 智能体服务...")
     logger.info("  🔗 地址: http://%s:%s", host, port)
     logger.info("  📖 API 文档: http://%s:%s/docs", host, port)
