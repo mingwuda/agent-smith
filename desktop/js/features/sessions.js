@@ -27,8 +27,9 @@ function renderSessionList(sessions, currentId) {
 async function loadSessions() {
   try {
     const res = await fetch('/sessions');
-    if (!res.ok) return;
+    if (!res.ok) { console.warn('[sessions] API 返回非 200:', res.status); return; }
     const data = await res.json();
+    console.log('[sessions] 服务端返回:', JSON.stringify(data.sessions, null, 2));
     sessionsCache = data.sessions || [];
     if (!currentSessionId) {
       currentSessionId = data.current_id || (sessionsCache[0] && sessionsCache[0].id) || null;
@@ -40,7 +41,9 @@ async function loadSessions() {
       threadId = currentSessionId || threadId;
     }
     renderSessionList(sessionsCache, currentSessionId);
-  } catch {}
+  } catch (e) {
+    console.error('[sessions] loadSessions 异常:', e);
+  }
 }
 
 async function loadSessionMessages(sessionId) {

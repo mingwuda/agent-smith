@@ -1569,13 +1569,22 @@ class CreateSessionResponse(BaseModel):
 def list_sessions(request: Request):
     """列出当前用户的会话（含微信 Bot 会话）"""
     uid = _get_current_user(request)
+    web_sessions = list(session_store.list_sessions(uid))
+    web_ids = [s["id"] for s in web_sessions]
     sessions = [
         SessionInfo(**s, source="web")
-        for s in session_store.list_sessions(uid)
+        for s in web_sessions
     ]
     # 合并该用户的微信 Bot 会话
     wechat_uid = f"wechat_{uid}"
-    for s in session_store.list_sessions(wechat_uid):
+    wechat_sessions = list(session_store.list_sessions(wechat_uid))
+    logger.info(
+        "[会话列表] %s: web=%d个(%s), wechat=%d个(%s)",
+        uid, len(web_sessions), web_ids[:5],
+        len(wechat_sessions),
+        [(s["id"], s.get("message_count", 0)) for s in wechat_sessions[:5]],
+    )
+    for s in wechat_sessions:
         if not any(ex.id == s["id"] for ex in sessions):
             sessions.append(SessionInfo(**s, source="wechat"))
     sessions.sort(key=lambda s: s.updated_at, reverse=True)

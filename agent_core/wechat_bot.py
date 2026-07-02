@@ -314,7 +314,9 @@ class WeChatBot:
                 )
 
         # 保存用户消息
-        session_store.add_message(wechat_uid, session_id, "user", text)
+        add_ret = session_store.add_message(wechat_uid, session_id, "user", text)
+        if add_ret is None:
+            logger.warning("[微信Bot:%s] 用户消息保存失败: session=%s 不存在", self.user_id, session_id)
 
         # 发送"正在输入"状态
         await self.send_typing(from_user, context_token)
@@ -331,7 +333,11 @@ class WeChatBot:
 
         # 保存助手回复
         if reply:
-            session_store.add_message(wechat_uid, session_id, "assistant", reply)
+            reply_ret = session_store.add_message(wechat_uid, session_id, "assistant", reply)
+            if reply_ret is None:
+                logger.warning("[微信Bot:%s] 助手回复保存失败: session=%s 不存在", self.user_id, session_id)
+            else:
+                logger.info("[微信Bot:%s] 会话 %s 已保存助手回复 (%d 字符)", self.user_id, session_id, len(reply))
             sess = session_store.get_session(wechat_uid, session_id)
             if sess and sess.get("message_count", 0) <= 2:
                 short = text[:30] + ("..." if len(text) > 30 else "")
