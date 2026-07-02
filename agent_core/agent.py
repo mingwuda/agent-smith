@@ -931,6 +931,7 @@ class DesktopAgent:
         last_progress_at = 0.0
         cancelled = False
         loop_guard_triggered = False
+        _done_yielded = False
         tool_call_history: list[dict] = []
         subagent_capsules: list[dict] = []  # 并行子代理任务胶囊数据
         _subagent_dispatched = False         # 是否已派发过子代理
@@ -972,6 +973,7 @@ class DesktopAgent:
                             logger.warning("[子代理] subagent_end 已发送 %d 秒，父模型仍未完成汇总，强制终止", int(elapsed_after_subagent))
                             loop_guard_triggered = True
                             final_buffer = "✅ 所有子代理搜索已完成。\n\n（模型在汇总阶段超时，未返回完整汇总，以下为已收集的子代理结果片段）\n"
+                            _done_yielded = True
                             yield _sse({"type": "done", "content": final_buffer})
                             break
                     continue
@@ -1207,6 +1209,7 @@ class DesktopAgent:
                     loop_reason = _detect_tool_loop(tool_call_history, run_config["recursion_limit"])
                     if loop_reason:
                         loop_guard_triggered = True
+                        _done_yielded = True
                         final_buffer = _loop_guard_message(loop_reason, tool_call_history, run_config["recursion_limit"])
                         yield _sse({"type": "error", "content": final_buffer})
                         break
@@ -1231,7 +1234,12 @@ class DesktopAgent:
                     if input_tok > 0 or output_tok > 0:
                         self._record_model_usage(input_tok, output_tok, cached_tok, source="chat_model_end", thread_id=tid)
                         usage_recorded = True
-        
+
+            # 流结束，发送正常完成事件（含最终回复内容）
+            if not _done_yielded:
+                yield _sse({"type": "done", "content": final_buffer})
+                _done_yielded = True
+
         except asyncio.CancelledError:
             cancelled = True
             logger.info("[stream_run] 被取消，正常结束（不再重抛，确保 done 事件发出）")
