@@ -980,6 +980,26 @@ class DesktopAgent:
                 node = event.get("metadata", {}).get("langgraph_node", "")
                 logger.debug("[stream_run] 事件: kind=%s node=%s", kind, node)
                 
+                # ── LLM 调用开始（日志 + 前端状态提示）──
+                if kind == "on_chat_model_start" and node == "agent":
+                    _input = event.get("data", {}).get("input", {})
+                    run_id = event.get("run_id", "")[:12]
+                    if isinstance(_input, list):
+                        msg_count = len(_input)
+                        # 记录最后一条 user 消息预览
+                        last_msg = _input[-1] if _input else {}
+                        last_content = str(getattr(last_msg, "content", ""))[:200]
+                        logger.info(
+                            "[LLM_START] run_id=%s msgs=%d last_msg=%s",
+                            run_id, msg_count, last_content,
+                        )
+                    else:
+                        logger.info("[LLM_START] run_id=%s input=%s", run_id, str(_input)[:200])
+
+                    # 前端显示"正在调用 AI..."
+                    yield _sse({"type": "llm_thinking"})
+                    last_model_activity_at = time.time()
+
                 # ── LLM 流式 token ──
                 if kind == "on_chat_model_stream" and node == "agent":
                     chunk = event["data"]["chunk"]
@@ -1193,6 +1213,21 @@ class DesktopAgent:
                 elif kind == "on_chat_model_end" and node == "agent":
                     output = event.get("data", {}).get("output")
                     input_tok, output_tok, cached_tok = _extract_usage_tokens(output)
+                    run_id = event.get("run_id", "")[:12]
+
+                    # 记录 LLM 响应摘要
+                    output_content = str(getattr(output, "content", ""))[:200] if output else ""
+                    has_tool_calls = bool(getattr(output, "tool_calls", None)) if output else False
+                    finish_reason = getattr(output, "response_metadata", {}).get("finish_reason", "") if output else ""
+                    logger.info(
+                        "[LLM_END] run_id=%s tokens=(in=%d out=%d cached=%d) finish=%s has_tool_calls=%s content=%s",
+                        run_id, input_tok, output_tok, cached_tok,
+                        finish_reason, has_tool_calls, output_content,
+                    )
+
+                    # 前端提示"AI 已响应"
+                    yield _sse({"type": "llm_response", "has_tool_calls": has_tool_calls})
+
                     if input_tok > 0 or output_tok > 0:
                         self._record_model_usage(input_tok, output_tok, cached_tok, source="chat_model_end", thread_id=tid)
                         usage_recorded = True

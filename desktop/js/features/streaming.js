@@ -769,6 +769,18 @@ function handleStreamEvent(data) {
       smartScroll(container);
       break;
 
+    case 'llm_thinking':
+      hideTyping();
+      removeGeneratingBadge();
+      showGeneratingBadge(t('callingAI'));
+      break;
+
+    case 'llm_response':
+      if (!data.has_tool_calls) {
+        removeGeneratingBadge();
+      }
+      break;
+
     case 'model_switch':
       addMessage(t('modelSwitched', { reason: data.reason || (currentLanguage === 'en' ? 'request' : '请求'), model: data.model }), 'system');
       break;
