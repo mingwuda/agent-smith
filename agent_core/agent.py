@@ -793,9 +793,11 @@ class DesktopAgent:
             if attachments:
                 await self._strip_checkpoint_images(config, graph)
             # 释放该会话的浏览器页面，避免跨会话页面状态串扰
+            # 注意：必须使用 thread_key（"default:abc"）而非 tid（"abc"），
+            # 因为工具函数从 RunnableConfig 中读取的 thread_id 是完整 key
             try:
                 from tools.browser_tools import release_browser_page
-                release_browser_page(tid)
+                release_browser_page(thread_key)
             except Exception:
                 pass
 
@@ -1191,9 +1193,10 @@ class DesktopAgent:
             if attachments:
                 await self._strip_checkpoint_images(run_config, graph)
             # 释放该会话的浏览器页面，避免跨会话页面状态串扰
+            # 注意：必须使用 thread_key（完整 key），与工具函数中 RunnableConfig 读取的一致
             try:
                 from tools.browser_tools import release_browser_page
-                release_browser_page(tid)
+                release_browser_page(thread_key)
             except Exception:
                 pass
             if not loop_guard_triggered:
