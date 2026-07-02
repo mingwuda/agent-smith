@@ -1,1 +1,14 @@
 blog/
+__pycache__/
+*.pyc
+.DS_Store
+agent.log
+.workbuddy/
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+.env
+*.db
+*.sqlite3
