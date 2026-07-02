@@ -1774,17 +1774,24 @@ def get_screenshot(token: str = "", path: str = "", request: Request = None):
         path: 截图文件的绝对路径（兼容旧版）
     """
     uid = _get_current_user(request)
-    # 使用用户工作区（与浏览器工具保存截图时使用的路径一致）
-    workspace = _workspace_for_user(uid)
+    from tools.browser_tools import _workspace as browser_workspace
     
     # 优先使用 token 查找（基于文件名的确定性方案）
     if token:
-        target = workspace / ".browser_screenshots" / f"{token}.png"
-        target = target.resolve()
-        try:
-            target.relative_to(workspace)
-        except ValueError:
-            raise HTTPException(403, "不允许访问该路径")
+        target = None
+        # 先尝试截图实际保存的路径（可能被会话工作目录覆盖）
+        if browser_workspace:
+            candidate = browser_workspace / ".browser_screenshots" / f"{token}.png"
+            if candidate.exists():
+                target = candidate.resolve()
+        # 回退到用户默认工作区
+        if not target:
+            workspace = _workspace_for_user(uid)
+            target = (workspace / ".browser_screenshots" / f"{token}.png").resolve()
+            try:
+                target.relative_to(workspace)
+            except ValueError:
+                raise HTTPException(403, "不允许访问该路径")
         if not target.exists() or not target.is_file():
             raise HTTPException(404, "截图文件不存在")
         return FileResponse(target, media_type="image/png")
@@ -1793,7 +1800,11 @@ def get_screenshot(token: str = "", path: str = "", request: Request = None):
     if path:
         try:
             target = Path(path).expanduser().resolve()
-            target.relative_to(workspace)
+            if browser_workspace:
+                target.relative_to(browser_workspace)
+            else:
+                workspace = _workspace_for_user(uid)
+                target.relative_to(workspace)
             if ".browser_screenshots" not in target.parts:
                 raise HTTPException(403, "只能访问浏览器截图文件")
             if not target.exists() or not target.is_file():
