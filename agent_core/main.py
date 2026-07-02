@@ -1223,7 +1223,7 @@ async def run_agent_stream(req: RunRequest, request: Request):
         yielded_count = 0
         if model_override:
             yield f"data: {json.dumps({'type': 'model_switch', 'model': model_override, 'reason': '图片输入'}, ensure_ascii=False)}\n\n"
-        stream = agent.stream_run(
+        stream = agent._stream_done_wrapper(
             agent_message,
             history=history_messages,
             attachments=attachments,

@@ -596,7 +596,7 @@ class DesktopAgent:
         适用于非浏览器场景（如微信、API 调用）需要一次性获取完整回复。
         """
         full = ""
-        async for sse_line in self.stream_run(message):
+        async for sse_line in self._stream_done_wrapper(message):
             line = sse_line.strip()
             if line.startswith("data: ") and not line.startswith("data: [DONE]"):
                 try:
@@ -1265,14 +1265,26 @@ class DesktopAgent:
                         source="chat_model_end",
                         estimated=True,
                     )
-                # 发送完成事件（cancelled 也发，避免前端收不到 done 而显示 fallback）
-                remaining = thinking_buffer.strip()
-                if remaining:
-                    final_buffer = remaining
-                if not final_buffer and cancelled:
-                    final_buffer = "⏹️ 任务已取消"
-                yield _sse({"type": "done", "content": final_buffer})
-                yield "data: [DONE]\n\n"
+    
+    async def _stream_done_wrapper(self, *args, **kwargs):
+        """包装 stream_run，确保 \"done\" 事件在 finally 之外发送。
+        
+        stream_run 内部的 finally 块不能 yield（当 aclose() 调用时，
+        Python 会抛出 RuntimeError），因此将 done 事件放在外层生成器发送。
+        """
+        done_yielded = False
+        try:
+            async for sse in self.stream_run(*args, **kwargs):
+                yield sse
+                if '"type": "done"' in sse or '"type": "error"' in sse:
+                    done_yielded = True
+        except GeneratorExit:
+            # aclose() 被调用，stream_run 内部已处理 cleanup
+            pass
+        
+        if not done_yielded:
+            yield _sse({"type": "done", "content": ""})
+            yield "data: [DONE]\n\n"
     
     def switch_thread(self, thread_id: str):
         self._thread_id = thread_id
