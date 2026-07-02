@@ -773,7 +773,13 @@ class DesktopAgent:
             input_messages = compact_history_messages(session_messages_to_langchain(history or []), self.config)
         current_content = _human_content(message, attachments)
         input_messages.append(HumanMessage(content=current_content))
-        
+
+        logger.info(
+            "[run] 开始: tid=%s, thread_key=%s, model=%s, message_len=%d",
+            tid, thread_key, model_override or self.config.model, len(message),
+        )
+        _run_started_at = time.time()
+
         try:
             await self._compact_checkpoint_if_needed(config)
             result = await graph.ainvoke(
@@ -820,6 +826,11 @@ class DesktopAgent:
                 return f"❌ {_recursion_limit_message(config['recursion_limit'])}", []
             return f"❌ 执行出错: {_connection_diagnostic(e, self.config)}", []
         finally:
+            elapsed = time.time() - _run_started_at
+            logger.info(
+                "[run] 结束: tid=%s, thread_key=%s, duration=%.1fs",
+                tid, thread_key, elapsed,
+            )
             self._hydrated_threads.add(thread_key)
             if attachments:
                 await self._strip_checkpoint_images(config, graph)
@@ -930,8 +941,8 @@ class DesktopAgent:
         
         try:
             logger.info(
-                "[stream_run] 开始: thread_id=%s, model=%s, timeout=%s, message_len=%d",
-                self._thread_id,
+                "[stream_run] 开始: tid=%s, thread_key=%s, model=%s, timeout=%s, message_len=%d",
+                tid, thread_key,
                 model_override or self.config.model,
                 self.config.api_timeout_seconds,
                 len(message),
@@ -1046,7 +1057,15 @@ class DesktopAgent:
                         "signature": _tool_signature(tool_name, inp),
                         "args": inp,
                     })
-                    
+
+                    # ── 工具调用开始日志 ──
+                    args_short = {k: (str(v)[:200] + "..." if len(str(v)) > 200 else str(v))
+                                  for k, v in args_preview.items()}
+                    logger.info(
+                        "[TOOL_START] tool=%s step=%d run_id=%s args=%s",
+                        tool_name, step_count, run_id[:12], args_short,
+                    )
+
                     yield _sse({
                         "type": "tool_start",
                         "tool": tool_name,
@@ -1120,7 +1139,15 @@ class DesktopAgent:
                         "error": is_error,
                         "diff": diff_data,
                     })
-                    
+
+                    # ── 工具调用结束日志 ──
+                    elapsed = time.time() - tinfo["started_at"] if tinfo else 0
+                    result_preview = _truncate(output_str.strip(), 200)
+                    logger.info(
+                        "[TOOL_END] tool=%s step=%d run_id=%s duration=%.1fs error=%s result=%s",
+                        tool_name, step_for_tool, run_id[:12], elapsed, is_error, result_preview,
+                    )
+
                     # 并行子代理完成：发送每个子任务的状态更新
                     if tool_name in {"delegate_tasks_parallel", "delegate_task"} and subagent_capsules:
                         logger.info("[子代理] %s 执行完毕，准备合并...", tool_name)
@@ -1213,12 +1240,9 @@ class DesktopAgent:
         
         finally:
             logger.info(
-                "[stream_run] 结束: thread_id=%s, cancelled=%s, loop_guard=%s, final_len=%d, usage_recorded=%s",
-                self._thread_id,
-                cancelled,
-                loop_guard_triggered,
-                len(final_buffer),
-                usage_recorded,
+                "[stream_run] 结束: tid=%s, thread_key=%s, tool_steps=%d, cancelled=%s, loop_guard=%s, final_len=%d, usage_recorded=%s",
+                tid, thread_key, step_count, cancelled, loop_guard_triggered,
+                len(final_buffer), usage_recorded,
             )
             self._hydrated_threads.add(thread_key)
             if attachments:
