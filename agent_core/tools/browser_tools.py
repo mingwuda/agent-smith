@@ -201,7 +201,12 @@ def release_browser_page(thread_id: str):
     """释放指定会话的浏览器页面和上下文。
 
     在会话结束时调用，释放不再使用的资源。
+    如果浏览器从未启动过，直接返回（零开销）。
     """
+    # 浏览器从未初始化 → 无任何需要清理的资源
+    if _browser is None:
+        return
+
     async def _release():
         global _pages, _contexts, _page_locks
         if thread_id in _contexts:
