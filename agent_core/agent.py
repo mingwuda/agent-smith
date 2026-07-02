@@ -261,8 +261,36 @@ def _human_content(message: str, attachments: Optional[list[dict]] = None):
     return content
 
 
+import re
+
+# 匹配浏览器截图 markdown 图片引用: ![...](/api/screenshot?token=xxx)
+_SCREENSHOT_URL_RE = re.compile(r"!\[([^\]]*)\]\(/api/screenshot\?token=[^)]+\)")
+
+
+def _strip_screenshot_urls_from_text(text: str) -> tuple[str, bool]:
+    """从文本中移除浏览器截图的 markdown 图片引用，避免旧截图 URL 泄漏到新回复。"""
+    if not text or "/api/screenshot" not in text:
+        return text, False
+    new_text, count = _SCREENSHOT_URL_RE.subn("", text)
+    # 清理可能留下的空行
+    new_text = re.sub(r"\n{3,}", "\n\n", new_text).strip()
+    return new_text, count > 0
+
+
 def _strip_image_content_from_message(message):
     content = getattr(message, "content", None)
+
+    # 处理纯文本内容中的浏览器截图 URL（如 "![截图](/api/screenshot?token=xxx)"）
+    if isinstance(content, str):
+        stripped, changed = _strip_screenshot_urls_from_text(content)
+        if not changed:
+            return message, False
+        note = "\n\n[已移除历史浏览器截图引用，避免跨请求串扰]"
+        stripped += note
+        if hasattr(message, "model_copy"):
+            return message.model_copy(update={"content": stripped}), True
+        return message.copy(update={"content": stripped}), True
+
     if not isinstance(content, list):
         return message, False
 
@@ -273,7 +301,10 @@ def _strip_image_content_from_message(message):
             continue
         item_type = item.get("type")
         if item_type == "text":
-            text_parts.append(str(item.get("text") or ""))
+            # 同时清理文本部分中的截图 URL
+            text = str(item.get("text") or "")
+            text, _ = _strip_screenshot_urls_from_text(text)
+            text_parts.append(text)
         elif item_type in {"image_url", "input_image", "image"}:
             removed_images += 1
 

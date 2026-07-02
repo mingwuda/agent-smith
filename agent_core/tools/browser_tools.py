@@ -79,12 +79,18 @@ def _run_async(coro) -> any:
 # 每会话独立页面锁，key=thread_id，确保同一会话的操作串行
 _page_locks: dict[str, asyncio.Lock] = {}
 
+# 当前正在执行工具调用的 thread_id（用于追踪截图归属）
+_active_thread_id: str = "default"
+
 
 def _run_browser(coro, thread_id: str = "default") -> any:
     """在浏览器线程执行协程，使用 thread_id 对应的页面锁防止同一会话的并发冲突。
 
     不同 thread_id 的页面可并行操作，同一 thread_id 的操作串行执行。
     """
+    global _active_thread_id
+    _active_thread_id = thread_id  # 追踪当前操作的会话
+
     async def _locked():
         global _page_locks
         if thread_id not in _page_locks:
@@ -203,6 +209,8 @@ def release_browser_page(thread_id: str):
     在会话结束时调用，释放不再使用的资源。
     非阻塞：将清理任务提交到浏览器事件循环后立即返回。
     如果浏览器从未启动过，直接返回（零开销）。
+
+    同时清理该会话产生的截图文件，避免旧截图 URL 在后续请求中被复用。
     """
     # 浏览器从未初始化 → 无任何需要清理的资源
     if _browser is None:
@@ -218,6 +226,10 @@ def release_browser_page(thread_id: str):
             del _contexts[thread_id]
         _pages.pop(thread_id, None)
         _page_locks.pop(thread_id, None)
+
+        # 清理该会话的截图文件（基于时间戳匹配）
+        _cleanup_screenshots(thread_id)
+
         logger.info("🧹 已释放会话 %s 的浏览器页面", thread_id[:16])
     try:
         loop = _ensure_browser_loop()
@@ -225,6 +237,37 @@ def release_browser_page(thread_id: str):
         asyncio.run_coroutine_threadsafe(_release(), loop)
     except Exception:
         pass
+
+
+# 记录每个 thread_id 产生过的截图 token，用于精确清理
+_session_screenshot_tokens: dict[str, set[str]] = {}
+
+
+def _register_screenshot_token(thread_id: str, token: str):
+    """记录某会话产生的截图 token，供 release 时清理"""
+    if thread_id not in _session_screenshot_tokens:
+        _session_screenshot_tokens[thread_id] = set()
+    _session_screenshot_tokens[thread_id].add(token)
+
+
+def _cleanup_screenshots(thread_id: str):
+    """清理指定会话的所有截图文件"""
+    global _session_screenshot_tokens
+    tokens = _session_screenshot_tokens.pop(thread_id, set())
+    if not tokens or not _workspace:
+        return
+    screenshot_dir = _workspace / ".browser_screenshots"
+    removed = 0
+    for token in tokens:
+        fpath = screenshot_dir / f"{token}.png"
+        try:
+            if fpath.exists():
+                fpath.unlink()
+                removed += 1
+        except Exception:
+            pass
+    if removed:
+        logger.info("🗑️ 已清理会话 %s 的 %d 个截图文件", thread_id[:16], removed)
 
 
 async def _save_screenshot(page) -> dict:
@@ -248,6 +291,9 @@ async def _save_screenshot(page) -> dict:
         
         # token = 文件名（不包含扩展名），端点通过 workspace/.browser_screenshots/{token}.png 查找
         result["token"] = screenshot_path.stem
+
+        # 记录截图归属，会话结束时自动清理
+        _register_screenshot_token(_active_thread_id, result["token"])
         
         # 获取图片尺寸
         try:
