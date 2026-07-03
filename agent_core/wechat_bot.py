@@ -22,6 +22,137 @@ import session_store
 logger = get_logger(__name__)
 
 ILINK_BASE_URL = "https://ilinkai.weixin.qq.com"
+ILINK_CDN_BASE = "https://novac2c.cdn.weixin.qq.com/c2c"
+
+
+# ── 纯 Python AES-128-ECB 解密 ──────────────────────────────────
+# AES S-box (前向)
+_AES_SBOX = [
+    0x63, 0x7c, 0x77, 0x7b, 0xf2, 0x6b, 0x6f, 0xc5, 0x30, 0x01, 0x67, 0x2b, 0xfe, 0xd7, 0xab, 0x76,
+    0xca, 0x82, 0xc9, 0x7d, 0xfa, 0x59, 0x47, 0xf0, 0xad, 0xd4, 0xa2, 0xaf, 0x9c, 0xa4, 0x72, 0xc0,
+    0xb7, 0xfd, 0x93, 0x26, 0x36, 0x3f, 0xf7, 0xcc, 0x34, 0xa5, 0xe5, 0xf1, 0x71, 0xd8, 0x31, 0x15,
+    0x04, 0xc7, 0x23, 0xc3, 0x18, 0x96, 0x05, 0x9a, 0x07, 0x12, 0x80, 0xe2, 0xeb, 0x27, 0xb2, 0x75,
+    0x09, 0x83, 0x2c, 0x1a, 0x1b, 0x6e, 0x5a, 0xa0, 0x52, 0x3b, 0xd6, 0xb3, 0x29, 0xe3, 0x2f, 0x84,
+    0x53, 0xd1, 0x00, 0xed, 0x20, 0xfc, 0xb1, 0x5b, 0x6a, 0xcb, 0xbe, 0x39, 0x4a, 0x4c, 0x58, 0xcf,
+    0xd0, 0xef, 0xaa, 0xfb, 0x43, 0x4d, 0x33, 0x85, 0x45, 0xf9, 0x02, 0x7f, 0x50, 0x3c, 0x9f, 0xa8,
+    0x51, 0xa3, 0x40, 0x8f, 0x92, 0x9d, 0x38, 0xf5, 0xbc, 0xb6, 0xda, 0x21, 0x10, 0xff, 0xf3, 0xd2,
+    0xcd, 0x0c, 0x13, 0xec, 0x5f, 0x97, 0x44, 0x17, 0xc4, 0xa7, 0x7e, 0x3d, 0x64, 0x5d, 0x19, 0x73,
+    0x60, 0x81, 0x4f, 0xdc, 0x22, 0x2a, 0x90, 0x88, 0x46, 0xee, 0xb8, 0x14, 0xde, 0x5e, 0x0b, 0xdb,
+    0xe0, 0x32, 0x3a, 0x0a, 0x49, 0x06, 0x24, 0x5c, 0xc2, 0xd3, 0xac, 0x62, 0x91, 0x95, 0xe4, 0x79,
+    0xe7, 0xc8, 0x37, 0x6d, 0x8d, 0xd5, 0x4e, 0xa9, 0x6c, 0x56, 0xf4, 0xea, 0x65, 0x7a, 0xae, 0x08,
+    0xba, 0x78, 0x25, 0x2e, 0x1c, 0xa6, 0xb4, 0xc6, 0xe8, 0xdd, 0x74, 0x1f, 0x4b, 0xbd, 0x8b, 0x8a,
+    0x70, 0x3e, 0xb5, 0x66, 0x48, 0x03, 0xf6, 0x0e, 0x61, 0x35, 0x57, 0xb9, 0x86, 0xc1, 0x1d, 0x9e,
+    0xe1, 0xf8, 0x98, 0x11, 0x69, 0xd9, 0x8e, 0x94, 0x9b, 0x1e, 0x87, 0xe9, 0xce, 0x55, 0x28, 0xdf,
+    0x8c, 0xa1, 0x89, 0x0d, 0xbf, 0xe6, 0x42, 0x68, 0x41, 0x99, 0x2d, 0x0f, 0xb0, 0x54, 0xbb, 0x16,
+]
+
+def _aes_decrypt_block(block: bytes, expanded_key: list[list[int]]) -> bytes:
+    """解密一个 16 字节 AES 块（ECB 模式下逐块调用）。"""
+    state = list(block)
+    # 轮数: AES-128 = 10 轮
+    nr = 10
+
+    def sub_bytes(s):
+        return [_AES_SBOX[b] for b in s]
+
+    def shift_rows(s):
+        return [
+            s[0], s[5], s[10], s[15],
+            s[4], s[9], s[14], s[3],
+            s[8], s[13], s[2], s[7],
+            s[12], s[1], s[6], s[11],
+        ]
+
+    def inv_mix_columns(s):
+        # 有限域 GF(2^8) 上的逆列混合
+        def galois_mul(a, b):
+            p = 0
+            for _ in range(8):
+                if b & 1:
+                    p ^= a
+                hi = a & 0x80
+                a = (a << 1) & 0xFF
+                if hi:
+                    a ^= 0x1B
+                b >>= 1
+            return p
+        result = [0] * 16
+        for i in range(4):
+            col = s[i*4:(i+1)*4]
+            result[i*4]   = galois_mul(14, col[0]) ^ galois_mul(9, col[3]) ^ galois_mul(13, col[2]) ^ galois_mul(11, col[1])
+            result[i*4+1] = galois_mul(14, col[1]) ^ galois_mul(9, col[0]) ^ galois_mul(13, col[3]) ^ galois_mul(11, col[2])
+            result[i*4+2] = galois_mul(14, col[2]) ^ galois_mul(9, col[1]) ^ galois_mul(13, col[0]) ^ galois_mul(11, col[3])
+            result[i*4+3] = galois_mul(14, col[3]) ^ galois_mul(9, col[2]) ^ galois_mul(13, col[1]) ^ galois_mul(11, col[0])
+        return result
+
+    def add_round_key(s, rk):
+        return [s[i] ^ rk[i] for i in range(16)]
+
+    # 初始轮密钥加
+    state = add_round_key(state, expanded_key[nr])
+
+    # 解密主循环
+    for r in range(nr - 1, 0, -1):
+        state = shift_rows(state)
+        state = sub_bytes(state)
+        state = add_round_key(state, expanded_key[r])
+        state = inv_mix_columns(state)
+
+    # 最后一轮（无 InvMixColumns）
+    state = shift_rows(state)
+    state = sub_bytes(state)
+    state = add_round_key(state, expanded_key[0])
+
+    return bytes(state)
+
+
+def _aes_key_expansion(key: bytes) -> list[list[int]]:
+    """AES-128 密钥扩展: 16 字节 → 11 轮密钥 (每轮 16 字节)"""
+    rcon = [0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1B, 0x36]
+    # 初始 4 个字 (每个字 4 字节)
+    w = [list(key[0:4]), list(key[4:8]), list(key[8:12]), list(key[12:16])]
+    for i in range(4, 44):
+        temp = w[i-1][:]
+        if i % 4 == 0:
+            temp = temp[1:] + temp[:1]  # RotWord
+            temp = [_AES_SBOX[b] for b in temp]  # SubWord
+            temp[0] ^= rcon[i//4 - 1]
+        w.append([w[i-4][j] ^ temp[j] for j in range(4)])
+    # 将 44 个字展平为 11 个轮密钥，每个轮密钥 16 字节
+    round_keys = []
+    for r in range(11):
+        rk = []
+        for word in w[r*4:(r+1)*4]:
+            rk.extend(word)
+        round_keys.append(rk)
+    return round_keys
+
+
+def aes_decrypt_ecb(ciphertext: bytes, key_hex: str) -> bytes:
+    """AES-128-ECB 解密（纯 Python 实现）
+
+    Args:
+        ciphertext: 密文（长度应为 16 的倍数）
+        key_hex: 32 字符十六进制密钥
+
+    Returns:
+        解密后的明文
+    """
+    key = bytes.fromhex(key_hex.lower())
+    if len(key) != 16:
+        raise ValueError(f"AES-128 密钥需要 16 字节，当前 {len(key)} 字节")
+    if len(ciphertext) % 16 != 0:
+        raise ValueError(f"密文长度必须是 16 的倍数，当前 {len(ciphertext)}")
+
+    expanded_key = _aes_key_expansion(key)
+    plaintext = bytearray()
+    for offset in range(0, len(ciphertext), 16):
+        block = ciphertext[offset:offset+16]
+        plaintext.extend(_aes_decrypt_block(block, expanded_key))
+    return bytes(plaintext)
+
+
+# ── WeChat Bot 类 ─────────────────────────────────────────────────
 
 
 class WeChatBot:
@@ -206,94 +337,67 @@ class WeChatBot:
                 return {"ret": -1}
 
     async def _download_image_as_data_url(self, img_data: dict) -> Optional[str]:
-        """下载微信图片并转换为 data URL（base64 编码），供多模态 LLM 使用。
+        """下载微信 iLink 图片并转换为 data URL（base64 编码），供多模态 LLM 使用。
 
-        支持两种格式:
-        1. 直接 URL: {"url": "https://..."}
-        2. iLink 加密图片: {"aeskey": "...", "encrypt_query": "...", "msg_id": "..."}
-           → 通过 iLink /download_file 接口获取
+        iLink 图片通过 CDN 下载，数据使用 AES-128-ECB 加密，需用 aeskey 解密。
         """
-        # 格式1: 直接 URL 下载
-        direct_url = img_data.get("url") or img_data.get("file_url", "")
-        if direct_url:
-            try:
-                async with httpx.AsyncClient(
-                    timeout=30, trust_env=False, verify=False,
-                    follow_redirects=True,
-                ) as client:
-                    resp = await client.get(direct_url)
-                    resp.raise_for_status()
-                    content_type = resp.headers.get("content-type", "image/png")
-                    import base64
-                    b64 = base64.b64encode(resp.content).decode("ascii")
-                    data_url = f"data:{content_type};base64,{b64}"
-                    logger.info("[微信Bot] 图片下载成功: %s -> %d bytes", direct_url[:60], len(resp.content))
-                    return data_url
-            except Exception as e:
-                logger.warning("[微信Bot] 图片下载失败: %s: %s", direct_url[:60], e)
-                return None
-
-        # 格式2: iLink 加密图片（通过 download_file 接口）
         encrypt_query = img_data.get("encrypt_query", "")
-        if encrypt_query:
-            try:
-                import base64
-                import urllib.parse
+        aeskey_hex = img_data.get("aeskey", "")
+        if not encrypt_query:
+            return None
 
-                # 尝试: encrypt_query_param 可能是 base64 编码的下载 URL
-                try:
-                    decoded = base64.b64decode(encrypt_query).decode("utf-8", errors="ignore")
-                    if decoded.startswith("http"):
-                        logger.info("[微信Bot] encrypt_query 解码为 URL: %s", decoded[:80])
-                        direct_url = decoded
-                        return await self._download_image_as_data_url({"url": direct_url})
-                except Exception:
-                    pass
+        # 解析 AES key（兼容 hex 或 base64 格式）
+        try:
+            if aeskey_hex and len(aeskey_hex) == 32 and all(c in '0123456789abcdefABCDEF' for c in aeskey_hex):
+                aes_key_hex = aeskey_hex.lower()
+            elif aeskey_hex:
+                # base64 编码的 16 字节 → hex
+                aes_key_hex = base64.b64decode(aeskey_hex).hex()
+            else:
+                aes_key_hex = ""
+        except Exception:
+            aes_key_hex = ""
 
-                base = self.bot_base_url or ILINK_BASE_URL
-                encoded = urllib.parse.quote(encrypt_query, safe="")
-                # 尝试多种 iLink 下载 URL 模式
-                url_patterns = [
-                    f"{base}/ilink/bot/download_file?encrypt_query_param={encoded}",
-                    f"{base}/ilink/bot/get_file?encrypt_query_param={encoded}",
-                    f"{base}/ilink/bot/download?encrypt_query_param={encoded}",
-                    f"{base}/ilink/bot/file/download?encrypt_query_param={encoded}",
-                    f"{base}/ilink/bot/media?encrypt_query_param={encoded}",
-                ]
-                last_error = None
-                for download_url in url_patterns:
-                    try:
-                        async with httpx.AsyncClient(
-                            timeout=10, trust_env=False, verify=False,
-                            follow_redirects=True,
-                        ) as client:
-                            resp = await client.get(download_url, headers=self._auth_headers())
-                            resp.raise_for_status()
-                            if len(resp.content) > 100:
-                                content_type = resp.headers.get("content-type", "")
-                                if "image" not in content_type and "octet" in content_type:
-                                    content_type = "image/png"
-                                b64 = base64.b64encode(resp.content).decode("ascii")
-                                data_url = f"data:{content_type};base64,{b64}"
-                                logger.info("[微信Bot] iLink 图片下载成功(%s): %d bytes", download_url[:80], len(resp.content))
-                                return data_url
-                    except httpx.HTTPStatusError as e:
-                        last_error = f"HTTP {e.response.status_code}"
-                        continue
-                    except Exception as e:
-                        last_error = str(e)[:50]
-                        continue
+        # 构造 CDN 下载 URL
+        import urllib.parse
+        cdn_url = f"{ILINK_CDN_BASE}/download?encrypted_query_param={urllib.parse.quote(encrypt_query, safe='')}"
 
-                # 所有下载模式均失败 → 无法获取图片
-                logger.warning(
-                    "[微信Bot] iLink 图片下载失败: 所有 URL 模式均 %s。"
-                    "微信 Bot 协议可能不支持图片下载，将仅发送文字。",
-                    last_error,
-                )
-                return None
-            except Exception as e:
-                logger.warning("[微信Bot] iLink 图片下载异常: %s", e)
-                return None
+        try:
+            async with httpx.AsyncClient(
+                timeout=30, trust_env=False, verify=False,
+                follow_redirects=True,
+            ) as client:
+                resp = await client.get(cdn_url)
+                resp.raise_for_status()
+
+                encrypted_data = resp.content
+                if len(encrypted_data) < 16:
+                    logger.warning("[微信Bot] CDN 图片数据过短: %d bytes", len(encrypted_data))
+                    return None
+
+                # AES-128-ECB 解密
+                if aes_key_hex:
+                    plaintext = aes_decrypt_ecb(encrypted_data, aes_key_hex)
+                    logger.info("[微信Bot] CDN 图片下载+AES解密成功: %d bytes → %d bytes",
+                                len(encrypted_data), len(plaintext))
+                else:
+                    # 无 AES key，直接使用原始数据
+                    plaintext = encrypted_data
+                    logger.info("[微信Bot] CDN 图片下载成功(无加密): %d bytes", len(plaintext))
+
+                import base64 as b64_mod
+                content_type = resp.headers.get("content-type", "image/png")
+                if "image" not in content_type:
+                    content_type = "image/png"
+                b64_data = b64_mod.b64encode(plaintext).decode("ascii")
+                return f"data:{content_type};base64,{b64_data}"
+
+        except httpx.HTTPStatusError as e:
+            logger.warning("[微信Bot] CDN 图片下载 HTTP %s", e.response.status_code)
+            return None
+        except Exception as e:
+            logger.warning("[微信Bot] CDN 图片下载/解密失败: %s", e)
+            return None
 
         return None
 
