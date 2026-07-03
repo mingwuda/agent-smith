@@ -152,7 +152,7 @@ def aes_decrypt_ecb(ciphertext: bytes, key_hex: str) -> bytes:
     import subprocess
     try:
         result = subprocess.run(
-            ['openssl', 'enc', '-d', '-aes-128-ecb', '-K', key_hex.lower(), '-nopad'],
+            ['openssl', 'enc', '-d', '-aes-128-ecb', '-K', key_hex.lower(), '-nosalt'],
             input=ciphertext,
             capture_output=True,
             timeout=10,
