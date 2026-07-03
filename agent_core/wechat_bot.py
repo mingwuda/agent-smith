@@ -38,6 +38,8 @@ class WeChatBot:
         self._update_buf: str = ""
         self._seen_msg_ids: set[str] = set()
         self._wechat_sessions: dict[str, str] = {}  # wx_user_id → current session_id
+        # 暂存用户最近发送的图片（key=from_user），等待后续文本合并为图文消息
+        self._pending_images: dict[str, dict] = {}
 
         os.makedirs(self.data_dir, exist_ok=True)
 
@@ -203,6 +205,28 @@ class WeChatBot:
                 logger.warning("[微信Bot] sendmessage 非 JSON: status=%s body=%s", resp.status_code, resp_text[:200])
                 return {"ret": -1}
 
+    async def _download_image_as_data_url(self, url: str) -> Optional[str]:
+        """下载图片并转换为 data URL（base64 编码），供多模态 LLM 使用。"""
+        if not url:
+            return None
+        # 微信图片可能使用 http，需要信任
+        try:
+            async with httpx.AsyncClient(
+                timeout=30, trust_env=False, verify=False,
+                follow_redirects=True,
+            ) as client:
+                resp = await client.get(url)
+                resp.raise_for_status()
+                content_type = resp.headers.get("content-type", "image/png")
+                import base64
+                b64 = base64.b64encode(resp.content).decode("ascii")
+                data_url = f"data:{content_type};base64,{b64}"
+                logger.info("[微信Bot] 图片下载成功: %s -> %d bytes", url[:60], len(resp.content))
+                return data_url
+        except Exception as e:
+            logger.warning("[微信Bot] 图片下载失败: %s: %s", url[:60], e)
+            return None
+
     # ── 消息处理 ──────────────────────────────────
 
     async def _handle_message(self, msg: dict):
@@ -210,13 +234,27 @@ class WeChatBot:
         from_user = msg.get("from_user_id", "")
         context_token = msg.get("context_token", "")
 
-        # 提取文本内容
+        # ── 提取图片 ──
+        image_data = None
+        for item in msg.get("item_list", []):
+            if item.get("type") == 3:
+                img_item = item.get("image_item") or item.get("pic_item") or {}
+                file_url = img_item.get("file_url") or img_item.get("url") or ""
+                if file_url:
+                    image_data = {"file_url": file_url, "md5": img_item.get("md5", "")}
+
+        # ── 提取文本内容 ──
         text = ""
         for item in msg.get("item_list", []):
             if item.get("type") == 1:
                 text = item.get("text_item", {}).get("text", "")
                 break
+
+        # ── 纯图片消息（无文本）：暂存，等待后续文本合并 ──
         if not text:
+            if image_data:
+                self._pending_images[from_user] = image_data
+                logger.info("[微信Bot:%s] 收到用户 %s 的图片，已暂存等待后续文字提问", self.user_id, from_user[:16])
             return
 
         # ── 消息去重 ──
@@ -313,7 +351,28 @@ class WeChatBot:
                     session_id=session_id,
                 )
 
-        # 保存用户消息
+        # ── 检查是否有暂存的图片，合并为图文消息 ──
+        attachments = None
+
+        # 优先使用当前消息中自带的图片，其次使用之前暂存的图片
+        img_to_use = image_data or self._pending_images.pop(from_user, None)
+        if img_to_use:
+            try:
+                data_url = await self._download_image_as_data_url(img_to_use["file_url"])
+                if data_url:
+                    mime_type = data_url.split(";")[0].split(":")[1] if ";" in data_url else "image/png"
+                    attachments = [{"mime_type": mime_type, "data_url": data_url}]
+                    # 保存图片记录到消息
+                    img_text = f"[图片: {img_to_use.get('md5', '')[:8]}]"
+                    session_store.add_message(wechat_uid, session_id, "user", img_text)
+                    logger.info("[微信Bot:%s] 合并图片+文本消息，图片 md5=%s", self.user_id, img_to_use.get("md5", "")[:12])
+            except Exception as e:
+                logger.warning("[微信Bot:%s] 图片下载/转换失败: %s", self.user_id, e)
+        else:
+            # 无图片时清理可能的残留（另一用户的 pending 不会被误pop）
+            self._pending_images.pop(from_user, None)
+
+        # 保存用户文本消息
         add_ret = session_store.add_message(wechat_uid, session_id, "user", text)
         if add_ret is None:
             logger.warning("[微信Bot:%s] 用户消息保存失败: session=%s 不存在", self.user_id, session_id)
@@ -324,9 +383,9 @@ class WeChatBot:
         # 为当前会话设置独立的 agent 线程
         self.agent._thread_id = session_id
 
-        # 调用 agent 获取完整回复
+        # 调用 agent 获取完整回复（支持图文消息）
         try:
-            reply = await self.agent.chat_sync(text)
+            reply = await self.agent.chat_sync(text, attachments=attachments)
         except Exception as e:
             logger.exception("[微信Bot] agent 调用异常")
             reply = f"❌ 处理出错: {e}"

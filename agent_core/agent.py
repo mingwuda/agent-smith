@@ -590,13 +590,13 @@ class DesktopAgent:
 
         return "\n".join(learned) if learned else ""
 
-    async def chat_sync(self, message: str) -> str:
+    async def chat_sync(self, message: str, attachments: Optional[list[dict]] = None) -> str:
         """同步聊天：运行 agent 并收集完整的流式回复文本。
 
         适用于非浏览器场景（如微信、API 调用）需要一次性获取完整回复。
         """
         full = ""
-        async for sse_line in self._stream_done_wrapper(message):
+        async for sse_line in self._stream_done_wrapper(message, attachments=attachments):
             line = sse_line.strip()
             if line.startswith("data: ") and not line.startswith("data: [DONE]"):
                 try:
