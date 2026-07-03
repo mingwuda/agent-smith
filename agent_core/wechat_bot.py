@@ -205,27 +205,59 @@ class WeChatBot:
                 logger.warning("[微信Bot] sendmessage 非 JSON: status=%s body=%s", resp.status_code, resp_text[:200])
                 return {"ret": -1}
 
-    async def _download_image_as_data_url(self, url: str) -> Optional[str]:
-        """下载图片并转换为 data URL（base64 编码），供多模态 LLM 使用。"""
-        if not url:
-            return None
-        # 微信图片可能使用 http，需要信任
-        try:
-            async with httpx.AsyncClient(
-                timeout=30, trust_env=False, verify=False,
-                follow_redirects=True,
-            ) as client:
-                resp = await client.get(url)
-                resp.raise_for_status()
-                content_type = resp.headers.get("content-type", "image/png")
-                import base64
-                b64 = base64.b64encode(resp.content).decode("ascii")
-                data_url = f"data:{content_type};base64,{b64}"
-                logger.info("[微信Bot] 图片下载成功: %s -> %d bytes", url[:60], len(resp.content))
-                return data_url
-        except Exception as e:
-            logger.warning("[微信Bot] 图片下载失败: %s: %s", url[:60], e)
-            return None
+    async def _download_image_as_data_url(self, img_data: dict) -> Optional[str]:
+        """下载微信图片并转换为 data URL（base64 编码），供多模态 LLM 使用。
+
+        支持两种格式:
+        1. 直接 URL: {"url": "https://..."}
+        2. iLink 加密图片: {"aeskey": "...", "encrypt_query": "...", "msg_id": "..."}
+           → 通过 iLink /download_file 接口获取
+        """
+        # 格式1: 直接 URL 下载
+        direct_url = img_data.get("url") or img_data.get("file_url", "")
+        if direct_url:
+            try:
+                async with httpx.AsyncClient(
+                    timeout=30, trust_env=False, verify=False,
+                    follow_redirects=True,
+                ) as client:
+                    resp = await client.get(direct_url)
+                    resp.raise_for_status()
+                    content_type = resp.headers.get("content-type", "image/png")
+                    import base64
+                    b64 = base64.b64encode(resp.content).decode("ascii")
+                    data_url = f"data:{content_type};base64,{b64}"
+                    logger.info("[微信Bot] 图片下载成功: %s -> %d bytes", direct_url[:60], len(resp.content))
+                    return data_url
+            except Exception as e:
+                logger.warning("[微信Bot] 图片下载失败: %s: %s", direct_url[:60], e)
+                return None
+
+        # 格式2: iLink 加密图片（通过 download_file 接口）
+        encrypt_query = img_data.get("encrypt_query", "")
+        if encrypt_query:
+            try:
+                base = self.bot_base_url or ILINK_BASE_URL
+                download_url = f"{base}/ilink/bot/download_file?encrypt_query_param={encrypt_query}"
+                async with httpx.AsyncClient(
+                    timeout=30, trust_env=False, verify=False,
+                    follow_redirects=True,
+                ) as client:
+                    resp = await client.get(download_url, headers=self._auth_headers())
+                    # iLink download_file 返回的 content-type 可能是 application/octet-stream
+                    content_type = resp.headers.get("content-type", "")
+                    if "image" not in content_type and "octet" in content_type:
+                        content_type = "image/png"
+                    import base64
+                    b64 = base64.b64encode(resp.content).decode("ascii")
+                    data_url = f"data:{content_type};base64,{b64}"
+                    logger.info("[微信Bot] iLink 图片下载成功: %d bytes", len(resp.content))
+                    return data_url
+            except Exception as e:
+                logger.warning("[微信Bot] iLink 图片下载失败: %s", e)
+                return None
+
+        return None
 
     # ── 消息处理 ──────────────────────────────────
 
@@ -250,15 +282,22 @@ class WeChatBot:
                 str(first_item)[:500],
             )
 
-        # ── 提取图片（支持 type=2 或 type=3）──
+        # ── 提取图片 ──
         image_data = None
         for item in msg.get("item_list", []):
             if item.get("type") in (2, 3):
                 img_item = item.get("image_item") or item.get("pic_item") or {}
-                file_url = img_item.get("file_url") or img_item.get("url") or img_item.get("file_path") or ""
-                if file_url:
-                    image_data = {"file_url": file_url, "md5": img_item.get("md5", "")}
-                    logger.debug("[微信Bot:%s] 检测到图片: type=%s url=%s...", self.user_id, item.get("type"), file_url[:60])
+                # iLink 图片：有 aeskey + media.encrypt_query_param，需通过下载接口获取
+                aeskey = img_item.get("aeskey", "")
+                media = img_item.get("media", {})
+                encrypt_query = media.get("encrypt_query_param", "") if isinstance(media, dict) else ""
+                if aeskey or encrypt_query:
+                    image_data = {
+                        "aeskey": aeskey,
+                        "encrypt_query": encrypt_query,
+                        "msg_id": item.get("msg_id") or msg.get("message_id", ""),
+                    }
+                    logger.info("[微信Bot:%s] 检测到 iLink 图片: msg_id=%s", self.user_id, image_data["msg_id"][:20])
 
         # ── 提取文本内容 ──
         text = ""
@@ -375,14 +414,14 @@ class WeChatBot:
         img_to_use = image_data or self._pending_images.pop(from_user, None)
         if img_to_use:
             try:
-                data_url = await self._download_image_as_data_url(img_to_use["file_url"])
+                data_url = await self._download_image_as_data_url(img_to_use)
                 if data_url:
                     mime_type = data_url.split(";")[0].split(":")[1] if ";" in data_url else "image/png"
                     attachments = [{"mime_type": mime_type, "data_url": data_url}]
                     # 保存图片记录到消息
-                    img_text = f"[图片: {img_to_use.get('md5', '')[:8]}]"
+                    img_text = f"[图片: {img_to_use.get('msg_id', '')[-8:]}]"
                     session_store.add_message(wechat_uid, session_id, "user", img_text)
-                    logger.info("[微信Bot:%s] 合并图片+文本消息，图片 md5=%s", self.user_id, img_to_use.get("md5", "")[:12])
+                    logger.info("[微信Bot:%s] 合并图片+文本消息", self.user_id)
             except Exception as e:
                 logger.warning("[微信Bot:%s] 图片下载/转换失败: %s", self.user_id, e)
         else:
