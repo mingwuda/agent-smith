@@ -46,16 +46,20 @@ _AES_SBOX = [
     0x8c, 0xa1, 0x89, 0x0d, 0xbf, 0xe6, 0x42, 0x68, 0x41, 0x99, 0x2d, 0x0f, 0xb0, 0x54, 0xbb, 0x16,
 ]
 
+# AES 逆 S-box (用于 InvSubBytes)
+_AES_INV_SBOX = [0] * 256
+for _i, _v in enumerate(_AES_SBOX):
+    _AES_INV_SBOX[_v] = _i
+
 def _aes_decrypt_block(block: bytes, expanded_key: list[list[int]]) -> bytes:
     """解密一个 16 字节 AES 块（ECB 模式下逐块调用）。"""
     state = list(block)
-    # 轮数: AES-128 = 10 轮
     nr = 10
 
-    def sub_bytes(s):
-        return [_AES_SBOX[b] for b in s]
+    def inv_sub_bytes(s):
+        return [_AES_INV_SBOX[b] for b in s]
 
-    def shift_rows(s):
+    def inv_shift_rows(s):
         return [
             s[0], s[5], s[10], s[15],
             s[4], s[9], s[14], s[3],
@@ -64,7 +68,6 @@ def _aes_decrypt_block(block: bytes, expanded_key: list[list[int]]) -> bytes:
         ]
 
     def inv_mix_columns(s):
-        # 有限域 GF(2^8) 上的逆列混合
         def galois_mul(a, b):
             p = 0
             for _ in range(8):
@@ -78,29 +81,34 @@ def _aes_decrypt_block(block: bytes, expanded_key: list[list[int]]) -> bytes:
             return p
         result = [0] * 16
         for i in range(4):
-            col = s[i*4:(i+1)*4]
-            result[i*4]   = galois_mul(14, col[0]) ^ galois_mul(9, col[3]) ^ galois_mul(13, col[2]) ^ galois_mul(11, col[1])
-            result[i*4+1] = galois_mul(14, col[1]) ^ galois_mul(9, col[0]) ^ galois_mul(13, col[3]) ^ galois_mul(11, col[2])
-            result[i*4+2] = galois_mul(14, col[2]) ^ galois_mul(9, col[1]) ^ galois_mul(13, col[0]) ^ galois_mul(11, col[3])
-            result[i*4+3] = galois_mul(14, col[3]) ^ galois_mul(9, col[2]) ^ galois_mul(13, col[1]) ^ galois_mul(11, col[0])
+            c = s[i*4:(i+1)*4]
+            # InvMixColumns matrix on GF(2^8):
+            # [14 11 13  9]   [c0]
+            # [ 9 14 11 13] * [c1]
+            # [13  9 14 11]   [c2]
+            # [11 13  9 14]   [c3]
+            result[i*4]   = galois_mul(14, c[0]) ^ galois_mul(11, c[1]) ^ galois_mul(13, c[2]) ^ galois_mul(9, c[3])
+            result[i*4+1] = galois_mul(9, c[0])  ^ galois_mul(14, c[1]) ^ galois_mul(11, c[2]) ^ galois_mul(13, c[3])
+            result[i*4+2] = galois_mul(13, c[0]) ^ galois_mul(9, c[1])  ^ galois_mul(14, c[2]) ^ galois_mul(11, c[3])
+            result[i*4+3] = galois_mul(11, c[0]) ^ galois_mul(13, c[1]) ^ galois_mul(9, c[2])  ^ galois_mul(14, c[3])
         return result
 
     def add_round_key(s, rk):
         return [s[i] ^ rk[i] for i in range(16)]
 
-    # 初始轮密钥加
+    # 初始轮密钥加（使用最后一轮密钥）
     state = add_round_key(state, expanded_key[nr])
 
     # 解密主循环
     for r in range(nr - 1, 0, -1):
-        state = shift_rows(state)
-        state = sub_bytes(state)
+        state = inv_shift_rows(state)
+        state = inv_sub_bytes(state)
         state = add_round_key(state, expanded_key[r])
         state = inv_mix_columns(state)
 
     # 最后一轮（无 InvMixColumns）
-    state = shift_rows(state)
-    state = sub_bytes(state)
+    state = inv_shift_rows(state)
+    state = inv_sub_bytes(state)
     state = add_round_key(state, expanded_key[0])
 
     return bytes(state)
@@ -129,27 +137,37 @@ def _aes_key_expansion(key: bytes) -> list[list[int]]:
 
 
 def aes_decrypt_ecb(ciphertext: bytes, key_hex: str) -> bytes:
-    """AES-128-ECB 解密（纯 Python 实现）
+    """AES-128-ECB 解密
+
+    使用系统 OpenSSL 命令解密。
+    如果 OpenSSL 不可用或失败，返回原始数据（不做解密）。
 
     Args:
         ciphertext: 密文（长度应为 16 的倍数）
         key_hex: 32 字符十六进制密钥
 
     Returns:
-        解密后的明文
+        解密后的明文，或解密失败时的原始数据
     """
-    key = bytes.fromhex(key_hex.lower())
-    if len(key) != 16:
-        raise ValueError(f"AES-128 密钥需要 16 字节，当前 {len(key)} 字节")
-    if len(ciphertext) % 16 != 0:
-        raise ValueError(f"密文长度必须是 16 的倍数，当前 {len(ciphertext)}")
+    import subprocess
+    try:
+        result = subprocess.run(
+            ['openssl', 'enc', '-d', '-aes-128-ecb', '-K', key_hex.lower(), '-nopad'],
+            input=ciphertext,
+            capture_output=True,
+            timeout=10,
+        )
+        if result.returncode == 0 and result.stdout:
+            return result.stdout
+    except Exception:
+        pass
 
-    expanded_key = _aes_key_expansion(key)
-    plaintext = bytearray()
-    for offset in range(0, len(ciphertext), 16):
-        block = ciphertext[offset:offset+16]
-        plaintext.extend(_aes_decrypt_block(block, expanded_key))
-    return bytes(plaintext)
+    # 解密失败：返回原始数据（调用方会得到无效图片，API 会报错）
+    import logging
+    logging.getLogger(__name__).warning(
+        "[AES] OpenSSL 解密失败，返回原始数据 (%d bytes)", len(ciphertext),
+    )
+    return ciphertext
 
 
 # ── WeChat Bot 类 ─────────────────────────────────────────────────
