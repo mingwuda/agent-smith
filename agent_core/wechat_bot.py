@@ -237,19 +237,34 @@ class WeChatBot:
         encrypt_query = img_data.get("encrypt_query", "")
         if encrypt_query:
             try:
+                import base64
                 import urllib.parse
+
+                # 尝试: encrypt_query_param 可能是 base64 编码的下载 URL
+                try:
+                    decoded = base64.b64decode(encrypt_query).decode("utf-8", errors="ignore")
+                    if decoded.startswith("http"):
+                        logger.info("[微信Bot] encrypt_query 解码为 URL: %s", decoded[:80])
+                        direct_url = decoded
+                        return await self._download_image_as_data_url({"url": direct_url})
+                except Exception:
+                    pass
+
                 base = self.bot_base_url or ILINK_BASE_URL
                 encoded = urllib.parse.quote(encrypt_query, safe="")
-                # 尝试多种 URL 模式
+                # 尝试多种 iLink 下载 URL 模式
                 url_patterns = [
                     f"{base}/ilink/bot/download_file?encrypt_query_param={encoded}",
                     f"{base}/ilink/bot/get_file?encrypt_query_param={encoded}",
                     f"{base}/ilink/bot/download?encrypt_query_param={encoded}",
+                    f"{base}/ilink/bot/file/download?encrypt_query_param={encoded}",
+                    f"{base}/ilink/bot/media?encrypt_query_param={encoded}",
                 ]
+                last_error = None
                 for download_url in url_patterns:
                     try:
                         async with httpx.AsyncClient(
-                            timeout=15, trust_env=False, verify=False,
+                            timeout=10, trust_env=False, verify=False,
                             follow_redirects=True,
                         ) as client:
                             resp = await client.get(download_url, headers=self._auth_headers())
@@ -258,17 +273,26 @@ class WeChatBot:
                                 content_type = resp.headers.get("content-type", "")
                                 if "image" not in content_type and "octet" in content_type:
                                     content_type = "image/png"
-                                import base64
                                 b64 = base64.b64encode(resp.content).decode("ascii")
                                 data_url = f"data:{content_type};base64,{b64}"
                                 logger.info("[微信Bot] iLink 图片下载成功(%s): %d bytes", download_url[:80], len(resp.content))
                                 return data_url
-                    except Exception:
+                    except httpx.HTTPStatusError as e:
+                        last_error = f"HTTP {e.response.status_code}"
                         continue
-                logger.warning("[微信Bot] iLink 图片所有下载模式均失败")
+                    except Exception as e:
+                        last_error = str(e)[:50]
+                        continue
+
+                # 所有下载模式均失败 → 无法获取图片
+                logger.warning(
+                    "[微信Bot] iLink 图片下载失败: 所有 URL 模式均 %s。"
+                    "微信 Bot 协议可能不支持图片下载，将仅发送文字。",
+                    last_error,
+                )
                 return None
             except Exception as e:
-                logger.warning("[微信Bot] iLink 图片下载失败: %s", e)
+                logger.warning("[微信Bot] iLink 图片下载异常: %s", e)
                 return None
 
         return None
