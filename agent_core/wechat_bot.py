@@ -234,10 +234,21 @@ class WeChatBot:
         from_user = msg.get("from_user_id", "")
         context_token = msg.get("context_token", "")
 
-        # ── 调试：记录消息中的 item 类型（确认图片 type 值）──
-        item_types = [item.get("type") for item in msg.get("item_list", [])]
-        if item_types:
-            logger.debug("[微信Bot:%s] 消息 item_types=%s from_user=%s", self.user_id, item_types, from_user[:16])
+        # ── 调试：记录消息完整结构（关键：确认图片消息格式）──
+        item_list = msg.get("item_list", [])
+        item_types = [item.get("type") for item in item_list]
+        msg_type = msg.get("message_type", "")
+        logger.info(
+            "[微信Bot:%s] 收到消息: from_user=%s msg_type=%s msg_keys=%s item_types=%s item_count=%d",
+            self.user_id, from_user[:16], msg_type, list(msg.keys()), item_types, len(item_list),
+        )
+        if item_list:
+            first_item = item_list[0]
+            logger.info(
+                "[微信Bot:%s] 首条 item: type=%s keys=%s preview=%s",
+                self.user_id, first_item.get("type"), list(first_item.keys()),
+                str(first_item)[:500],
+            )
 
         # ── 提取图片（支持 type=2 或 type=3）──
         image_data = None
