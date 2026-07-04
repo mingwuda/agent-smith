@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -52,6 +52,7 @@ echo "   Path: $PYTHON"
 echo ""
 
 AGENT_PORT="${AGENT_PORT:-8899}"
+export DESKTOP_AGENT_PORT="$AGENT_PORT"
 PIDFILE="$SCRIPT_DIR/.agent.pid"
 DAEMON=0
 ACTION="start"
@@ -94,13 +95,17 @@ if [[ "$ACTION" == "stop" ]]; then
   if [[ -f "$PIDFILE" ]]; then
     OLD_PID=$(cat "$PIDFILE")
     echo "🛑 停止 Agent (PID: $OLD_PID)..."
-    kill "$OLD_PID" 2>/dev/null && echo "✅ 已停止" || echo "⚠️ 停止失败"
+    kill "$OLD_PID" 2>/dev/null && sleep 1 || true
+    kill -0 "$OLD_PID" 2>/dev/null && kill -9 "$OLD_PID" 2>/dev/null || true
     rm -f "$PIDFILE"
+    echo "✅ 已停止"
   else
     OLD_PID=$(lsof -ti ":$AGENT_PORT" 2>/dev/null)
     if [[ -n "$OLD_PID" ]]; then
       echo "🛑 停止 Agent (PID: $OLD_PID)..."
-      kill "$OLD_PID" 2>/dev/null && echo "✅ 已停止"
+      kill "$OLD_PID" 2>/dev/null && sleep 1 || true
+      kill -0 "$OLD_PID" 2>/dev/null && kill -9 "$OLD_PID" 2>/dev/null || true
+      echo "✅ 已停止"
     else
       echo "❌ Agent 未运行"
     fi
@@ -115,7 +120,12 @@ if [[ "$ACTION" == "restart" ]]; then
     kill $(cat "$PIDFILE") 2>/dev/null || true; rm -f "$PIDFILE"
   fi
   OLD_PID=$(lsof -ti ":$AGENT_PORT" 2>/dev/null)
-  if [[ -n "$OLD_PID" ]]; then kill $OLD_PID 2>/dev/null || true; sleep 1; fi
+  if [[ -n "$OLD_PID" ]]; then
+    kill $OLD_PID 2>/dev/null || true; sleep 2
+    if lsof -ti ":$AGENT_PORT" >/dev/null 2>&1; then
+      kill -9 $OLD_PID 2>/dev/null || true; sleep 1
+    fi
+  fi
   echo "   旧进程已停止"
   cd "$SCRIPT_DIR/agent_core"
   nohup "$PYTHON" main.py > "$SCRIPT_DIR/agent.log" 2>&1 &
@@ -144,14 +154,23 @@ export AGENT_HOST
 if lsof -ti ":$AGENT_PORT" >/dev/null 2>&1; then
   OLD_PIDS=$(lsof -ti ":$AGENT_PORT" 2>/dev/null | tr '\n' ' ')
   echo "⚠️  端口 $AGENT_PORT 已被占用 (PID: $OLD_PIDS)，正在关闭旧进程..."
-  kill -9 $OLD_PIDS 2>/dev/null; sleep 1
-  for i in $(seq 1 5); do
-    if ! lsof -ti ":$AGENT_PORT" >/dev/null 2>&1; then break; fi
-    sleep 1
-  done
+  # 先尝试优雅关闭 (SIGTERM)，等待 2 秒再强制 (SIGKILL)
+  kill $OLD_PIDS 2>/dev/null; sleep 2
   if lsof -ti ":$AGENT_PORT" >/dev/null 2>&1; then
-    echo "❌ 无法关闭旧进程，请手动处理"; exit 1
+    kill -9 $OLD_PIDS 2>/dev/null; sleep 1
+    for i in $(seq 1 5); do
+      if ! lsof -ti ":$AGENT_PORT" >/dev/null 2>&1; then break; fi
+      sleep 1
+    done
   fi
+  if lsof -ti ":$AGENT_PORT" >/dev/null 2>&1; then
+    # 备选方案：使用 fuser
+    fuser -k -9 "$AGENT_PORT"/tcp 2>/dev/null; sleep 1
+  fi
+  if lsof -ti ":$AGENT_PORT" >/dev/null 2>&1; then
+    echo "❌ 无法关闭旧进程，请手动处理: kill -9 $OLD_PIDS"; exit 1
+  fi
+  rm -f "$PIDFILE"
   echo "✅ 旧进程已关闭"; echo ""
 fi
 
