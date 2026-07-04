@@ -734,20 +734,77 @@ function handleStreamEvent(data) {
           }
         }
 
-        // Diff 视图
+        // Diff 视图（使用 CSS 类 + 行号 + 可折叠，匹配截图效果）
         if (data.diff && data.diff.diff) {
           const diffArea = card.querySelector('.tool-card-body');
           if (diffArea) {
+            const filePath = data.diff_file_path || '';
             const diffWrap = document.createElement('div');
-            diffWrap.style.marginTop = '8px';
-            diffWrap.innerHTML = '<div class="tool-section-label">文件变更 <span style="font-weight:400">(+' + (data.diff.added||0) + '/-' + (data.diff.removed||0) + ')</span></div>';
-            const diffCode = document.createElement('pre');
-            diffCode.className = 'tool-code-block';
-            diffCode.style.maxHeight = '200px';
-            diffCode.innerHTML = data.diff.diff.map(d =>
-              `<span style="${d.t==='+'?'color:#4ade80':d.t==='-'?'color:#f87171':'color:#888'}">${escapeHtml(d.t + d.c)}</span>`
-            ).join('\n');
-            diffWrap.appendChild(diffCode);
+            diffWrap.className = 'diff-view';
+
+            // ── 可折叠的标题栏 ──
+            const toggle = document.createElement('div');
+            toggle.className = 'diff-toggle open';
+            toggle.addEventListener('click', function () {
+              this.classList.toggle('open');
+              var body = this.nextElementSibling;
+              if (body) body.style.display = body.style.display === 'none' ? '' : 'none';
+            });
+            const arrow = document.createElement('span');
+            arrow.className = 'diff-arrow';
+            arrow.textContent = '▶';
+            const summary = document.createElement('span');
+            summary.className = 'diff-summary';
+            summary.textContent = filePath ? escapeHtml(filePath) : '文件变更';
+            const counts = document.createElement('span');
+            counts.style.marginLeft = 'auto';
+            counts.style.fontSize = '12px';
+            counts.innerHTML = '<span class="diff-added-count">+' + (data.diff.added || 0) + '</span>'
+              + ' <span class="diff-removed-count">-' + (data.diff.removed || 0) + '</span>';
+            toggle.appendChild(arrow);
+            toggle.appendChild(summary);
+            toggle.appendChild(counts);
+            diffWrap.appendChild(toggle);
+
+            // ── Diff 内容区 ──
+            const diffBody = document.createElement('div');
+            diffBody.className = 'diff-body';
+            var oldLn = 1, newLn = 1;
+            for (var di = 0; di < data.diff.diff.length; di++) {
+              var d = data.diff.diff[di];
+              var line = document.createElement('div');
+              line.className = 'diff-line';
+              var lineNumHtml = '', prefixHtml = '';
+              switch (d.t) {
+                case '+':
+                  line.classList.add('diff-add');
+                  lineNumHtml = '<span style="color:#81c784;min-width:32px;display:inline-block;text-align:right;margin-right:8px;user-select:none;">' + newLn + '</span>';
+                  prefixHtml = '<span style="color:#81c784;font-weight:700;margin-right:4px;user-select:none;">+</span>';
+                  newLn++;
+                  break;
+                case '-':
+                  line.classList.add('diff-remove');
+                  lineNumHtml = '<span style="color:#e57373;min-width:32px;display:inline-block;text-align:right;margin-right:8px;user-select:none;">' + oldLn + '</span>';
+                  prefixHtml = '<span style="color:#e57373;font-weight:700;margin-right:4px;user-select:none;">-</span>';
+                  oldLn++;
+                  break;
+                case ' ':
+                  line.classList.add('diff-keep');
+                  lineNumHtml = '<span style="color:#aaa;min-width:32px;display:inline-block;text-align:right;margin-right:8px;user-select:none;">' + oldLn + '</span>';
+                  prefixHtml = '<span style="color:#ccc;margin-right:4px;user-select:none;"> </span>';
+                  oldLn++;
+                  newLn++;
+                  break;
+                case '…':
+                  line.classList.add('diff-more');
+                  line.innerHTML = d.c;
+                  diffBody.appendChild(line);
+                  continue; // 跳过行号渲染
+              }
+              line.innerHTML = lineNumHtml + prefixHtml + escapeHtml(d.c);
+              diffBody.appendChild(line);
+            }
+            diffWrap.appendChild(diffBody);
             diffArea.appendChild(diffWrap);
           }
         }

@@ -1070,6 +1070,9 @@ class DesktopAgent:
                     
                     # 工具参数
                     inp = event.get("data", {}).get("input", {})
+                    # 将工具入参存入 running_tools，供后续 tool_end 提取文件路径等
+                    if run_id in running_tools:
+                        running_tools[run_id]["input"] = inp
                     if isinstance(inp, dict):
                         args_preview = {k: str(v)[:2000] for k, v in inp.items() if not k.startswith("_")}
                     else:
@@ -1130,7 +1133,27 @@ class DesktopAgent:
                 # ── 工具结束 ──
                 elif kind == "on_tool_end":
                     output = event.get("data", {}).get("output", "")
-                    full_output = str(output)
+                    
+                    # ── 提取工具返回的纯文本内容 ──
+                    # LangGraph 的 on_tool_end 输出可能是：
+                    #   1) ToolMessage 对象 → 有 .content 属性
+                    #   2) 字符串 "content='...'" (str() repr)
+                    #   3) 纯文本
+                    full_output_raw = ""
+                    if hasattr(output, "content") and isinstance(output.content, str):
+                        full_output_raw = output.content
+                    else:
+                        _s = str(output).strip()
+                        # 去掉可能的 content= / content='...' 包装
+                        for _prefix in ("content=", "content='", 'content="'):
+                            if _s.startswith(_prefix):
+                                _s = _s[len(_prefix):]
+                        # 去掉末尾可能残留的单引号
+                        if len(_s) > 1 and _s.endswith("'") and not _s.endswith("\\'"):
+                            _s = _s[:-1]
+                        full_output_raw = _s
+
+                    full_output = full_output_raw
                     output_str = full_output[:500]  # 先截断用于显示
                     tool_name = event.get("name", "")
                     run_id = event.get("run_id", "")
@@ -1142,16 +1165,38 @@ class DesktopAgent:
 
                     # 提取内嵌的 diff 数据（从完整输出中查找，不受截断影响）
                     diff_data = None
-                    marker = "\n__DIFF__:"
-                    if marker in full_output:
-                        idx = full_output.index(marker)
-                        output_str = full_output[:idx].strip()[:500]  # 重新截断不含 diff 的部分
-                        is_error = bool(output_str.strip().startswith("❌"))
-                        try:
-                            diff_data = json.loads(full_output[idx + len(marker):])
-                        except (json.JSONDecodeError, ValueError):
-                            pass
+                    # 尝试从可能的 JSON 包装中提取纯文本（如 {"content": "..."} 格式）
+                    raw_output = full_output
+                    try:
+                        _parsed = json.loads(full_output)
+                        if isinstance(_parsed, dict):
+                            for _key in ("content", "output", "result", "text"):
+                                if isinstance(_parsed.get(_key), str) and "__DIFF__:" in _parsed[_key]:
+                                    raw_output = _parsed[_key]
+                                    break
+                    except (json.JSONDecodeError, ValueError):
+                        pass
+
+                    for _marker in ("\n__DIFF__:", "__DIFF__:"):
+                        if _marker in raw_output:
+                            idx = raw_output.index(_marker)
+                            output_str = raw_output[:idx].strip()[:500]  # 重新截断不含 diff 的部分
+                            is_error = bool(output_str.strip().startswith("❌"))
+                            try:
+                                diff_data = json.loads(raw_output[idx + len(_marker):])
+                                logger.debug("[DIFF] 成功提取 diff: added=%s removed=%s",
+                                             diff_data.get("added"), diff_data.get("removed"))
+                            except (json.JSONDecodeError, ValueError) as _de:
+                                logger.warning("[DIFF] JSON 解析失败: %s", _de)
+                            break
                     
+                    # 提取文件路径（用于前端 diff 展示）
+                    diff_file_path = ""
+                    if diff_data and tinfo:
+                        tool_input = tinfo.get("input", {})
+                        if isinstance(tool_input, dict):
+                            diff_file_path = tool_input.get("path", "")
+
                     yield _sse({
                         "type": "tool_result",
                         "tool": tool_name,
@@ -1160,6 +1205,7 @@ class DesktopAgent:
                         "result_full": full_output if tool_name == "run_python" else "",
                         "error": is_error,
                         "diff": diff_data,
+                        "diff_file_path": diff_file_path,
                     })
 
                     # ── 工具调用结束日志 ──

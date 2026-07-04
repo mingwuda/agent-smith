@@ -211,7 +211,7 @@
   .diff-summary { color:#555; }
   .diff-added-count { color:#2e7d32; font-weight:600; }
   .diff-removed-count { color:#c62828; font-weight:600; }
-  .diff-body { margin-top:4px; border:1px solid #e0e0e3; border-radius:6px; overflow:hidden; font-family:"SF Mono",Menlo,monospace; font-size:12px; line-height:1.55; max-height:400px; overflow-y:auto; }
+  .diff-body { margin-top:4px; border:1px solid #e0e0e3; border-radius:6px; font-family:"SF Mono",Menlo,monospace; font-size:12px; line-height:1.55; max-height:400px; overflow-y:auto; }
   .diff-line { padding:1px 10px; white-space:pre; overflow-x:auto; }
   .diff-line.diff-add { background:#e8f5e9; color:#2e7d32; }
   .diff-line.diff-remove { background:#ffebee; color:#c62828; }
