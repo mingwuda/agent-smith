@@ -354,6 +354,161 @@ class WeChatBot:
                 logger.warning("[微信Bot] sendmessage 非 JSON: status=%s body=%s", resp.status_code, resp_text[:200])
                 return {"ret": -1}
 
+    async def send_image(
+        self, to_user_id: str, context_token: str, image_path: str
+    ) -> dict:
+        """发送图片消息（上传到 CDN 后再发送）
+
+        流程:
+          1. 读取图片文件 → AES-128-ECB 加密 → 计算 MD5 和大小
+          2. POST /ilink/bot/getuploadurl 获取上传参数
+          3. POST CDN /upload 上传加密后的图片数据
+          4. POST /ilink/bot/sendmessage 发送消息（含 image_item）
+        """
+        import hashlib
+        import subprocess
+
+        base = self.bot_base_url or ILINK_BASE_URL
+        cdn_base = ILINK_CDN_BASE
+
+        try:
+            # 1. 读取图片文件
+            with open(image_path, "rb") as f:
+                raw_data = f.read()
+        except Exception as e:
+            logger.warning("[微信Bot] 读取图片失败: %s", e)
+            return {"ret": -1, "error": str(e)}
+
+        raw_size = len(raw_data)
+        raw_md5 = hashlib.md5(raw_data).hexdigest()
+        filekey = uuid.uuid4().hex
+        aes_key = uuid.uuid4().hex[:32]  # 32 hex chars = 16 bytes
+
+        # 2. AES-128-ECB 加密（用 OpenSSL）
+        try:
+            result = subprocess.run(
+                ['openssl', 'enc', '-e', '-aes-128-ecb', '-K', aes_key, '-nosalt'],
+                input=raw_data,
+                capture_output=True,
+                timeout=30,
+            )
+            if result.returncode != 0 or not result.stdout:
+                raise RuntimeError(f"OpenSSL encrypt failed: {result.stderr.decode()[:200]}")
+            encrypted_data = result.stdout
+        except Exception as e:
+            logger.warning("[微信Bot] 图片加密失败: %s", e)
+            return {"ret": -1, "error": str(e)}
+
+        encrypted_size = len(encrypted_data)
+
+        # 3. 获取上传 URL
+        try:
+            async with httpx.AsyncClient(timeout=30, trust_env=False, verify=False) as client:
+                resp = await client.post(
+                    f"{base}/ilink/bot/getuploadurl",
+                    headers=self._auth_headers(),
+                    json={
+                        "filekey": filekey,
+                        "media_type": 1,  # IMAGE
+                        "to_user_id": to_user_id,
+                        "rawsize": raw_size,
+                        "rawfilemd5": raw_md5,
+                        "filesize": encrypted_size,
+                        "no_need_thumb": True,
+                        "aeskey": aes_key,
+                    },
+                )
+                data = resp.json()
+                upload_param = data.get("upload_param") or ""
+                if not upload_param:
+                    upload_full_url = data.get("upload_full_url", "")
+                    if upload_full_url:
+                        import urllib.parse
+                        parsed = urllib.parse.urlparse(upload_full_url)
+                        qs = urllib.parse.parse_qs(parsed.query)
+                        upload_param = qs.get("encrypted_query_param", [""])[0]
+                if not upload_param:
+                    logger.warning("[微信Bot] getuploadurl 返回无 upload_param: %s", str(data)[:200])
+                    return {"ret": -1}
+        except Exception as e:
+            logger.warning("[微信Bot] getuploadurl 请求失败: %s", e)
+            return {"ret": -1, "error": str(e)}
+
+        # 4. 上传到 CDN
+        import urllib.parse
+        cdn_upload_url = (
+            f"{cdn_base}/upload?encrypted_query_param={urllib.parse.quote(upload_param, safe='')}"
+            f"&filekey={urllib.parse.quote(filekey, safe='')}"
+        )
+        try:
+            async with httpx.AsyncClient(timeout=60, trust_env=False, verify=False) as client:
+                resp = await client.post(
+                    cdn_upload_url,
+                    content=encrypted_data,
+                    headers={"Content-Type": "application/octet-stream"},
+                )
+                if resp.status_code != 200:
+                    logger.warning("[微信Bot] CDN 上传失败: HTTP %s", resp.status_code)
+                    return {"ret": -1}
+                download_param = resp.headers.get("x-encrypted-param")
+                if not download_param:
+                    logger.warning("[微信Bot] CDN 上传响应缺少 x-encrypted-param")
+                    return {"ret": -1}
+        except Exception as e:
+            logger.warning("[微信Bot] CDN 上传请求失败: %s", e)
+            return {"ret": -1, "error": str(e)}
+
+        # 5. 发送图片消息
+        # media.aes_key 在 iLink 协议中是 hex 字符串的 UTF-8 base64 编码
+        import base64 as b64_mod
+        aes_key_b64 = b64_mod.b64encode(aes_key.encode("utf-8")).decode("ascii")
+        payload = {
+            "msg": {
+                "from_user_id": "",
+                "to_user_id": to_user_id,
+                "client_id": f"bot-{uuid.uuid4().hex[:12]}",
+                "message_type": 2,
+                "message_state": 2,
+                "context_token": context_token,
+                "item_list": [{
+                    "type": 2,  # IMAGE
+                    "image_item": {
+                        "media": {
+                            "encrypt_query_param": download_param,
+                            "aes_key": aes_key_b64,
+                            "encrypt_type": 1,
+                        },
+                        "mid_size": encrypted_size,
+                    },
+                }],
+            },
+            "base_info": {"channel_version": "1.0.3"},
+        }
+        raw_bytes = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        headers = {
+            **self._auth_headers(),
+            "Content-Length": str(len(raw_bytes)),
+        }
+        try:
+            async with httpx.AsyncClient(timeout=30, trust_env=False, verify=False) as client:
+                resp = await client.post(
+                    f"{base}/ilink/bot/sendmessage",
+                    content=raw_bytes,
+                    headers=headers,
+                )
+                resp_text = resp.text.strip()
+                if resp_text == "{}" or resp_text == '{"ret":0}':
+                    logger.info("[微信Bot] 图片消息发送成功: %s -> %s", image_path[:60], to_user_id[:16])
+                    return {"ret": 0}
+                try:
+                    return json.loads(resp_text)
+                except json.JSONDecodeError:
+                    logger.warning("[微信Bot] sendmessage 非 JSON: %s", resp_text[:200])
+                    return {"ret": -1}
+        except Exception as e:
+            logger.warning("[微信Bot] 发送图片消息失败: %s", e)
+            return {"ret": -1, "error": str(e)}
+
     async def _download_image_as_data_url(self, img_data: dict) -> Optional[str]:
         """下载微信 iLink 图片并转换为 data URL（base64 编码），供多模态 LLM 使用。
 
