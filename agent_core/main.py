@@ -112,9 +112,8 @@ if UI_DIR.exists():
     if ui_index.exists():
         _html_content = ui_index.read_text(encoding="utf-8")
         logger.info("📁 桌面 UI: %s", UI_DIR / "index.html")
-
-# 挂载静态文件目录，使 index.html 中的 /static/libs/、/static/styles/、/static/js/ 可访问
-app.mount("/static", StaticFiles(directory=str(UI_DIR), html=True), name="static")
+    # 挂载静态文件目录，使 index.html 中的 /static/libs/、/static/styles/、/static/js/ 可访问
+    app.mount("/static", StaticFiles(directory=str(UI_DIR), html=True), name="static")
 
 # 给静态文件添加 no-cache 头，避免浏览器缓存旧版本 JS/CSS
 @app.middleware("http")
