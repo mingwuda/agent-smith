@@ -20,6 +20,9 @@ import httpx
 from logger import get_logger
 import session_store
 
+# 暂存图片最久保留时间（秒），超时自动清理，防止内存泄漏
+PENDING_IMAGE_TTL = 300  # 5 分钟
+
 logger = get_logger(__name__)
 
 ILINK_BASE_URL = "https://ilinkai.weixin.qq.com"
@@ -189,6 +192,7 @@ class WeChatBot:
         self._seen_msg_ids: set[str] = set()
         self._wechat_sessions: dict[str, str] = {}  # wx_user_id → current session_id
         # 暂存用户最近发送的图片（key=from_user），等待后续文本合并为图文消息
+        # 值: {"data": dict, "time": float}，5 分钟后自动清理
         self._pending_images: dict[str, dict] = {}
         # 自适应轮询间隔
         self._last_activity_at: float = time.time()
@@ -628,7 +632,7 @@ class WeChatBot:
         # ── 纯图片消息（无文本）：暂存，等待后续文本合并 ──
         if not text:
             if image_data:
-                self._pending_images[from_user] = image_data
+                self._pending_images[from_user] = {"data": image_data, "time": time.time()}
                 self._mark_activity()
                 logger.info("[微信Bot:%s] 收到用户 %s 的图片，已暂存等待后续文字提问", self.user_id, from_user[:16])
             return
@@ -732,7 +736,8 @@ class WeChatBot:
         attachments = None
 
         # 优先使用当前消息中自带的图片，其次使用之前暂存的图片
-        img_to_use = image_data or self._pending_images.pop(from_user, None)
+        pending_entry = self._pending_images.pop(from_user, None)
+        img_to_use = image_data or (pending_entry["data"] if pending_entry else None)
         if img_to_use:
             try:
                 data_url = await self._download_image_as_data_url(img_to_use)
@@ -882,6 +887,10 @@ class WeChatBot:
             idle_time = time.time() - self._last_activity_at
             self._poll_delay = FAST_INTERVAL if idle_time < IDLE_TIMEOUT else SLOW_INTERVAL
 
+            # 定期清理过期的暂存图片（每轮最多检查一次）
+            if self._pending_images:
+                self._cleanup_expired_pending_images()
+
             if self._poll_delay > 0:
                 await asyncio.sleep(self._poll_delay)
 
@@ -906,3 +915,14 @@ class WeChatBot:
         """标记有消息活动，重置轮询为快速模式"""
         self._last_activity_at = time.time()
         self._poll_delay = 0.0
+
+    def _cleanup_expired_pending_images(self):
+        """清理超时未消费的暂存图片，防止内存泄漏。"""
+        now = time.time()
+        expired = [uid for uid, entry in self._pending_images.items()
+                   if now - entry.get("time", 0) > PENDING_IMAGE_TTL]
+        if expired:
+            for uid in expired:
+                self._pending_images.pop(uid, None)
+            logger.info("[微信Bot:%s] 已清理 %d 条超时暂存图片（TTL=%ds）",
+                        self.user_id, len(expired), PENDING_IMAGE_TTL)
