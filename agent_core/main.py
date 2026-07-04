@@ -1584,9 +1584,16 @@ def list_sessions(request: Request):
         len(wechat_sessions),
         [(s["id"], s.get("message_count", 0)) for s in wechat_sessions[:5]],
     )
+    # 用 dict 去重（ID 相同时取消息数更多的版本），确保会话列表显示的是最新的消息量
+    session_map: dict[str, SessionInfo] = {}
+    for s in web_sessions:
+        session_map[s["id"]] = SessionInfo(**s, source="web")
     for s in wechat_sessions:
-        if not any(ex.id == s["id"] for ex in sessions):
-            sessions.append(SessionInfo(**s, source="wechat"))
+        sid = s["id"]
+        existing = session_map.get(sid)
+        if existing is None or (s.get("message_count", 0) or 0) > (existing.message_count or 0):
+            session_map[sid] = SessionInfo(**s, source="wechat" if existing is None else existing.source)
+    sessions = list(session_map.values())
     sessions.sort(key=lambda s: s.updated_at, reverse=True)
     current_id = sessions[0].id if sessions else "default"
     return SessionListResponse(sessions=sessions, current_id=current_id)
@@ -1597,16 +1604,24 @@ def get_session(session_id: str, request: Request):
     """获取当前用户的会话消息（也支持微信 Bot 会话）"""
     uid = _get_current_user(request)
     session = session_store.get_session(uid, session_id)
-    # 如果当前用户没有，尝试从该用户的微信 Bot 会话中查找
-    if not session:
-        session = session_store.get_session(f"wechat_{uid}", session_id)
+    is_wechat = False
+    # 如果该会话也存在于微信 Bot 命名空间，优先使用微信端的消息（消息更新）
+    wechat_session = session_store.get_session(f"wechat_{uid}", session_id)
+    if wechat_session:
+        wechat_msgs = wechat_session.get("messages", [])
+        if wechat_msgs:
+            session = wechat_session
+            is_wechat = True
+        elif not session:
+            session = wechat_session
+            is_wechat = True
     if not session:
         raise HTTPException(404, "会话不存在")
     return SessionMessagesResponse(
         id=session["id"],
         title=session.get("title", "未命名"),
         messages=session.get("messages", []),
-        source="wechat" if session_store.get_session(f"wechat_{uid}", session_id) else "web",
+        source="wechat" if is_wechat else "web",
     )
 
 
