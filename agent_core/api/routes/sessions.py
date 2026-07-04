@@ -85,21 +85,32 @@ def list_sessions(request: Request):
 
 
 @router.get("/sessions/{session_id}", response_model=SessionMessagesResponse)
-def get_session(session_id: str, request: Request):
-    """获取当前用户的会话消息（也支持微信 Bot 会话）"""
+def get_session(session_id: str, request: Request, source: str = "auto"):
+    """获取当前用户的会话消息（也支持微信 Bot 会话）
+
+    参数:
+      source: "auto"（默认,优先 Web 再降级微信），"web"（只查 Web），"wechat"（只查微信）
+    """
     uid = _get_current_user(request)
-    session = session_store.get_session(uid, session_id)
     is_wechat = False
-    # 如果该会话也存在于微信 Bot 命名空间，优先使用微信端的消息（消息更新）
-    wechat_session = session_store.get_session(f"wechat_{uid}", session_id)
-    if wechat_session:
-        wechat_msgs = wechat_session.get("messages", [])
-        if wechat_msgs:
-            session = wechat_session
-            is_wechat = True
-        elif not session:
-            session = wechat_session
-            is_wechat = True
+    session = None
+
+    if source == "wechat":
+        # 明确指定查微信
+        session = session_store.get_session(f"wechat_{uid}", session_id)
+        is_wechat = True
+    elif source == "web":
+        # 明确指定查 Web
+        session = session_store.get_session(uid, session_id)
+    else:
+        # auto: 优先 Web，Web 不存在时才降级到微信
+        session = session_store.get_session(uid, session_id)
+        if not session:
+            wechat_session = session_store.get_session(f"wechat_{uid}", session_id)
+            if wechat_session:
+                session = wechat_session
+                is_wechat = True
+
     if not session:
         raise HTTPException(404, "会话不存在")
     return SessionMessagesResponse(
