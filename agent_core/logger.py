@@ -131,8 +131,12 @@ def setup_logging(
             handler.close()
 
     # 静默 httpx 的请求日志（轮询消息太频繁）
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    # 使用 Filter 而非 setLevel，因为 httpx._client 在导入时可能已缓存 logger
+    class _HttpxFilter(logging.Filter):
+        def filter(self, record: logging.LogRecord) -> bool:
+            return not (record.name in ("httpx", "httpcore")
+                        and record.levelno <= logging.INFO)
+    root.addFilter(_HttpxFilter())
 
     # ── 文件 Handler：每 7 天滚动一次 ──
     file_handler = TimedRotatingFileHandler(
