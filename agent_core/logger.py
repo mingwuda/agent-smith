@@ -130,6 +130,10 @@ def setup_logging(
             root.removeHandler(handler)
             handler.close()
 
+    # 静默 httpx 的请求日志（轮询消息太频繁）
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+
     # ── 文件 Handler：每 7 天滚动一次 ──
     file_handler = TimedRotatingFileHandler(
         log_path,
