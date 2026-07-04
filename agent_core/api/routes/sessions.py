@@ -69,16 +69,12 @@ def list_sessions(request: Request):
         len(wechat_sessions),
         [(s["id"], s.get("message_count", 0)) for s in wechat_sessions[:5]],
     )
-    # 用 dict 去重（ID 相同时取消息数更多的版本），确保会话列表显示的是最新的消息量
-    session_map: dict[str, SessionInfo] = {}
-    for s in web_sessions:
-        session_map[s["id"]] = SessionInfo(**s, source="web")
+    # 不再去重，Web 和微信会话各自独立展示
+    sessions: list[SessionInfo] = [
+        SessionInfo(**s, source="web") for s in web_sessions
+    ]
     for s in wechat_sessions:
-        sid = s["id"]
-        existing = session_map.get(sid)
-        if existing is None or (s.get("message_count", 0) or 0) > (existing.message_count or 0):
-            session_map[sid] = SessionInfo(**s, source="wechat" if existing is None else existing.source)
-    sessions = list(session_map.values())
+        sessions.append(SessionInfo(**s, source="wechat"))
     sessions.sort(key=lambda s: s.updated_at, reverse=True)
     current_id = sessions[0].id if sessions else "default"
     return SessionListResponse(sessions=sessions, current_id=current_id)

@@ -124,6 +124,7 @@
   .session-item { padding:10px 16px; cursor:pointer; border-left:3px solid transparent; transition:all .15s; position:relative; }
   .session-item:hover { background:#2c2c2e; }
   .session-item.active { background:#2c2c2e; border-left-color:#007aff; }
+  .session-item.active.session-wechat { border-left-color:#34c759; }
   .session-item .s-title { font-size:13px; font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .session-item .s-meta { font-size:11px; color:#8e8e93; margin-top:2px; display:flex; gap:8px; }
   .session-item .s-del { margin-left:auto; background:transparent; border:none; color:#8e8e93; cursor:pointer; font-size:14px; padding:0 2px; visibility:hidden; }

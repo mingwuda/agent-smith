@@ -37,10 +37,10 @@ setInterval(loadSessions, 60000);
     await loadSessions();
     // 如果有历史会话，加载当前高亮会话的消息
     if (sessionsCache.length > 0) {
-      const initialSessionId = currentSessionId && sessionsCache.find(s => s.id === currentSessionId)
-        ? currentSessionId
-        : sessionsCache[0].id;
-      await switchSession(initialSessionId, true);
+      const initialSession = currentSessionId && sessionsCache.find(s => s.id === currentSessionId)
+        ? { id: currentSessionId, source: (sessionsCache.find(s => s.id === currentSessionId) || {}).source || 'web' }
+        : sessionsCache[0];
+      await switchSession(initialSession.id, initialSession.source, true);
     } else {
       addMessage(t('welcome'), 'bot');
       addMessage(t('welcomeCapabilities'), 'bot');

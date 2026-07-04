@@ -4,6 +4,12 @@
 
 // ---------- 会话管理 ----------
 
+let currentSessionSource = '';  // 当前会话来源: "web" / "wechat" / ""
+
+function _sessionKey(s) {
+  return s.id + '_' + s.source;
+}
+
 function renderSessionList(sessions, currentId) {
   const container = document.getElementById('session-list');
   if (!sessions || sessions.length === 0) {
@@ -11,12 +17,15 @@ function renderSessionList(sessions, currentId) {
     return;
   }
   container.innerHTML = sessions.map(s => {
-    const isActive = s.id === currentId;
+    const key = _sessionKey(s);
+    const isActive = s.id === currentId && s.source === currentSessionSource;
     const time = s.updated_at ? s.updated_at.slice(5, 16).replace('T', ' ') : '';
-    return `<div class="session-item ${isActive ? 'active' : ''} ${s.source === 'wechat' ? 'session-wechat' : ''}" data-id="${s.id}" onclick="switchSession('${s.id}')">
-      <div class="s-title">${s.source === 'wechat' ? '<span class="wechat-icon" title="微信会话">💬</span> ' : ''}${escapeHtml(s.title || t('unnamed'))}</div>
+    const isWechat = s.source === 'wechat';
+    const title = isWechat ? '💬 ' + (s.title || escapeHtml(t('unnamed'))) : escapeHtml(s.title || t('unnamed'));
+    return `<div class="session-item ${isActive ? 'active' : ''} ${isWechat ? 'session-wechat' : ''}" data-key="${key}" onclick="switchSession('${s.id}','${s.source}')">
+      <div class="s-title">${title}</div>
       <div class="s-meta">
-        <span>${escapeHtml(t('messagesCount', { count: s.message_count || 0 }))}</span>
+        <span>${isWechat ? '💬 ' : ''}${escapeHtml(t('messagesCount', { count: s.message_count || 0 }))}</span>
         <span>${time}</span>
         <button class="s-del" onclick="event.stopPropagation(); deleteSession('${s.id}')" title="${escapeHtml(t('deleteTitle'))}">✕</button>
       </div>
@@ -32,18 +41,20 @@ async function loadSessions() {
     sessionsCache = data.sessions || [];
     if (!currentSessionId) {
       currentSessionId = data.current_id || (sessionsCache[0] && sessionsCache[0].id) || null;
+      currentSessionSource = (sessionsCache[0] && sessionsCache[0].source) || '';
       threadId = currentSessionId || threadId;
     }
     // 如果服务端返回的当前会话不在列表中，优先回落到最新会话，避免加载不存在的 default。
-    if (currentSessionId && !sessionsCache.find(s => s.id === currentSessionId)) {
+    if (currentSessionId && !sessionsCache.find(s => s.id === currentSessionId && s.source === currentSessionSource)) {
       currentSessionId = (sessionsCache[0] && sessionsCache[0].id) || null;
+      currentSessionSource = (sessionsCache[0] && sessionsCache[0].source) || '';
       threadId = currentSessionId || threadId;
     }
     renderSessionList(sessionsCache, currentSessionId);
   } catch {}
 }
 
-async function loadSessionMessages(sessionId) {
+async function loadSessionMessages(sessionId, source) {
   const container = document.getElementById('messages');
   // 立即清空旧消息，避免切换会话时短暂残留上一会话内容
   container.innerHTML = '';
@@ -55,7 +66,8 @@ async function loadSessionMessages(sessionId) {
   container.appendChild(loadingHint);
 
   try {
-    const res = await fetch(`/sessions/${sessionId}`);
+    const qs = source ? `?source=${encodeURIComponent(source)}` : '';
+    const res = await fetch(`/sessions/${sessionId}${qs}`);
     // 无论成功失败都先移除加载提示
     const hint = document.getElementById('__session_loading_hint__');
     if (hint) hint.remove();
@@ -140,14 +152,15 @@ function addBotMessageWithSteps(content, steps) {
   currentStepsEl = null;
 }
 
-async function switchSession(sessionId, forceLoad = false) {
-  if (sessionId === currentSessionId && !forceLoad) return;
+async function switchSession(sessionId, source, forceLoad = false) {
+  if (sessionId === currentSessionId && source === currentSessionSource && !forceLoad) return;
   currentSessionId = sessionId;
+  currentSessionSource = source || 'web';
   threadId = sessionId;
 
   // 更新激活样式
   document.querySelectorAll('.session-item').forEach(el => {
-    el.classList.toggle('active', el.dataset.id === sessionId);
+    el.classList.toggle('active', el.dataset.key === _sessionKey({id: sessionId, source: currentSessionSource}));
   });
 
   // 在选中的会话项上展示 loading 动画
@@ -156,7 +169,7 @@ async function switchSession(sessionId, forceLoad = false) {
 
   try {
     // 加载该会话的历史消息（内部已立即清空旧消息）
-    await loadSessionMessages(sessionId);
+    await loadSessionMessages(sessionId, currentSessionSource);
     refreshStats();
     // 加载该会话的工作目录
     loadWorkspaceDisplay();
@@ -172,6 +185,7 @@ async function newSession() {
     if (!res.ok) return;
     const data = await res.json();
     currentSessionId = data.id;
+    currentSessionSource = 'web';
     threadId = data.id;
     // 清空消息区域
     document.getElementById('messages').innerHTML = '';
@@ -186,9 +200,9 @@ async function deleteSession(sessionId) {
     await fetch(`/sessions/${sessionId}`, { method: 'DELETE' });
     if (sessionId === currentSessionId) {
       // 当前会话被删除，切到第一个或新建
-      const remaining = sessionsCache.filter(s => s.id !== sessionId);
+      const remaining = sessionsCache.filter(s => s.id !== sessionId || s.source !== currentSessionSource);
       if (remaining.length > 0) {
-        switchSession(remaining[0].id);
+        switchSession(remaining[0].id, remaining[0].source);
       } else {
         newSession();
       }
