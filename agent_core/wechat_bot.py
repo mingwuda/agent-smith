@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import random
+import time
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -189,6 +190,9 @@ class WeChatBot:
         self._wechat_sessions: dict[str, str] = {}  # wx_user_id → current session_id
         # 暂存用户最近发送的图片（key=from_user），等待后续文本合并为图文消息
         self._pending_images: dict[str, dict] = {}
+        # 自适应轮询间隔
+        self._last_activity_at: float = time.time()
+        self._poll_delay: float = 0.0  # 当前轮询间隔（秒），0=无延迟
 
         os.makedirs(self.data_dir, exist_ok=True)
 
@@ -625,6 +629,7 @@ class WeChatBot:
         if not text:
             if image_data:
                 self._pending_images[from_user] = image_data
+                self._mark_activity()
                 logger.info("[微信Bot:%s] 收到用户 %s 的图片，已暂存等待后续文字提问", self.user_id, from_user[:16])
             return
 
@@ -634,6 +639,7 @@ class WeChatBot:
             logger.debug("[微信Bot] 跳过重复消息: %s", text[:60])
             return
         self._seen_msg_ids.add(msg_id)
+        self._mark_activity()
 
         logger.info("[微信Bot:%s] 收到: %s  (context_token=%s...)", self.user_id, text[:120], (context_token or "")[:16])
 
@@ -867,8 +873,18 @@ class WeChatBot:
         return bool(self.bot_token)
 
     async def _poll_loop(self):
-        """主轮询循环"""
+        """主轮询循环（含自适应间隔）"""
+        IDLE_TIMEOUT = 60        # 无消息持续 N 秒后进入慢速模式
+        FAST_INTERVAL = 0.0      # 活跃时无延迟
+        SLOW_INTERVAL = 30.0     # 空闲时每 N 秒轮询一次
+
         while self._running:
+            idle_time = time.time() - self._last_activity_at
+            self._poll_delay = FAST_INTERVAL if idle_time < IDLE_TIMEOUT else SLOW_INTERVAL
+
+            if self._poll_delay > 0:
+                await asyncio.sleep(self._poll_delay)
+
             try:
                 msgs = await self.poll_messages()
                 for msg in msgs:
@@ -885,3 +901,8 @@ class WeChatBot:
             except Exception as e:
                 logger.error("[微信Bot] 轮询异常: %s", e)
                 await asyncio.sleep(5)
+
+    def _mark_activity(self):
+        """标记有消息活动，重置轮询为快速模式"""
+        self._last_activity_at = time.time()
+        self._poll_delay = 0.0
