@@ -25,6 +25,9 @@ from langchain_core.tools import tool
 
 logger = logging.getLogger(__name__)
 
+# 截图保留天数，超时自动清理（与日志滚动策略一致）
+SCREENSHOT_RETENTION_DAYS = 7
+
 # 专用浏览器线程和事件循环，避免与主线程事件循环冲突
 _browser_loop: Optional[asyncio.AbstractEventLoop] = None
 _browser_thread: Optional[threading.Thread] = None
@@ -130,6 +133,31 @@ atexit.register(_stop_browser_loop)
 def set_workspace(path: Path):
     global _workspace
     _workspace = path.expanduser().resolve()
+    # 工作区变更时清理过期截图
+    _cleanup_expired_screenshots()
+
+
+def _cleanup_expired_screenshots():
+    """清理超过保留天数的截图文件（与日志滚动策略一致，默认 7 天）。"""
+    if not _workspace:
+        return
+    screenshot_dir = _workspace / ".browser_screenshots"
+    if not screenshot_dir.is_dir():
+        return
+    cutoff = time.time() - SCREENSHOT_RETENTION_DAYS * 86400
+    removed = 0
+    for fpath in screenshot_dir.iterdir():
+        if not fpath.is_file() or fpath.suffix.lower() != ".png":
+            continue
+        try:
+            if fpath.stat().st_mtime < cutoff:
+                fpath.unlink()
+                removed += 1
+        except OSError:
+            pass
+    if removed:
+        logger.info("🧹 已清理 %d 个过期截图文件（超过 %d 天）",
+                     removed, SCREENSHOT_RETENTION_DAYS)
 
 
 async def _ensure_browser(thread_id: str = "default"):
