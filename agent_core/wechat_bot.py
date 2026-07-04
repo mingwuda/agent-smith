@@ -875,8 +875,8 @@ class WeChatBot:
     async def _poll_loop(self):
         """主轮询循环（含自适应间隔）"""
         IDLE_TIMEOUT = 60        # 无消息持续 N 秒后进入慢速模式
-        FAST_INTERVAL = 0.0      # 活跃时无延迟
-        SLOW_INTERVAL = 30.0     # 空闲时每 N 秒轮询一次
+        FAST_INTERVAL = 0.0      # 活跃时无延迟（长轮询本身 hold 35s）
+        SLOW_INTERVAL = 60.0     # 空闲时每 N 秒轮询一次（35s + 60s ≈ 每 1.5 分钟一次）
 
         while self._running:
             idle_time = time.time() - self._last_activity_at
