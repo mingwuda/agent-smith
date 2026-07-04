@@ -49,6 +49,10 @@ from skills.registry import get_registry
 from memory.local_memory import get_memory
 import session_store
 import user_manager
+# 在导入 wechat_bot（会加载 httpx）之前静默其日志
+import logging
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 from wechat_bot import WeChatBot
 import qrcode
 
