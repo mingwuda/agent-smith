@@ -6,12 +6,12 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
-from ... import user_manager
-from ...agent import DesktopAgent as agent_class
-from ...config import AgentConfig
-from ...services.workspace import _workspace_for_user
-from ...tools import file_tools, shell_tools, browser_tools
-from ..deps import _get_current_user, _require_admin
+import user_manager
+from agent import DesktopAgent as agent_class
+from config import AgentConfig
+from services.workspace import _workspace_for_user
+from tools import file_tools, shell_tools, browser_tools
+from api.deps import _get_current_user, _require_admin
 from logger import get_logger
 
 logger = get_logger(__name__)
@@ -57,7 +57,7 @@ class UpdateUserRoleRequest(BaseModel):
 @router.get("/")
 def serve_ui():
     """提供桌面 UI"""
-    from ...main import _html_content
+    from main import _html_content
     if _html_content:
         headers = {"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache", "Expires": "0"}
         return HTMLResponse(_html_content, headers=headers)
@@ -133,7 +133,7 @@ def save_settings(req: SettingsRequest, request: Request):
         os.environ.pop("LLM_BASE_URL", None)
     
     # 重启 Agent
-    from ...main import agent as _main_agent, init_agent as _main_init
+    from main import agent as _main_agent, init_agent as _main_init
     try:
         _main_init()
         # 引用 _main_agent 确保新的 agent 实例可用
@@ -187,7 +187,7 @@ def delete_user(user_id: str):
 def get_my_user(request: Request):
     """获取当前登录用户的信息"""
     uid = _get_current_user(request)
-    from ...main import agent
+    from main import agent
     if agent:
         agent.set_user(uid)
     user = user_manager.get_user(uid)

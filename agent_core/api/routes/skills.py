@@ -4,9 +4,9 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from ...config import AgentConfig
-from ...skills.registry import get_registry
-from ..deps import _require_admin, _get_current_user
+from config import AgentConfig
+from skills.registry import get_registry
+from api.deps import _require_admin, _get_current_user
 from logger import get_logger
 
 logger = get_logger(__name__)
@@ -105,7 +105,7 @@ def _list_skill_files(skill_root: Path) -> list[SkillFileEntry]:
 @router.get("/skills", response_model=list[SkillInfo])
 def list_skills():
     """列出所有已加载的技能"""
-    from ...main import _app_base_dir
+    from main import _app_base_dir
     registry = get_registry()
     # 如果尚未加载技能，尝试加载
     if not registry.list_all():
@@ -133,7 +133,7 @@ def list_skills():
 @router.post("/skills/reload", response_model=ReloadResponse)
 def reload_skills():
     """热加载所有技能"""
-    from ...main import agent
+    from main import agent
     if not agent:
         raise HTTPException(503, "Agent 尚未初始化")
     count = agent.reload_skills()

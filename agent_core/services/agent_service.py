@@ -7,12 +7,12 @@ from typing import Any, Optional
 
 from fastapi import Request
 
-from .. import session_store
-from .. import user_manager
-from ..api.deps import _get_current_user, _workspace_for_user
-from ..tools import file_tools, browser_tools, shell_tools, git_tools, database_tool
-from ..skills.registry import get_registry
-from ..memory.local_memory import get_memory
+import session_store
+import user_manager
+from api.deps import _get_current_user, _workspace_for_user
+from tools import file_tools, browser_tools, shell_tools, git_tools, database_tool
+from skills.registry import get_registry
+from memory.local_memory import get_memory
 
 
 # ── 从 main.py 导出的函数 ──
@@ -42,7 +42,7 @@ def _is_skill_inventory_query(message: str) -> bool:
 
 
 def _image_model_override(attachments: list[dict]) -> str:
-    from ..main import agent
+    from main import agent
     if not attachments or not agent:
         return ""
     cfg = agent.config
@@ -99,7 +99,7 @@ def _resolve_user(request: Request) -> str:
     file_tools.set_workspace(_workspace_for_user(uid))
     shell_tools.set_workspace(_workspace_for_user(uid))
     browser_tools.set_workspace(_workspace_for_user(uid))
-    from ..main import agent
+    from main import agent
     if agent:
         agent.set_user(uid)
     # 设置数据库交互上下文（角色和用户信息，后续可从用户配置扩展）
@@ -135,7 +135,7 @@ def _apply_session_workspace(uid: str, session_id: str):
 async def _async_reflect(uid: str, user_message: str, steps: list[dict], result: str):
     """后台任务反思，总结可复用模式并存入长期记忆。"""
     try:
-        from ..main import agent
+        from main import agent
         if not agent:
             return
         reflection = await agent.reflect_on_task(user_message, steps, result)

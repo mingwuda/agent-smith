@@ -9,7 +9,7 @@ from pathlib import Path
 
 from fastapi import HTTPException, Request, Response
 
-from ..services.workspace import _workspace_for_user
+from services.workspace import _workspace_for_user
 
 # ---------- 认证常量 ----------
 

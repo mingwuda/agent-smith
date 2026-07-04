@@ -10,7 +10,7 @@ from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisco
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from ..deps import _get_current_user
+from api.deps import _get_current_user
 from logger import get_logger
 from monitoring.usage_tracker import get_tracker
 from memory.local_memory import get_memory
@@ -33,9 +33,9 @@ agent: Optional[DesktopAgent] = None
 def init_agent():
     """初始化 Agent（委托 main 模块，同步本地引用）"""
     global agent
-    from ...main import init_agent as _main_init
+    from main import init_agent as _main_init
     _main_init()
-    from ...main import agent as _main_agent
+    from main import agent as _main_agent
     agent = _main_agent
 
 

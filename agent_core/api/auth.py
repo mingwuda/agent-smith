@@ -10,7 +10,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
-from .deps import (
+from api.deps import (
     AUTH_COOKIE_NAME,
     AUTH_SESSION_SECONDS,
     AUTH_FILE,

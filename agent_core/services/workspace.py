@@ -12,8 +12,8 @@ from fastapi import HTTPException
 from fastapi import Request
 from urllib.parse import quote
 
-from .. import user_manager
-from ..session_store import add_message, get_session, create_session, rename_session, get_session_workspace
+import user_manager
+from session_store import add_message, get_session, create_session, rename_session, get_session_workspace
 
 
 # ── 从 main.py 导出的函数 ──

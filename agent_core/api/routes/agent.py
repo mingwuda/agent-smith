@@ -11,9 +11,9 @@ from fastapi import APIRouter, HTTPException, Request, Response, Query, WebSocke
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from ..deps import _get_current_user
-from ...services.workspace import _safe_attachments, _display_user_message, _user_image_urls, _append_artifact_links
-from ...services.agent_service import (
+from api.deps import _get_current_user
+from services.workspace import _safe_attachments, _display_user_message, _user_image_urls, _append_artifact_links
+from services.agent_service import (
     _ensure_session,
     _is_skill_inventory_query,
     _image_model_override,
@@ -26,7 +26,7 @@ from ...services.agent_service import (
 from logger import set_log_context, get_logger
 from config import AgentConfig
 from agent import DesktopAgent
-from ... import session_store
+import session_store
 
 logger = get_logger(__name__)
 
@@ -62,9 +62,9 @@ agent: Optional[DesktopAgent] = None
 def init_agent():
     """初始化 Agent（委托 main 模块，同步本地引用）"""
     global agent
-    from ...main import init_agent as _main_init
+    from main import init_agent as _main_init
     _main_init()
-    from ...main import agent as _main_agent
+    from main import agent as _main_agent
     agent = _main_agent
 
 

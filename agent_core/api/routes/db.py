@@ -6,8 +6,8 @@ import time
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from ... import session_store
-from ..deps import _get_current_user, _require_admin
+import session_store
+from api.deps import _get_current_user, _require_admin
 from logger import get_logger
 
 logger = get_logger(__name__)

@@ -6,8 +6,8 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 
-from ...services.workspace import _resolve_artifact_path, _relative_artifact_path, _workspace_for_user
-from ..deps import _get_current_user
+from services.workspace import _resolve_artifact_path, _relative_artifact_path, _workspace_for_user
+from api.deps import _get_current_user
 
 router = APIRouter(tags=["artifacts"])
 
