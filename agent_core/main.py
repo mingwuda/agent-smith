@@ -1026,12 +1026,24 @@ def _format_loaded_skills() -> str:
 
 
 def _save_assistant_result(uid: str, session_id: str, user_message: str, result: str, steps: Optional[list[dict]] = None):
+    # 存储前剥离历史浏览器截图引用，防止旧截图 URL 持久化到 session store
+    result = _strip_screenshot_urls(result)
     content = result
     if steps:
         content = json.dumps({"text": result, "steps": steps}, ensure_ascii=False)
     session_store.add_message(uid, session_id, "assistant", content)
     title = user_message[:30] + ("..." if len(user_message) > 30 else "")
     session_store.rename_session(uid, session_id, title or f"会话 {session_id[:8]}")
+
+
+def _strip_screenshot_urls(text: str) -> str:
+    """移除文本中的浏览器截图 Markdown 图片引用。"""
+    if not text or "/api/screenshot" not in text:
+        return text
+    import re
+    cleaned = re.sub(r"!\[([^\]]*)\]\(/api/screenshot\?token=[^)]+\)", "", text)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+    return cleaned
 
 
 def _resolve_user(request: Request) -> str:

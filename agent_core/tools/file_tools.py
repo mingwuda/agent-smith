@@ -23,7 +23,8 @@ FILE_HEAD_CHARS = 8000
 FILE_TAIL_CHARS = 8000
 
 DIFF_MARKER = "__DIFF__:"
-DIFF_MAX_LINES = 500  # 最多保留 500 行 diff，避免 SSE 事件过大
+DIFF_MAX_LINES = 500   # 最多展示 500 行 diff（按显示行计算）
+DIFF_CONTEXT_LINES = 3 # 每个改动块前后的上下文行数
 
 # ── 行缓存：避免同一文件反复读取 ──
 _line_cache: dict[str, tuple[list[str], float]] = {}
@@ -90,7 +91,11 @@ def resolve_workspace() -> Path:
 
 
 def _generate_diff(file_path: Path, new_content: str, old_content_override: Optional[str] = None) -> str:
-    """生成行级 diff JSON，通过 __DIFF__ 标记嵌入返回值尾。"""
+    """生成行级 diff JSON，通过 __DIFF__ 标记嵌入返回值尾。
+
+    改进策略：以改动为中心，只展示实际变更行 + 上下文窗口，
+    避免大文件（>500 行）因截断导致 +0/-0 的问题。
+    """
     old_content = old_content_override
     if old_content is None and file_path.exists() and file_path.is_file():
         try:
@@ -98,33 +103,74 @@ def _generate_diff(file_path: Path, new_content: str, old_content_override: Opti
         except Exception:
             pass
 
+    # 新文件：全部视为新增
     if old_content is None:
         new_lines = new_content.splitlines()
         added = len(new_lines)
         diff = [{"t": "+", "c": l} for l in new_lines[:DIFF_MAX_LINES]]
-    else:
-        old_lines = old_content.splitlines()
-        new_lines = new_content.splitlines()
-        differ = difflib.Differ()
-        diff_gen = differ.compare(old_lines, new_lines)
-        diff = []
-        added = 0
-        removed = 0
-        for line in diff_gen:
-            if len(diff) >= DIFF_MAX_LINES:
-                diff.append({"t": "…", "c": f"... 还有更多变更（仅展示了前 {DIFF_MAX_LINES} 行）"})
-                break
-            if line.startswith("  "):
-                diff.append({"t": " ", "c": line[2:]})
-            elif line.startswith("+ "):
-                diff.append({"t": "+", "c": line[2:]})
-                added += 1
-            elif line.startswith("- "):
-                diff.append({"t": "-", "c": line[2:]})
-                removed += 1
-            elif line.startswith("? "):
-                continue  # 跳过差异提示行
+        if len(new_lines) > DIFF_MAX_LINES:
+            diff.append({"t": "…", "c": f"... 还有 {len(new_lines) - DIFF_MAX_LINES} 行未显示"})
+        return _diff_payload(added, 0, diff)
 
+    old_lines = old_content.splitlines()
+    new_lines = new_content.splitlines()
+
+    # ── 使用 SequenceMatcher 精确定位变更块 ──
+    sm = difflib.SequenceMatcher(None, old_lines, new_lines, autojunk=False)
+    opcodes = sm.get_opcodes()  # [(tag, i1, i2, j1, j2), ...]
+
+    total_added = 0
+    total_removed = 0
+    display_diff: list[dict] = []
+
+    for tag, i1, i2, j1, j2 in opcodes:
+        if tag == "equal":
+            # 不变区域：只在接近上一个/下一个变动块时展示上下文
+            block_len = i2 - i1
+            if block_len <= 2 * DIFF_CONTEXT_LINES + 2:
+                # 块太小，全量展示
+                for k in range(i1, i2):
+                    display_diff.append({"t": " ", "c": old_lines[k]})
+            else:
+                # 只展示头部上下文
+                for k in range(i1, min(i1 + DIFF_CONTEXT_LINES, i2)):
+                    display_diff.append({"t": " ", "c": old_lines[k]})
+                # 中间省略
+                skipped = block_len - 2 * DIFF_CONTEXT_LINES
+                if skipped > 0:
+                    display_diff.append({"t": "…", "c": f"  ... (省略 {skipped} 行未变内容) ..."})
+                # 展示尾部上下文
+                for k in range(max(i1 + DIFF_CONTEXT_LINES, i2 - DIFF_CONTEXT_LINES), i2):
+                    display_diff.append({"t": " ", "c": old_lines[k]})
+        elif tag == "replace":
+            total_removed += (i2 - i1)
+            total_added += (j2 - j1)
+            for k in range(i1, i2):
+                display_diff.append({"t": "-", "c": old_lines[k]})
+            for k in range(j1, j2):
+                display_diff.append({"t": "+", "c": new_lines[k]})
+        elif tag == "delete":
+            total_removed += (i2 - i1)
+            for k in range(i1, i2):
+                display_diff.append({"t": "-", "c": old_lines[k]})
+        elif tag == "insert":
+            total_added += (j2 - j1)
+            for k in range(j1, j2):
+                display_diff.append({"t": "+", "c": new_lines[k]})
+
+        # 提前截断显示区，但保留完整的统计计数
+        if len(display_diff) >= DIFF_MAX_LINES:
+            remaining_ops = len([op for op in opcodes if op[0] != "equal"])  # 粗略估计
+            display_diff = display_diff[:DIFF_MAX_LINES]
+            display_diff.append({"t": "…",
+                                 "c": f"... 还有更多变更（仅展示了前 {DIFF_MAX_LINES} 行）"})
+            break
+
+    return _diff_payload(total_added, total_removed, display_diff)
+
+
+def _diff_payload(added: int, removed: int, diff: list[dict]) -> str:
+    """将 diff 数据序列化为 __DIFF__ 标记字符串。"""
     payload = json.dumps(
         {"added": added, "removed": removed, "diff": diff},
         ensure_ascii=False,

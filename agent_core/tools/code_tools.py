@@ -20,6 +20,7 @@ PYTHON_OUTPUT_TAIL_CHARS = 8000
 
 DIFF_MARKER = "__DIFF__:"
 DIFF_MAX_LINES = 500
+DIFF_CONTEXT_LINES = 3  # 每个改动块前后的上下文行数
 
 # ── 实时输出流 ──
 _progress_lock = threading.Lock()
@@ -48,28 +49,53 @@ class _ProgressIO(StringIO):
 
 
 def _gen_diff_lines(old_content: str, new_content: str) -> Optional[list[dict]]:
-    """对比新旧内容字符串，返回行级 diff 列表"""
+    """对比新旧内容字符串，返回行级 diff 列表（以改动为中心，带上下文窗口）"""
     old_lines = old_content.splitlines()
     new_lines = new_content.splitlines()
-    differ = difflib.Differ()
+
+    sm = difflib.SequenceMatcher(None, old_lines, new_lines, autojunk=False)
+    opcodes = sm.get_opcodes()
+
+    total_added = 0
+    total_removed = 0
     diff = []
-    added = 0
-    removed = 0
-    for line in differ.compare(old_lines, new_lines):
+
+    for tag, i1, i2, j1, j2 in opcodes:
+        if tag == "equal":
+            block_len = i2 - i1
+            if block_len <= 2 * DIFF_CONTEXT_LINES + 2:
+                for k in range(i1, i2):
+                    diff.append({"t": " ", "c": old_lines[k]})
+            else:
+                for k in range(i1, min(i1 + DIFF_CONTEXT_LINES, i2)):
+                    diff.append({"t": " ", "c": old_lines[k]})
+                skipped = block_len - 2 * DIFF_CONTEXT_LINES
+                if skipped > 0:
+                    diff.append({"t": "…", "c": f"  ... (省略 {skipped} 行未变内容) ..."})
+                for k in range(max(i1 + DIFF_CONTEXT_LINES, i2 - DIFF_CONTEXT_LINES), i2):
+                    diff.append({"t": " ", "c": old_lines[k]})
+        elif tag == "replace":
+            total_removed += (i2 - i1)
+            total_added += (j2 - j1)
+            for k in range(i1, i2):
+                diff.append({"t": "-", "c": old_lines[k]})
+            for k in range(j1, j2):
+                diff.append({"t": "+", "c": new_lines[k]})
+        elif tag == "delete":
+            total_removed += (i2 - i1)
+            for k in range(i1, i2):
+                diff.append({"t": "-", "c": old_lines[k]})
+        elif tag == "insert":
+            total_added += (j2 - j1)
+            for k in range(j1, j2):
+                diff.append({"t": "+", "c": new_lines[k]})
+
         if len(diff) >= DIFF_MAX_LINES:
+            diff = diff[:DIFF_MAX_LINES]
             diff.append({"t": "…", "c": f"... 还有更多变更（仅展示了前 {DIFF_MAX_LINES} 行）"})
             break
-        if line.startswith("  "):
-            diff.append({"t": " ", "c": line[2:]})
-        elif line.startswith("+ "):
-            diff.append({"t": "+", "c": line[2:]})
-            added += 1
-        elif line.startswith("- "):
-            diff.append({"t": "-", "c": line[2:]})
-            removed += 1
-        elif line.startswith("? "):
-            continue
-    if added == 0 and removed == 0:
+
+    if total_added == 0 and total_removed == 0:
         return None
     return [{"t": d["t"], "c": d["c"]} for d in diff]
 
