@@ -1,0 +1,174 @@
+"""会话路由"""
+import os
+from pathlib import Path
+
+from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel
+
+from ... import session_store
+from ...config import AgentConfig
+from ...services.workspace import _workspace_for_user, _strip_existing_artifact_section, _append_artifact_links
+from ..deps import _get_current_user
+from logger import get_logger
+
+logger = get_logger(__name__)
+
+router = APIRouter(tags=["sessions"])
+
+
+class SessionInfo(BaseModel):
+    id: str
+    title: str
+    created_at: str
+    updated_at: str
+    message_count: int
+    source: str = "web"  # "web" 或 "wechat"
+
+
+class SessionListResponse(BaseModel):
+    sessions: list[SessionInfo]
+    current_id: str
+
+
+class SessionMessagesResponse(BaseModel):
+    id: str
+    title: str
+    messages: list[dict]
+    source: str = "web"
+
+
+class RenameRequest(BaseModel):
+    title: str
+
+
+class CreateSessionResponse(BaseModel):
+    id: str
+    title: str
+
+
+class SetWorkspaceRequest(BaseModel):
+    workspace: str
+
+
+@router.get("/sessions", response_model=SessionListResponse)
+def list_sessions(request: Request):
+    """列出当前用户的会话（含微信 Bot 会话）"""
+    uid = _get_current_user(request)
+    web_sessions = list(session_store.list_sessions(uid))
+    web_ids = [s["id"] for s in web_sessions]
+    sessions = [
+        SessionInfo(**s, source="web")
+        for s in web_sessions
+    ]
+    # 合并该用户的微信 Bot 会话
+    wechat_uid = f"wechat_{uid}"
+    wechat_sessions = list(session_store.list_sessions(wechat_uid))
+    logger.info(
+        "[会话列表] %s: web=%d个(%s), wechat=%d个(%s)",
+        uid, len(web_sessions), web_ids[:5],
+        len(wechat_sessions),
+        [(s["id"], s.get("message_count", 0)) for s in wechat_sessions[:5]],
+    )
+    # 用 dict 去重（ID 相同时取消息数更多的版本），确保会话列表显示的是最新的消息量
+    session_map: dict[str, SessionInfo] = {}
+    for s in web_sessions:
+        session_map[s["id"]] = SessionInfo(**s, source="web")
+    for s in wechat_sessions:
+        sid = s["id"]
+        existing = session_map.get(sid)
+        if existing is None or (s.get("message_count", 0) or 0) > (existing.message_count or 0):
+            session_map[sid] = SessionInfo(**s, source="wechat" if existing is None else existing.source)
+    sessions = list(session_map.values())
+    sessions.sort(key=lambda s: s.updated_at, reverse=True)
+    current_id = sessions[0].id if sessions else "default"
+    return SessionListResponse(sessions=sessions, current_id=current_id)
+
+
+@router.get("/sessions/{session_id}", response_model=SessionMessagesResponse)
+def get_session(session_id: str, request: Request):
+    """获取当前用户的会话消息（也支持微信 Bot 会话）"""
+    uid = _get_current_user(request)
+    session = session_store.get_session(uid, session_id)
+    is_wechat = False
+    # 如果该会话也存在于微信 Bot 命名空间，优先使用微信端的消息（消息更新）
+    wechat_session = session_store.get_session(f"wechat_{uid}", session_id)
+    if wechat_session:
+        wechat_msgs = wechat_session.get("messages", [])
+        if wechat_msgs:
+            session = wechat_session
+            is_wechat = True
+        elif not session:
+            session = wechat_session
+            is_wechat = True
+    if not session:
+        raise HTTPException(404, "会话不存在")
+    return SessionMessagesResponse(
+        id=session["id"],
+        title=session.get("title", "未命名"),
+        messages=session.get("messages", []),
+        source="wechat" if is_wechat else "web",
+    )
+
+
+@router.post("/sessions", response_model=CreateSessionResponse)
+def create_session(request: Request):
+    """创建新会话"""
+    uid = _get_current_user(request)
+    session = session_store.create_session(uid)
+    return CreateSessionResponse(id=session["id"], title=session["title"])
+
+
+@router.delete("/sessions/{session_id}")
+def delete_session(session_id: str, request: Request):
+    """删除会话（也支持微信 Bot 会话）"""
+    uid = _get_current_user(request)
+    ok = session_store.delete_session(uid, session_id)
+    if not ok:
+        ok = session_store.delete_session(f"wechat_{uid}", session_id)
+    if not ok:
+        raise HTTPException(404, "会话不存在")
+    return {"status": "ok", "message": f"已删除会话 {session_id}"}
+
+
+@router.put("/sessions/{session_id}/rename")
+def rename_session(session_id: str, req: RenameRequest, request: Request):
+    """重命名会话"""
+    uid = _get_current_user(request)
+    ok = session_store.rename_session(uid, session_id, req.title)
+    if not ok:
+        raise HTTPException(404, "会话不存在")
+    return {"status": "ok", "message": f"已重命名为 {req.title}"}
+
+
+@router.put("/sessions/{session_id}/workspace")
+def set_session_workspace(session_id: str, req: SetWorkspaceRequest, request: Request):
+    """设置当前会话的工作目录。路径可以是绝对路径或相对于工作区根目录的相对路径。"""
+    uid = _get_current_user(request)
+    ws = req.workspace.strip()
+
+    # 解析路径：绝对路径直接用，相对路径拼接用户工作区
+    if os.path.isabs(ws):
+        resolved = Path(ws).expanduser().resolve()
+    else:
+        base = _workspace_for_user(uid)
+        resolved = (base / ws).resolve()
+
+    # 确保目录存在
+    try:
+        resolved.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        raise HTTPException(400, f"无法创建目录: {e}")
+
+    ws_str = str(resolved)
+    ok = session_store.set_session_workspace(uid, session_id, ws_str)
+    if not ok:
+        raise HTTPException(404, "会话不存在")
+    return {"status": "ok", "workspace": ws_str, "message": "工作目录已设置"}
+
+
+@router.get("/sessions/{session_id}/workspace")
+def get_session_workspace(session_id: str, request: Request):
+    """获取当前会话的工作目录"""
+    uid = _get_current_user(request)
+    ws = session_store.get_session_workspace(uid, session_id)
+    return {"workspace": ws or ""}

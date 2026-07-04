@@ -1,0 +1,197 @@
+"""系统路由（设置、用户管理、UI）"""
+import os
+from typing import Optional
+
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import HTMLResponse
+from pydantic import BaseModel
+
+from ... import user_manager
+from ...agent import DesktopAgent as agent_class
+from ...config import AgentConfig
+from ...services.workspace import _workspace_for_user
+from ...tools import file_tools, shell_tools, browser_tools
+from ..deps import _get_current_user, _require_admin
+from logger import get_logger
+
+logger = get_logger(__name__)
+
+router = APIRouter(tags=["system"])
+
+
+class SettingsRequest(BaseModel):
+    """设置请求体"""
+    active_provider: str = "openai"
+    provider_name: str = ""
+    api_key: str = ""
+    model: str = ""
+    base_url: str = ""
+    recursion_limit: int = 60
+    api_max_retries: int = 3
+    api_timeout_seconds: float = 120.0
+    api_host_ips: str = ""
+    context_window_tokens: int = 0
+    tavily_search_enabled: bool = False
+    tavily_api_key: str = ""
+    tavily_search_url: str = "https://api.tavily.com/search"
+    anysearch_api_key: str = ""
+
+
+class UserInfo(BaseModel):
+    id: str
+    name: str
+    role: str = ""
+    created_at: str
+
+
+class CreateUserRequest(BaseModel):
+    user_id: str
+    name: str = ""
+    role: str = ""
+
+
+class UpdateUserRoleRequest(BaseModel):
+    role: str = ""
+
+
+@router.get("/")
+def serve_ui():
+    """提供桌面 UI"""
+    from ...main import _html_content
+    if _html_content:
+        headers = {"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache", "Expires": "0"}
+        return HTMLResponse(_html_content, headers=headers)
+    return HTMLResponse("<h1>Desktop Agent API</h1><p>UI not found. Use /docs for API docs.</p>")
+
+
+@router.get("/settings")
+def get_settings(request: Request):
+    """获取当前设置"""
+    _require_admin(request)
+    cfg = AgentConfig.load()
+    return cfg.to_api_dict()
+
+
+@router.post("/settings")
+def save_settings(req: SettingsRequest, request: Request):
+    """保存设置并重启 Agent"""
+    _require_admin(request)
+    cfg = AgentConfig.load()
+    
+    cfg.update_provider(
+        provider_id=req.active_provider,
+        provider_name=req.provider_name,
+        api_key=req.api_key,
+        model=req.model,
+        base_url=req.base_url,
+    )
+    cfg.recursion_limit = max(1, int(req.recursion_limit or 60))
+    cfg.api_max_retries = max(0, int(req.api_max_retries or 0))
+    cfg.api_timeout_seconds = max(60.0, float(req.api_timeout_seconds or 120.0))
+    cfg.api_host_ips = req.api_host_ips or cfg.api_host_ips
+    cfg.context_window_tokens = max(0, int(req.context_window_tokens or 0))
+    cfg.tavily_search_enabled = bool(req.tavily_search_enabled)
+    if req.tavily_api_key:
+        cfg.tavily_api_key = req.tavily_api_key
+    cfg.tavily_search_url = req.tavily_search_url or cfg.tavily_search_url or "https://api.tavily.com/search"
+    if req.anysearch_api_key:
+        cfg.anysearch_api_key = req.anysearch_api_key
+    
+    # 持久化到文件（现在包含 API Key）
+    cfg.save()
+    
+    # 也设到环境变量（当前进程生效）
+    os.environ["LLM_API_KEY"] = cfg.api_key
+    os.environ["OPENAI_API_KEY"] = cfg.api_key
+    os.environ["LLM_MODEL"] = cfg.model
+    os.environ["LLM_PROVIDER"] = cfg.active_provider
+    os.environ["AGENT_RECURSION_LIMIT"] = str(cfg.recursion_limit)
+    os.environ["AGENT_API_MAX_RETRIES"] = str(cfg.api_max_retries)
+    os.environ["AGENT_API_TIMEOUT_SECONDS"] = str(cfg.api_timeout_seconds)
+    if cfg.api_host_ips:
+        os.environ["AGENT_API_HOST_IPS"] = cfg.api_host_ips
+    else:
+        os.environ.pop("AGENT_API_HOST_IPS", None)
+    if cfg.context_window_tokens:
+        os.environ["AGENT_CONTEXT_WINDOW_TOKENS"] = str(cfg.context_window_tokens)
+    else:
+        os.environ.pop("AGENT_CONTEXT_WINDOW_TOKENS", None)
+    os.environ["TAVILY_SEARCH_ENABLED"] = "1" if cfg.tavily_search_enabled else "0"
+    if cfg.tavily_api_key:
+        os.environ["TAVILY_API_KEY"] = cfg.tavily_api_key
+    else:
+        os.environ.pop("TAVILY_API_KEY", None)
+    if cfg.tavily_search_url:
+        os.environ["TAVILY_SEARCH_URL"] = cfg.tavily_search_url
+    if cfg.anysearch_api_key:
+        os.environ["ANYSEARCH_API_KEY"] = cfg.anysearch_api_key
+    else:
+        os.environ.pop("ANYSEARCH_API_KEY", None)
+    if cfg.base_url:
+        os.environ["LLM_BASE_URL"] = cfg.base_url
+    else:
+        os.environ.pop("LLM_BASE_URL", None)
+    
+    # 重启 Agent
+    from ...main import agent as _main_agent, init_agent as _main_init
+    try:
+        _main_init()
+        # 引用 _main_agent 确保新的 agent 实例可用
+        _ = _main_agent
+        return {"status": "ok", "message": "设置已保存，Agent 已重新初始化"}
+    except Exception as e:
+        logger.exception("保存设置后 Agent 重新初始化失败")
+        return {"status": "error", "message": f"设置已保存，但 Agent 初始化失败: {str(e)}"}
+
+
+@router.get("/users", response_model=list[UserInfo])
+def list_users():
+    """列出所有用户"""
+    return [UserInfo(**u) for u in user_manager.list_users()]
+
+
+@router.post("/users", response_model=UserInfo)
+def create_user(req: CreateUserRequest):
+    """创建新用户"""
+    try:
+        user = user_manager.create_user(req.user_id, req.name, req.role)
+        return UserInfo(**user)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.put("/users/{user_id}/role")
+def update_user_role(user_id: str, req: UpdateUserRoleRequest):
+    """更新用户角色"""
+    import json
+    from user_manager import _all_users, _write_users, get_user
+    users = _all_users()
+    if user_id not in users:
+        raise HTTPException(404, "用户不存在")
+    users[user_id]["role"] = req.role
+    _write_users(users)
+    updated = get_user(user_id)
+    return UserInfo(**updated) if updated else {"status": "ok"}
+
+
+@router.delete("/users/{user_id}")
+def delete_user(user_id: str):
+    """删除用户"""
+    ok = user_manager.delete_user(user_id)
+    if not ok:
+        raise HTTPException(404, "用户不存在")
+    return {"status": "ok", "message": f"已删除用户 {user_id}"}
+
+
+@router.get("/users/me")
+def get_my_user(request: Request):
+    """获取当前登录用户的信息"""
+    uid = _get_current_user(request)
+    from ...main import agent
+    if agent:
+        agent.set_user(uid)
+    user = user_manager.get_user(uid)
+    if not user:
+        # 首次登录时自动创建用户
+        user = user_manager.create_user(uid, uid)
+    return user
