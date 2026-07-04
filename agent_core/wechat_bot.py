@@ -773,20 +773,64 @@ class WeChatBot:
                 short = text[:30] + ("..." if len(text) > 30 else "")
                 session_store.rename_session(wechat_uid, session_id, f"[微信] {short}")
 
-        # 发送回复（带重试）
+        # 发送回复（含图片检测 + 图片/文本分开发送）
         if reply:
-            send_resp = await self.send_message(from_user, context_token, reply)
-            send_ret = send_resp.get("ret", -1)
-            if send_ret != 0:
-                logger.warning("[微信Bot] sendmessage 返回 ret=%s: %s", send_ret, json.dumps(send_resp, ensure_ascii=False)[:200])
-                send_resp2 = await self.send_message(from_user, context_token, reply)
-                send_ret2 = send_resp2.get("ret", -1)
-                if send_ret2 == 0:
-                    logger.info("[微信Bot:%s] 回复成功（重试）: %s", self.user_id, reply[:120])
+            # 检查回复中是否包含浏览器截图引用 ![截图](/api/screenshot?token=xxx)
+            import re
+            screenshot_urls = re.findall(
+                r'!\[([^\]]*)\]\(/api/screenshot\?token=([^)]+)\)',
+                reply,
+            )
+            # 同时检查是否包含工作区内的直接图片路径
+            image_paths = re.findall(
+                r'(/[^\s]+\.(?:png|jpg|jpeg|gif|webp))',
+                reply,
+            )
+
+            # 如果有截图引用，下载并发送图片，剩余文本作为文字发送
+            sent_image = False
+            text_reply = reply
+
+            if screenshot_urls:
+                # 从 agent workspace 查找截图文件
+                ws = Path(self.agent.config.workspace) if self.agent and self.agent.config else None
+                for alt_text, token in screenshot_urls:
+                    try:
+                        if ws:
+                            img_path = ws / ".browser_screenshots" / f"{token}.png"
+                            if img_path.exists():
+                                send_resp = await self.send_image(
+                                    from_user, context_token, str(img_path),
+                                )
+                                if send_resp.get("ret", -1) == 0:
+                                    sent_image = True
+                                    # 从文本中去掉已发送图片的 markdown
+                                    text_reply = text_reply.replace(
+                                        f"![{alt_text}](/api/screenshot?token={token})", "",
+                                    )
+                                else:
+                                    # 图片发送失败，保留引用
+                                    pass
+                    except Exception as e:
+                        logger.warning("[微信Bot:%s] 发送截图失败: %s", self.user_id, e)
+
+            # 发送剩余的文本（去掉图片引用后的纯净文本）
+            clean_text = re.sub(r'\n{3,}', '\n\n', text_reply).strip()
+            if clean_text:
+                send_resp = await self.send_message(from_user, context_token, clean_text)
+                send_ret = send_resp.get("ret", -1)
+                if send_ret != 0:
+                    logger.warning("[微信Bot] sendmessage 返回 ret=%s: %s", send_ret, json.dumps(send_resp, ensure_ascii=False)[:200])
+                    send_resp2 = await self.send_message(from_user, context_token, clean_text)
+                    send_ret2 = send_resp2.get("ret", -1)
+                    if send_ret2 == 0:
+                        logger.info("[微信Bot:%s] 回复成功（重试）: %s", self.user_id, clean_text[:120])
+                    else:
+                        logger.warning("[微信Bot:%s] 重试仍失败 ret=%s", self.user_id, send_ret2)
                 else:
-                    logger.warning("[微信Bot:%s] 重试仍失败 ret=%s", self.user_id, send_ret2)
-            else:
-                logger.info("[微信Bot:%s] 回复: %s", self.user_id, reply[:120])
+                    logger.info("[微信Bot:%s] 回复: %s", self.user_id, clean_text[:120])
+            elif sent_image:
+                logger.info("[微信Bot:%s] 回复仅为图片，已发送", self.user_id)
 
     # ── 生命周期 ──────────────────────────────────
 
