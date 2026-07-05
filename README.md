@@ -147,24 +147,24 @@ python generate_login_url.py --host 127.0.0.1 --port 8899 --expires 300 --user a
 
 常用环境变量：
 
-| 环境变量 | 说明 | 默认 |
-| --- | --- | --- |
-| `LLM_PROVIDER` | 当前 Provider | `openai` |
-| `LLM_API_KEY` / `OPENAI_API_KEY` | API Key | 空 |
-| `LLM_MODEL` | 模型名称 | `gpt-4o` |
-| `LLM_BASE_URL` / `OPENAI_BASE_URL` | API 地址 | 空 |
-| `AGENT_WORKSPACE` | 工作区根目录 | `~/agent_workspace` |
-| `AGENT_SKILLS_DIR` | 额外 Skills 目录 | 内置 samples |
-| `AGENT_HOST` | 监听地址 | `127.0.0.1` |
-| `AGENT_PORT` / `DESKTOP_AGENT_PORT` | 监听端口 | `8899` |
-| `AGENT_RECURSION_LIMIT` | 最大推理步数 | `60` |
-| `AGENT_API_MAX_RETRIES` | 模型连接错误重试次数 | `3` |
-| `AGENT_API_TIMEOUT_SECONDS` | 模型请求超时秒数 | `120` |
-| `AGENT_CONTEXT_WINDOW_TOKENS` | 手动指定模型上下文窗口 | 自动识别 |
-| `AGENT_API_HOST_IPS` | 自定义模型网关 DNS 兜底 IP 列表 | 空 |
-| `AGENT_USERS` | 多用户列表 `user1:pass1;user2:pass2` | 空 |
-| `AGENT_SHARED_TOKEN` | 共享 API Token | 空 |
-| `DESKTOP_AGENT_AUTH_COOKIE_SECURE` | Cookie 是否仅 HTTPS 发送 | `0` |
+| 环境变量 | 说明 | 默认 | 必需? |
+| --- | --- | --- | --- |
+| `LLM_API_KEY` / `OPENAI_API_KEY` | API Key | 空 | **✅ 必需** — 无默认值，服务无法连接模型 |
+| `LLM_MODEL` | 模型名称 | `gpt-4o` | **✅ 必需** — 需改为你实际可用的模型名 |
+| `LLM_PROVIDER` | 当前 Provider | `openai` | 可选 — 使用其他厂商时修改 |
+| `LLM_BASE_URL` / `OPENAI_BASE_URL` | API 地址 | 空 | 可选 — 非 OpenAI 官方时填写 |
+| `AGENT_HOST` | 监听地址 | `127.0.0.1` | 可选 — 公网部署需改为 `0.0.0.0` |
+| `AGENT_PORT` / `DESKTOP_AGENT_PORT` | 监听端口 | `8899` | 可选 |
+| `AGENT_USERS` | 多用户列表 `user1:pass1;user2:pass2` | 空 | 可选 — 不设置则默认创建 `admin/admin123` |
+| `AGENT_WORKSPACE` | 工作区根目录 | `~/agent_workspace` | 可选 |
+| `AGENT_SKILLS_DIR` | 额外 Skills 目录 | 内置 samples | 可选 |
+| `AGENT_RECURSION_LIMIT` | 最大推理步数 | `60` | 可选 |
+| `AGENT_API_MAX_RETRIES` | 模型连接错误重试次数 | `3` | 可选 |
+| `AGENT_API_TIMEOUT_SECONDS` | 模型请求超时秒数 | `120` | 可选 |
+| `AGENT_CONTEXT_WINDOW_TOKENS` | 手动指定模型上下文窗口 | 自动识别 | 可选 |
+| `AGENT_API_HOST_IPS` | 自定义模型网关 DNS 兜底 IP 列表 | 空 | 可选 — 仅网络排障时使用 |
+| `AGENT_SHARED_TOKEN` | 共享 API Token | 空 | 可选 |
+| `DESKTOP_AGENT_AUTH_COOKIE_SECURE` | Cookie 是否仅 HTTPS 发送 | `0` | 可选 — 公网 HTTPS 部署建议设为 `1` |
 
 `AGENT_API_HOST_IPS` 只用于 DNS/网络排障，服务不会内置任何厂商 IP。多个 IP 用英文逗号分隔。
 

@@ -138,22 +138,23 @@ Configuration is saved to:
 
 Common environment variables:
 
-| Variable | Description | Default |
-| --- | --- | --- |
-| `LLM_PROVIDER` | Current provider | `openai` |
-| `LLM_API_KEY` / `OPENAI_API_KEY` | API key | empty |
-| `LLM_MODEL` | Model name | `gpt-4o` |
-| `LLM_BASE_URL` / `OPENAI_BASE_URL` | API base URL | empty |
-| `AGENT_WORKSPACE` | Workspace root | `~/agent_workspace` |
-| `AGENT_SKILLS_DIR` | Extra Skills directory | built-in samples |
-| `AGENT_HOST` | Listen host | `127.0.0.1` |
-| `AGENT_PORT` / `DESKTOP_AGENT_PORT` | Listen port | `8899` |
-| `AGENT_RECURSION_LIMIT` | Max reasoning steps | `60` |
-| `AGENT_API_MAX_RETRIES` | Model connection retries | `3` |
-| `AGENT_API_TIMEOUT_SECONDS` | Model request timeout seconds | `120` |
-| `AGENT_CONTEXT_WINDOW_TOKENS` | Manual model context window | auto-detect |
-| `AGENT_API_HOST_IPS` | Fallback DNS IP list for custom model gateways | empty |
-| `DESKTOP_AGENT_AUTH_COOKIE_SECURE` | Send cookie over HTTPS only | `0` |
+| Variable | Description | Default | Required? |
+| --- | --- | --- | --- |
+| `LLM_API_KEY` / `OPENAI_API_KEY` | API key | empty | **✅ Required** — no default, service cannot connect without it |
+| `LLM_MODEL` | Model name | `gpt-4o` | **✅ Required** — must point to a model accessible by your API key |
+| `LLM_PROVIDER` | Current provider | `openai` | Optional — change when using a different provider |
+| `LLM_BASE_URL` / `OPENAI_BASE_URL` | API base URL | empty | Optional — needed for non-OpenAI providers |
+| `AGENT_HOST` | Listen host | `127.0.0.1` | Optional — set to `0.0.0.0` for public deployment |
+| `AGENT_PORT` / `DESKTOP_AGENT_PORT` | Listen port | `8899` | Optional |
+| `AGENT_WORKSPACE` | Workspace root | `~/agent_workspace` | Optional |
+| `AGENT_SKILLS_DIR` | Extra Skills directory | built-in samples | Optional |
+| `AGENT_RECURSION_LIMIT` | Max reasoning steps | `60` | Optional |
+| `AGENT_API_MAX_RETRIES` | Model connection retries | `3` | Optional |
+| `AGENT_API_TIMEOUT_SECONDS` | Model request timeout seconds | `120` | Optional |
+| `AGENT_CONTEXT_WINDOW_TOKENS` | Manual model context window | auto-detect | Optional |
+| `AGENT_API_HOST_IPS` | Fallback DNS IP list for custom model gateways | empty | Optional — troubleshooting only |
+| `AGENT_SHARED_TOKEN` | Shared API token | empty | Optional |
+| `DESKTOP_AGENT_AUTH_COOKIE_SECURE` | Send cookie over HTTPS only | `0` | Optional — set to `1` for HTTPS deployments |
 
 `AGENT_API_HOST_IPS` is only for DNS/network troubleshooting. The service does not include vendor IPs. Separate multiple IPs with commas.
 
