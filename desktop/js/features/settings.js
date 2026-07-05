@@ -238,6 +238,7 @@ async function quickSwitchProvider(providerId) {
   const provider = settingsData.providers[providerId];
   if (!provider) return;
   
+  showToast(currentLanguage === 'en' ? 'Switching…' : '切换中…');
   try {
     const res = await fetch('/settings', {
       method: 'POST',
@@ -261,13 +262,38 @@ async function quickSwitchProvider(providerId) {
     });
     const data = await res.json();
     if (data.status !== 'ok') {
-      addMessage('⚠️ ' + (currentLanguage === 'en' ? t('switchProviderFailed') : (data.message || t('switchProviderFailed'))), 'system');
+      showToast('⚠️ ' + (currentLanguage === 'en' ? t('switchProviderFailed') : (data.message || t('switchProviderFailed'))), 'error');
+    } else {
+      showToast('✅ ' + providerLabel(provider, providerId), 'success');
     }
     await loadSettingsForSwitcher();
     await checkHealth();
   } catch {
-    addMessage(t('switchProviderNetworkFailed'), 'system');
+    showToast('⚠️ ' + t('switchProviderNetworkFailed'), 'error');
   }
+}
+
+// ── Toast 通知 ──
+
+function showToast(message, type) {
+  // 复用或创建 toast 容器
+  var container = document.getElementById('toast-container');
+  if (!container) {
+    container = document.createElement('div');
+    container.id = 'toast-container';
+    document.body.appendChild(container);
+  }
+  var el = document.createElement('div');
+  el.className = 'toast ' + (type || '');
+  el.textContent = message;
+  container.appendChild(el);
+  // 触发入场动画
+  requestAnimationFrame(function() { el.classList.add('show'); });
+  // 自动消失
+  setTimeout(function() {
+    el.classList.remove('show');
+    setTimeout(function() { if (el.parentNode) el.parentNode.removeChild(el); }, 300);
+  }, 2500);
 }
 
 // ---------- 设置弹窗 Tab 切换 ----------
