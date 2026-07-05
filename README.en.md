@@ -24,6 +24,8 @@ It works well as a personal or intranet team assistant for reading and writing w
 | Browser automation | Built-in Playwright browser for navigation, clicking, form filling, screenshots, and JS evaluation; screenshots served via token URL to prevent path leaks |
 | Captcha recognition | Multi-modal vision LLM based captcha recognition supporting text sliders, icon-selection, and character-selection types; automatic element detection, coordinate scaling, and low-confidence retry with auto-refresh |
 | Subagents | `delegate_task` for serial + `delegate_tasks_parallel` for parallel delegation to coder/reviewer/debugger/searcher agents; real-time log streaming for execution visibility |
+| File diff visualization | Real-time green/red line-level diff display in the UI when the Agent modifies files, with collapsible headers |
+| Todo lists | Agent automatically breaks complex tasks into a Todo checklist, tracks completion progress, supports bulk completion and state sync |
 | Skills | Loads `SKILL.md`, compatible with YAML frontmatter and common oh-my-openagent / Superpowers-style skills; built-in `database-interaction` skill for natural-language database queries |
 | Long-term memory | Stores user preferences, project facts, and reusable environment notes per user |
 | Database interaction | Built-in `dbcli` core library + CLI tool + Agent skill, supports SQLite / PostgreSQL / MySQL with natural-language queries, column-level and row-level permission control |
@@ -145,7 +147,7 @@ Common environment variables:
 | `AGENT_WORKSPACE` | Workspace root | `~/agent_workspace` |
 | `AGENT_SKILLS_DIR` | Extra Skills directory | built-in samples |
 | `AGENT_HOST` | Listen host | `127.0.0.1` |
-| `AGENT_PORT` | Listen port | `8899` |
+| `AGENT_PORT` / `DESKTOP_AGENT_PORT` | Listen port | `8899` |
 | `AGENT_RECURSION_LIMIT` | Max reasoning steps | `60` |
 | `AGENT_API_MAX_RETRIES` | Model connection retries | `3` |
 | `AGENT_API_TIMEOUT_SECONDS` | Model request timeout seconds | `120` |
@@ -338,7 +340,8 @@ AgentSmith supports connecting to **WeChat personal accounts** through Tencent's
 - **No Public IP Required**: Uses client-side long polling, no ngrok / frp / public domain needed
 - **One-time QR Scan**: Token is persisted to disk; polling resumes automatically after server restart
 - **Zero Data Storage**: Tencent only relays messages without storing your inputs or AI outputs
-- **Session Sync**: WeChat conversations are saved and visible in the web UI with a 💬 badge
+- **Text + Image Messages**: Supports receiving user images with text questions, and sending images from the Agent to users (CDN upload + AES encryption)
+- **Session Sync**: WeChat conversations are saved and visible in the web UI with a 💬 badge; Web and WeChat sessions with the same ID are displayed independently
 
 ### Getting Started
 
