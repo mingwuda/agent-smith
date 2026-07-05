@@ -37,6 +37,8 @@ def _decode_message_content(content: str) -> dict:
             # 步骤卡片（助手消息）
             if "steps" in payload:
                 result["steps"] = payload["steps"]
+            if "todo_list" in payload:
+                result["todo_list"] = payload["todo_list"]
             if result:
                 return result
     except (json.JSONDecodeError, ValueError):

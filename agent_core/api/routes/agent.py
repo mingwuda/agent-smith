@@ -52,6 +52,7 @@ class RunRequest(BaseModel):
 class RunResponse(BaseModel):
     result: str
     steps: list[dict] = []
+    todo_list: Optional[dict] = None
 
 
 # ---------- 全局 Agent 实例 ----------
@@ -125,6 +126,13 @@ async def run_agent(req: RunRequest, request: Request):
         model_override=model_override,
         thread_id=session_id,
     )
+    # 从 todo store 取出清单（非流式模式）
+    todo_list_r = None
+    try:
+        from tools.todo_tools import get_todo_list
+        todo_list_r = get_todo_list()
+    except Exception:
+        pass
     artifact_paths = [
         str(step.get("args", {}).get("path", ""))
         for step in steps
@@ -134,12 +142,12 @@ async def run_agent(req: RunRequest, request: Request):
         and step.get("args", {}).get("path")
     ]
     result = _append_artifact_links(result, uid, artifact_paths)
-    _save_assistant_result(uid, session_id, req.message, result)
+    _save_assistant_result(uid, session_id, req.message, result, todo_list=todo_list_r)
     
     # 后台反思
     asyncio.create_task(_async_reflect(uid, req.message, steps, result))
     
-    return RunResponse(result=result, steps=steps)
+    return RunResponse(result=result, steps=steps, todo_list=todo_list_r)
 
 
 @router.post("/run/stream")
@@ -200,6 +208,7 @@ async def run_agent_stream(req: RunRequest, request: Request):
 
     artifact_paths: list[str] = []
     collected_steps: list[dict] = []  # 收集步骤卡片数据，将存入历史
+    collected_todo_list = None  # 收集 todo 清单数据
     
     async def event_stream():
         final_content = ""
@@ -257,6 +266,16 @@ async def run_agent_stream(req: RunRequest, request: Request):
                             collected_steps.append(json.loads(m.group(1)))
                     except Exception:
                         pass
+                elif '"type": "todo"' in sse_event:
+                    try:
+                        m = re.search(r'data: ({.*})', sse_event)
+                        if m:
+                            todo_data = json.loads(m.group(1)).get("todo_list")
+                            if todo_data:
+                                nonlocal collected_todo_list
+                                collected_todo_list = todo_data
+                    except Exception:
+                        pass
                 if '"type": "done"' in sse_event:
                     m = re.search(r'data: ({.*})', sse_event)
                     if m:
@@ -291,15 +310,15 @@ async def run_agent_stream(req: RunRequest, request: Request):
                 final_content = _append_artifact_links(final_content, uid, artifact_paths)
                 logger.info("[run/stream] 发送 done: content_len=%d", len(final_content))
                 yield f"data: {json.dumps({'type': 'done', 'content': final_content}, ensure_ascii=False)}\n\n"
-                _save_assistant_result(uid, session_id, req.message, final_content, collected_steps)
+                _save_assistant_result(uid, session_id, req.message, final_content, collected_steps, collected_todo_list)
             elif error_content:
                 logger.info("[run/stream] 保存 error 结果: error_len=%d", len(error_content))
-                _save_assistant_result(uid, session_id, req.message, "❌ " + error_content, collected_steps)
+                _save_assistant_result(uid, session_id, req.message, "❌ " + error_content, collected_steps, collected_todo_list)
             elif artifact_paths:
                 summary = _append_artifact_links("任务已完成，文件已保存。", uid, artifact_paths)
                 logger.info("[run/stream] 发送 artifact 总结: %s", summary)
                 yield f"data: {json.dumps({'type': 'done', 'content': summary}, ensure_ascii=False)}\n\n"
-                _save_assistant_result(uid, session_id, req.message, summary, collected_steps)
+                _save_assistant_result(uid, session_id, req.message, summary, collected_steps, collected_todo_list)
             elif not forwarded_terminal_event:
                 fallback = (
                     "任务已结束，但模型没有生成最终回答。"
@@ -308,7 +327,7 @@ async def run_agent_stream(req: RunRequest, request: Request):
                 )
                 logger.info("[run/stream] 发送 fallback: %s", fallback)
                 yield f"data: {json.dumps({'type': 'done', 'content': fallback}, ensure_ascii=False)}\n\n"
-                _save_assistant_result(uid, session_id, req.message, fallback, collected_steps)
+                _save_assistant_result(uid, session_id, req.message, fallback, collected_steps, collected_todo_list)
             else:
                 logger.info("[run/stream] 已转发 terminal 事件，不再发送兜底")
         except Exception as e:

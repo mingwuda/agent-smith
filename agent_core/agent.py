@@ -940,6 +940,9 @@ class DesktopAgent:
         subagent_end_sent_at = 0.0           # 子代理结束事件发送时间戳
         last_model_activity_at = 0.0         # 最后一次模型活动（token/thought/tool）时间戳
         
+        # 当前 todo 清单数据（随 manage_todo 工具调用更新）
+        current_todo_list = None
+        
         try:
             logger.info(
                 "[stream_run] 开始: tid=%s, thread_key=%s, model=%s, timeout=%s, message_len=%d",
@@ -973,8 +976,11 @@ class DesktopAgent:
                             logger.warning("[子代理] subagent_end 已发送 %d 秒，父模型仍未完成汇总，强制终止", int(elapsed_after_subagent))
                             loop_guard_triggered = True
                             final_buffer = "✅ 所有子代理搜索已完成。\n\n（模型在汇总阶段超时，未返回完整汇总，以下为已收集的子代理结果片段）\n"
+                            done_data = {"type": "done", "content": final_buffer}
+                            if current_todo_list:
+                                done_data["todo_list"] = current_todo_list
                             _done_yielded = True
-                            yield _sse({"type": "done", "content": final_buffer})
+                            yield _sse(done_data)
                             break
                     continue
 
@@ -1040,7 +1046,10 @@ class DesktopAgent:
                             logger.warning("[防循环] 子代理完成后父模型已调用 %d 次不同工具，强制汇总", _post_subagent_tool_calls)
                             loop_guard_triggered = True
                             final_buffer = "✅ 所有子代理搜索已完成，开始汇总结果。\n\n（以下为归并总结）\n"
-                            yield _sse({"type": "done", "content": final_buffer})
+                            done_data = {"type": "done", "content": final_buffer}
+                            if current_todo_list:
+                                done_data["todo_list"] = current_todo_list
+                            yield _sse(done_data)
                             break
                     
                     started_at = time.time()
@@ -1163,6 +1172,17 @@ class DesktopAgent:
                     
                     self._record_tool_call(tool_name, thread_id=tid)
 
+                    # ── Todo 清单事件：manage_todo 工具调用结束后推送 ──
+                    if tool_name == "manage_todo":
+                        from tools.todo_tools import get_todo_list
+                        todo_data = get_todo_list()
+                        if todo_data:
+                            current_todo_list = todo_data
+                            yield _sse({
+                                "type": "todo",
+                                "todo_list": todo_data,
+                            })
+
                     # 提取内嵌的 diff 数据（从完整输出中查找，不受截断影响）
                     diff_data = None
                     # 尝试从可能的 JSON 包装中提取纯文本（如 {"content": "..."} 格式）
@@ -1283,7 +1303,10 @@ class DesktopAgent:
 
             # 流结束，发送正常完成事件（含最终回复内容）
             if not _done_yielded:
-                yield _sse({"type": "done", "content": final_buffer})
+                done_data = {"type": "done", "content": final_buffer}
+                if current_todo_list:
+                    done_data["todo_list"] = current_todo_list
+                yield _sse(done_data)
                 _done_yielded = True
 
         except asyncio.CancelledError:
@@ -1336,6 +1359,12 @@ class DesktopAgent:
             self._hydrated_threads.add(thread_key)
             if attachments:
                 await self._strip_checkpoint_images(run_config, graph)
+            # 清理 todo 清单缓存
+            try:
+                from tools.todo_tools import pop_todo_list
+                pop_todo_list()
+            except Exception:
+                pass
             # 释放该会话的浏览器页面，避免跨会话页面状态串扰
             # 注意：必须使用 thread_key（完整 key），与工具函数中 RunnableConfig 读取的一致
             try:

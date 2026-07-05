@@ -78,23 +78,23 @@ async function loadSessionMessages(sessionId, source) {
       _msgHistory = [];
       _msgHistoryIndex = -1;
       if (data.messages && data.messages.length > 0) {
-        data.messages.forEach(msg => {
-          if (msg.role === 'user' && msg.content) {
-            // 只存纯文本，排除含图片的消息
-            if (!msg.images || msg.images.length === 0) {
-              _msgHistory.push(msg.content);
-            }
+      data.messages.forEach(msg => {
+        if (msg.role === 'user' && msg.content) {
+          // 只存纯文本，排除含图片的消息
+          if (!msg.images || msg.images.length === 0) {
+            _msgHistory.push(msg.content);
           }
-          const role = msg.role === 'user' ? 'user' : 'bot';
-          const content = msg.content || '';
-          if (role === 'user' && msg.images && msg.images.length) {
-            addUserMessage(content, msg.images.map(u => ({data_url: u})));
-          } else if (role === 'bot' && msg.steps && msg.steps.length) {
-            addBotMessageWithSteps(content, msg.steps);
-          } else {
-            addMessage(content, role);
-          }
-        });
+        }
+        const role = msg.role === 'user' ? 'user' : 'bot';
+        const content = msg.content || '';
+        if (role === 'user' && msg.images && msg.images.length) {
+          addUserMessage(content, msg.images.map(u => ({data_url: u})));
+        } else if (role === 'bot' && msg.steps && msg.steps.length) {
+          addBotMessageWithSteps(content, msg.steps, msg.todo_list);
+        } else {
+          addMessage(content, role);
+        }
+      });
       } else {
         addMessage(t('emptySession'), 'system');
       }
@@ -110,7 +110,7 @@ async function loadSessionMessages(sessionId, source) {
 }
 
 // 恢复带步骤卡片的助手消息（从历史加载时使用）
-function addBotMessageWithSteps(content, steps) {
+function addBotMessageWithSteps(content, steps, todoList) {
   // 重置状态，模拟新一轮流式输出的初始条件
   currentBotMsgEl = null;
   currentStepsEl = null;
@@ -125,6 +125,11 @@ function addBotMessageWithSteps(content, steps) {
   });
 
   _isReplaying = false;
+
+  // 如果有 todo 清单，渲染面板
+  if (todoList) {
+    renderTodoPanel(todoList, false);
+  }
 
   // 清理回放步骤后残留的"执行中/分析中"状态
   document.querySelectorAll('.tool-status-dot.running').forEach(d => {

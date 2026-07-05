@@ -134,6 +134,7 @@ async function send() {
   totalSteps = 0;
   hasToolCalls = false;
   generatingBadgeEl = null;
+  _currentTodoPanel = null;  // 新任务重新创建 todo 面板
   startStreamIdleWatch();
   
   let streamDone = false;
@@ -870,7 +871,17 @@ function handleStreamEvent(data) {
       });
       addMessage('❌ ' + data.content, 'system');
       break;
-    
+
+    case 'todo':
+      hideTyping();
+      removeThinkingHint();
+      removeGeneratingBadge();
+      hasToolCalls = true;
+      if (data.todo_list) {
+        renderTodoPanel(data.todo_list, true);
+      }
+      break;
+
     case 'done':
       hideTyping();
       removeThinkingHint();
@@ -910,8 +921,107 @@ function handleStreamEvent(data) {
       }
       // 重置工具图片缓存
       _lastToolImageHtml = null;
+      // Done 事件携带最终 todo 清单时，渲染/更新面板（不触发闪烁）
+      if (data.todo_list) {
+        renderTodoPanel(data.todo_list, false);
+        // 将 todo 面板移到 bot 消息之前
+        if (currentBotMsgEl && _currentTodoPanel && _currentTodoPanel.nextSibling !== currentBotMsgEl) {
+          container.insertBefore(_currentTodoPanel, currentBotMsgEl);
+        }
+      }
       smartScroll(container);
       break;
+  }
+}
+
+// ---------- Todo 清单渲染 ----------
+
+var _currentTodoPanel = null;  // 当前会话的 todo 面板 DOM
+
+function renderTodoPanel(todoData, hasUpdate) {
+  const container = document.getElementById('messages');
+  if (!todoData || !todoData.items) return;
+
+  // 找或创建 todo 面板
+  if (!_currentTodoPanel || !document.body.contains(_currentTodoPanel)) {
+    _currentTodoPanel = document.createElement('div');
+    _currentTodoPanel.className = 'todo-panel';
+    container.appendChild(_currentTodoPanel);
+  }
+
+  // 始终追加到消息容器末尾（与 steps/bot msg 平级）
+  if (_currentTodoPanel.parentNode === container && container.lastChild !== _currentTodoPanel) {
+    container.appendChild(_currentTodoPanel);
+  }
+
+  var items = todoData.items || [];
+  var total = items.length;
+  var doneCount = items.filter(function(i) { return i.status === 'done'; }).length;
+  var summary = todoData.summary || ('共 ' + total + ' 项，已完成 ' + doneCount + ' 项');
+
+  // 有更新时自动展开并闪烁
+  if (hasUpdate) {
+    _currentTodoPanel.classList.remove('collapsed');
+    _currentTodoPanel.classList.add('has-update');
+    setTimeout(function() {
+      if (_currentTodoPanel) _currentTodoPanel.classList.remove('has-update');
+    }, 1500);
+  }
+
+  var headerHtml = [
+    '<div class="todo-header" onclick="toggleTodoPanel(event)">',
+    '  <span class="todo-icon">📋</span>',
+    '  <span class="todo-title">' + escapeHtml(t('todoList') || '任务清单') + '</span>',
+    '  <span class="todo-summary">' + escapeHtml(summary) + '</span>',
+    '  <span class="todo-arrow">▶</span>',
+    '</div>'
+  ].join('\n');
+
+  var itemsHtml = items.map(function(item) {
+    var statusClass = item.status || 'pending';
+    var isDone = statusClass === 'done';
+    var checkedAttr = isDone ? 'checked' : '';
+    var contentClass = isDone ? 'todo-content done' : 'todo-content';
+    var statusLabel = '';
+    switch (statusClass) {
+      case 'pending': statusLabel = '\u5F85\u5904\u7406'; break;
+      case 'in_progress': statusLabel = '\u8FDB\u884C\u4E2D'; break;
+      case 'done': statusLabel = '\u5DF2\u5B8C\u6210'; break;
+      case 'blocked': statusLabel = '\u963B\u585E'; break;
+    }
+    return [
+      '<div class="todo-item" data-todo-id="' + escapeHtml(item.id) + '">',
+      '  <div class="todo-checkbox ' + checkedAttr + '" onclick="toggleTodoItem(event, \'' + escapeHtml(item.id) + '\')"></div>',
+      '  <div class="' + contentClass + '">' + escapeHtml(item.content) + '</div>',
+      '  <span class="todo-status-badge ' + statusClass + '">' + statusLabel + '</span>',
+      '</div>'
+    ].join('\n');
+  }).join('\n');
+
+  _currentTodoPanel.innerHTML = headerHtml + '<div class="todo-body">' + itemsHtml + '</div>';
+  smartScroll(container);
+}
+
+function toggleTodoPanel(event) {
+  var panel = event.currentTarget.closest('.todo-panel');
+  if (panel) panel.classList.toggle('collapsed');
+}
+
+function toggleTodoItem(event, todoId) {
+  event.stopPropagation();
+  var checkbox = event.currentTarget;
+  checkbox.classList.toggle('checked');
+  var content = checkbox.nextElementSibling;
+  if (content) content.classList.toggle('done');
+  var badge = content ? content.nextElementSibling : null;
+  if (badge) {
+    if (checkbox.classList.contains('checked')) {
+      badge.className = 'todo-status-badge done';
+      badge.textContent = '\u5DF2\u5B8C\u6210';
+    } else {
+      badge.className = 'todo-status-badge pending';
+      badge.textContent = '\u5F85\u5904\u7406';
+    }
   }
 }
 

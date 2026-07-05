@@ -30,7 +30,7 @@ from config import AgentConfig
 from agent import DesktopAgent
 from tools import (
     file_tools, code_tools, system_tools, web_tools, memory_tools,
-    git_tools, database_tool, shell_tools, browser_tools,
+    git_tools, database_tool, shell_tools, browser_tools, todo_tools,
 )
 import subagents
 from monitoring.usage_tracker import get_tracker
@@ -155,6 +155,7 @@ def init_agent():
     all_tools.extend(database_tool.TOOLS)
     all_tools.extend(shell_tools.TOOLS)
     all_tools.extend(browser_tools.TOOLS)
+    all_tools.extend(todo_tools.TOOLS)
     subagents.manager.configure(config, all_tools)
     
     # 先加载 Skills，再构建 Agent graph
@@ -316,7 +317,8 @@ app.include_router(monitoring_router)
 
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.getenv("DESKTOP_AGENT_PORT", "8899"))
+    # 兼容 start.sh 的 AGENT_PORT 和标准 DESKTOP_AGENT_PORT
+    port = int(os.getenv("DESKTOP_AGENT_PORT") or os.getenv("AGENT_PORT") or "8899")
     logger.info("🚀 Desktop Agent 启动中: http://127.0.0.1:%d", port)
     uvicorn.run(
         "main:app",
