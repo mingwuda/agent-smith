@@ -265,17 +265,17 @@ async function quickSwitchProvider(providerId) {
       showToast('⚠️ ' + (currentLanguage === 'en' ? t('switchProviderFailed') : (data.message || t('switchProviderFailed'))), 'error');
     } else {
       showToast('✅ ' + providerLabel(provider, providerId), 'success');
-      // 立即更新顶部状态文本，不用等 health check（可能滞后）
-      var statusText = document.getElementById('status-text');
-      if (statusText) {
-        statusText.textContent = t('connectedWithModel', {
-          provider: provider.name || providerId,
-          model: provider.model || t('statusConfiguredMissing'),
-        });
-      }
     }
     await loadSettingsForSwitcher();
-    await checkHealth();  // 后台确认，不一致时会被修正
+    await checkHealth();  // 后台确认（可能返回滞后数据）
+    // 在 checkHealth 之后强制执行更新，确保状态文本准确
+    var statusText = document.getElementById('status-text');
+    if (statusText) {
+      statusText.textContent = t('connectedWithModel', {
+        provider: provider.name || providerId,
+        model: provider.model || t('statusConfiguredMissing'),
+      });
+    }
   } catch {
     showToast('⚠️ ' + t('switchProviderNetworkFailed'), 'error');
   }
