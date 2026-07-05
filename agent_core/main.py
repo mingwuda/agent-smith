@@ -179,6 +179,19 @@ def init_agent():
     logger.info("  已加载技能: %d 个", skills_count)
 
     # 初始化微信 Bot（按用户懒加载 + 启动时主动拉起所有已登录用户的 Bot）
+    old_bots = getattr(app.state, 'wechat_bots', None)
+    if old_bots and getattr(app.state, 'main_loop', None):
+        loop = app.state.main_loop
+        for uid, bot in list(old_bots.items()):
+            if bot.is_running:
+                try:
+                    fut = asyncio.run_coroutine_threadsafe(bot.stop(), loop)
+                    fut.result(timeout=10)
+                    logger.info("[微信Bot] 已停止用户 %s 的旧 Bot", uid)
+                except asyncio.TimeoutError:
+                    logger.warning("[微信Bot] 停止用户 %s 的 Bot 超时", uid)
+                except Exception as e:
+                    logger.warning("[微信Bot] 停止用户 %s 的 Bot 时出错: %s", uid, e)
     app.state.wechat_bots: dict[str, WeChatBot] = {}
     _start_all_wechat_bots()
 
