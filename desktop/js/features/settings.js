@@ -41,16 +41,22 @@ function refreshHeaderProviderDropdown(data) {
   const active = data.active_provider || 'openai';
   const entries = Object.entries(data.providers || {});
   
-  // 有多个 provider 时才让状态栏可点击
+  // 只显示已配置 API Key 的 provider（当前选中项始终显示，避免空列表）
+  const filtered = entries.filter(([id, p]) => id === active || p.api_key_configured);
+  
+  // 有可切换项时才让状态栏可点击
   const statusText = document.getElementById('status-text');
   if (statusText) {
-    statusText.classList.toggle('clickable', isAdmin && entries.length > 0);
+    statusText.classList.toggle('clickable', isAdmin && filtered.length > 1);
   }
   
-  entries.forEach(([id, provider]) => {
+  filtered.forEach(([id, provider]) => {
     const item = document.createElement('div');
     item.className = 'header-dropdown-item' + (id === active ? ' active' : '');
-    item.textContent = providerLabel(provider, id);
+    const label = providerLabel(provider, id);
+    item.textContent = id === active && !provider.api_key_configured
+      ? label + ' ' + (currentLanguage === 'en' ? '(no key)' : '(未配置 Key)')
+      : label;
     item.onclick = function(e) {
       e.stopPropagation();
       dropdown.style.display = 'none';
