@@ -192,6 +192,7 @@
             <div class="provider-row">
               <select id="s-provider" onchange="onProviderChange()"></select>
               <button type="button" onclick="addCustomProvider()" data-i18n="addCustomProvider">新增自定义</button>
+              <button type="button" id="delete-provider-btn" onclick="deleteProvider()" class="btn-danger" style="display:none" data-i18n="deleteProvider">删除</button>
             </div>
             <div class="hint" id="s-provider-hint" data-i18n="providerHint">选择要使用的模型厂商。</div>
           </div>

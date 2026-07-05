@@ -72,6 +72,28 @@ def get_settings(request: Request):
     return cfg.to_api_dict()
 
 
+@router.delete("/settings/provider/{provider_id}")
+def delete_settings_provider(provider_id: str, request: Request):
+    """删除自定义 Provider"""
+    _require_admin(request)
+    cfg = AgentConfig.load()
+    try:
+        cfg.delete_provider(provider_id)
+        cfg.save()
+        # 重启 Agent
+        from main import agent as _main_agent, init_agent as _main_init
+        try:
+            _main_init()
+            _ = _main_agent
+        except Exception:
+            logger.exception("删除 Provider 后 Agent 重新初始化失败")
+        return {"status": "ok", "message": f"已删除 Provider '{provider_id}'"}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except KeyError:
+        raise HTTPException(404, f"Provider '{provider_id}' 不存在")
+
+
 @router.post("/settings")
 def save_settings(req: SettingsRequest, request: Request):
     """保存设置并重启 Agent"""

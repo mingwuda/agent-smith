@@ -102,6 +102,13 @@ function renderProviderFields(providerId) {
   if (!settingsData || !settingsData.providers) return;
   const provider = settingsData.providers[providerId] || {};
   const isCustom = !!provider.is_custom;
+  
+  // 显示/隐藏删除按钮（只有自定义 provider 才显示）
+  const deleteBtn = document.getElementById('delete-provider-btn');
+  if (deleteBtn) {
+    deleteBtn.style.display = isCustom ? '' : 'none';
+  }
+  
   const modelOptions = document.getElementById('s-model-options');
   modelOptions.innerHTML = '';
   (provider.models || []).forEach(modelName => {
@@ -154,6 +161,41 @@ function addCustomProvider() {
   renderProviderFields(id);
   document.getElementById('s-provider-name').focus();
   document.getElementById('s-provider-name').select();
+}
+
+async function deleteProvider() {
+  if (!isAdmin || !settingsData) return;
+  const select = document.getElementById('s-provider');
+  const providerId = select.value;
+  if (!providerId) return;
+  const provider = settingsData.providers[providerId];
+  if (!provider || !provider.is_custom) return;
+  
+  const confirmMsg = currentLanguage === 'en'
+    ? `Delete provider "${provider.name || providerId}"? This cannot be undone.`
+    : `确定删除 Provider "${provider.name || providerId}"？此操作不可恢复。`;
+  if (!confirm(confirmMsg)) return;
+  
+  try {
+    const res = await fetch(`/settings/provider/${encodeURIComponent(providerId)}`, {
+      method: 'DELETE',
+    });
+    const data = await res.json();
+    if (data.status === 'ok') {
+      showToast('✅ ' + (currentLanguage === 'en' ? 'Deleted' : '已删除'), 'success');
+      // 刷新设置弹窗的下拉列表和状态栏
+      const fresh = await loadSettingsForSwitcher();
+      if (fresh) {
+        populateProviderSelect(fresh);
+        renderProviderFields(fresh.active_provider || 'openai');
+        checkHealth();
+      }
+    } else {
+      showToast('⚠️ ' + (data.message || (currentLanguage === 'en' ? 'Delete failed' : '删除失败')), 'error');
+    }
+  } catch {
+    showToast('⚠️ ' + (currentLanguage === 'en' ? 'Network error' : '网络错误'), 'error');
+  }
 }
 
 function openSettings() {

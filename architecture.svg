@@ -1,0 +1,189 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080">
+  <defs>
+    <style>
+      .title { font-family: 'Segoe UI', Arial, sans-serif; font-size: 32px; font-weight: bold; fill: #ffffff; }
+      .subtitle { font-family: 'Segoe UI', Arial, sans-serif; font-size: 16px; fill: #aac4ff; font-style: italic; }
+      .layer-title { font-family: 'Segoe UI', Arial, sans-serif; font-size: 18px; font-weight: bold; fill: #ffffff; }
+      .box-title { font-family: 'Segoe UI', Arial, sans-serif; font-size: 15px; font-weight: bold; fill: #ffffff; }
+      .box-text { font-family: 'Segoe UI', Arial, sans-serif; font-size: 13px; fill: #e0eaff; }
+      .arrow-text { font-family: 'Segoe UI', Arial, sans-serif; font-size: 13px; fill: #7ec8ff; }
+      .note { font-family: 'Segoe UI', Arial, sans-serif; font-size: 14px; fill: #7ec8ff; }
+    </style>
+    <linearGradient id="bg-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0a0e27;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#1a1040;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="layer-user" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#1565c0;stop-opacity:0.7" />
+      <stop offset="100%" style="stop-color:#0d47a1;stop-opacity:0.7" />
+    </linearGradient>
+    <linearGradient id="layer-access" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#6a1b9a;stop-opacity:0.7" />
+      <stop offset="100%" style="stop-color:#4a148c;stop-opacity:0.7" />
+    </linearGradient>
+    <linearGradient id="layer-core" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#00695c;stop-opacity:0.7" />
+      <stop offset="100%" style="stop-color:#004d40;stop-opacity:0.7" />
+    </linearGradient>
+    <linearGradient id="layer-tools" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#e65100;stop-opacity:0.6" />
+      <stop offset="100%" style="stop-color:#bf360c;stop-opacity:0.6" />
+    </linearGradient>
+    <linearGradient id="layer-storage" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#1565c0;stop-opacity:0.6" />
+      <stop offset="100%" style="stop-color:#0d47a1;stop-opacity:0.6" />
+    </linearGradient>
+    <linearGradient id="layer-external" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#424242;stop-opacity:0.8" />
+      <stop offset="100%" style="stop-color:#212121;stop-opacity:0.8" />
+    </linearGradient>
+    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#5e8cff" />
+    </marker>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="2" result="blur" />
+      <feMerge>
+        <feMergeNode in="blur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1920" height="1080" fill="url(#bg-grad)" />
+  <!-- Decorative particles -->
+  <circle cx="200" cy="200" r="2" fill="#5e8cff" opacity="0.5" />
+  <circle cx="1700" cy="300" r="1.5" fill="#a855f7" opacity="0.6" />
+  <circle cx="1500" cy="900" r="2" fill="#5e8cff" opacity="0.4" />
+  <circle cx="400" cy="950" r="1.5" fill="#a855f7" opacity="0.5" />
+
+  <!-- Title -->
+  <text x="960" y="45" text-anchor="middle" class="title">AgentSmith 系统架构图</text>
+  <text x="960" y="70" text-anchor="middle" class="subtitle">LangGraph + FastAPI + 原生前端 + 微信个人号 + 浏览器自动化 + 数据库交互</text>
+
+  <!-- Layer 6: External Services -->
+  <rect x="80" y="930" width="1760" height="95" rx="12" fill="url(#layer-external)" stroke="#555555" stroke-width="1" />
+  <text x="960" y="960" text-anchor="middle" class="layer-title">外部服务 External Services</text>
+  <rect x="180" y="975" width="480" height="30" rx="6" fill="#424242" stroke="#666" stroke-width="0.5" />
+  <text x="420" y="995" text-anchor="middle" class="box-text">LLM API：OpenAI / DeepSeek / 通义千问 / 兼容接口</text>
+  <rect x="720" y="975" width="480" height="30" rx="6" fill="#424242" stroke="#666" stroke-width="0.5" />
+  <text x="960" y="995" text-anchor="middle" class="box-text">外部数据库：MySQL / PostgreSQL / SQLite</text>
+  <rect x="1260" y="975" width="480" height="30" rx="6" fill="#424242" stroke="#666" stroke-width="0.5" />
+  <text x="1500" y="995" text-anchor="middle" class="box-text">外部网站：Playwright 可访问的任意站点</text>
+
+  <!-- Layer 5: Storage Layer -->
+  <rect x="80" y="770" width="1760" height="120" rx="12" fill="url(#layer-storage)" stroke="#1976d2" stroke-width="1" />
+  <text x="960" y="800" text-anchor="middle" class="layer-title">存储层 Storage Layer</text>
+  <rect x="200" y="815" width="340" height="55" rx="8" fill="#1565c0" stroke="#42a5f5" stroke-width="1" />
+  <text x="370" y="838" text-anchor="middle" class="box-title">文件系统</text>
+  <text x="370" y="858" text-anchor="middle" class="box-text">~/agent_workspace/</text>
+  <rect x="620" y="815" width="340" height="55" rx="8" fill="#1565c0" stroke="#42a5f5" stroke-width="1" />
+  <text x="790" y="838" text-anchor="middle" class="box-title">JSON 会话存储</text>
+  <text x="790" y="858" text-anchor="middle" class="box-text">~/.desktop_agent/sessions/</text>
+  <rect x="1040" y="815" width="340" height="55" rx="8" fill="#1565c0" stroke="#42a5f5" stroke-width="1" />
+  <text x="1210" y="838" text-anchor="middle" class="box-title">用量日志</text>
+  <text x="1210" y="858" text-anchor="middle" class="box-text">~/.desktop_agent/usage/</text>
+  <rect x="1460" y="815" width="260" height="55" rx="8" fill="#1565c0" stroke="#42a5f5" stroke-width="1" />
+  <text x="1590" y="838" text-anchor="middle" class="box-title">长期记忆</text>
+  <text x="1590" y="858" text-anchor="middle" class="box-text">~/.desktop_agent/memory/</text>
+
+  <!-- Layer 4: Tools & Skills -->
+  <rect x="80" y="580" width="1760" height="150" rx="12" fill="url(#layer-tools)" stroke="#e65100" stroke-width="1" />
+  <text x="960" y="610" text-anchor="middle" class="layer-title">工具 / 技能 / 监控层 Tools · Skills · Monitoring</text>
+  <rect x="140" y="635" width="170" height="75" rx="8" fill="#e65100" stroke="#ff9800" stroke-width="1" />
+  <text x="225" y="660" text-anchor="middle" class="box-title">file_tools</text>
+  <text x="225" y="678" text-anchor="middle" class="box-text">read/write/list</text>
+  <text x="225" y="693" text-anchor="middle" class="box-text">/search/delete</text>
+  <rect x="350" y="635" width="170" height="75" rx="8" fill="#e65100" stroke="#ff9800" stroke-width="1" />
+  <text x="435" y="660" text-anchor="middle" class="box-title">code_tools</text>
+  <text x="435" y="678" text-anchor="middle" class="box-text">run_python</text>
+  <text x="435" y="693" text-anchor="middle" class="box-text">exec 沙箱</text>
+  <rect x="560" y="635" width="170" height="75" rx="8" fill="#e65100" stroke="#ff9800" stroke-width="1" />
+  <text x="645" y="660" text-anchor="middle" class="box-title">system_tools</text>
+  <text x="645" y="678" text-anchor="middle" class="box-text">系统信息</text>
+  <text x="645" y="693" text-anchor="middle" class="box-text">shell 命令</text>
+  <rect x="770" y="635" width="170" height="75" rx="8" fill="#e65100" stroke="#ff9800" stroke-width="1" />
+  <text x="855" y="660" text-anchor="middle" class="box-title">browser_tools</text>
+  <text x="855" y="678" text-anchor="middle" class="box-text">浏览器自动化</text>
+  <text x="855" y="693" text-anchor="middle" class="box-text">Playwright</text>
+  <rect x="980" y="635" width="170" height="75" rx="8" fill="#e65100" stroke="#ff9800" stroke-width="1" />
+  <text x="1065" y="660" text-anchor="middle" class="box-title">web_tools</text>
+  <text x="1065" y="678" text-anchor="middle" class="box-text">web_search</text>
+  <text x="1065" y="693" text-anchor="middle" class="box-text">web_fetch</text>
+  <rect x="1190" y="635" width="170" height="75" rx="8" fill="#e65100" stroke="#ff9800" stroke-width="1" />
+  <text x="1275" y="660" text-anchor="middle" class="box-title">dbcli/</text>
+  <text x="1275" y="678" text-anchor="middle" class="box-text">数据库交互</text>
+  <text x="1275" y="693" text-anchor="middle" class="box-text">连接/查询/权限</text>
+  <rect x="1400" y="635" width="170" height="75" rx="8" fill="#e65100" stroke="#ff9800" stroke-width="1" />
+  <text x="1485" y="660" text-anchor="middle" class="box-title">skills/</text>
+  <text x="1485" y="678" text-anchor="middle" class="box-text">loader +</text>
+  <text x="1485" y="693" text-anchor="middle" class="box-text">registry</text>
+  <rect x="1610" y="635" width="150" height="75" rx="8" fill="#e65100" stroke="#ff9800" stroke-width="1" />
+  <text x="1685" y="660" text-anchor="middle" class="box-title">usage_tracker</text>
+  <text x="1685" y="678" text-anchor="middle" class="box-text">token 用量</text>
+  <text x="1685" y="693" text-anchor="middle" class="box-text">追踪</text>
+
+  <!-- Layer 3: Agent Core -->
+  <rect x="80" y="370" width="1760" height="170" rx="12" fill="url(#layer-core)" stroke="#2e7d32" stroke-width="1" />
+  <text x="960" y="400" text-anchor="middle" class="layer-title">核心层 Agent Core</text>
+  <rect x="250" y="420" width="380" height="100" rx="10" fill="#2e7d32" stroke="#66bb6a" stroke-width="1.5" />
+  <text x="440" y="448" text-anchor="middle" class="box-title">DesktopAgent</text>
+  <text x="440" y="472" text-anchor="middle" class="box-text">LangGraph ReAct Agent</text>
+  <text x="440" y="492" text-anchor="middle" class="box-text">run() / stream_run()</text>
+  <text x="440" y="507" text-anchor="middle" class="box-text">工具调用编排 · Skills 注入</text>
+  <rect x="740" y="420" width="380" height="100" rx="10" fill="#2e7d32" stroke="#66bb6a" stroke-width="1.5" />
+  <text x="930" y="448" text-anchor="middle" class="box-title">执行循环</text>
+  <text x="930" y="472" text-anchor="middle" class="box-text">思考 (LLM 推理)</text>
+  <text x="930" y="492" text-anchor="middle" class="box-text">调用工具 → 观察结果</text>
+  <text x="930" y="507" text-anchor="middle" class="box-text">多步推理 · 状态管理</text>
+  <rect x="1230" y="420" width="380" height="100" rx="10" fill="#2e7d32" stroke="#66bb6a" stroke-width="1.5" />
+  <text x="1420" y="448" text-anchor="middle" class="box-title">MemorySaver</text>
+  <text x="1420" y="472" text-anchor="middle" class="box-text">会话内存存储</text>
+  <text x="1420" y="492" text-anchor="middle" class="box-text">LangGraph 状态持久化</text>
+  <text x="1420" y="507" text-anchor="middle" class="box-text">多轮对话上下文</text>
+
+  <!-- Layer 2: Access Layer -->
+  <rect x="80" y="200" width="1760" height="130" rx="12" fill="url(#layer-access)" stroke="#7b1fa2" stroke-width="1" />
+  <text x="960" y="230" text-anchor="middle" class="layer-title">接入层 Access Layer</text>
+  <rect x="200" y="250" width="640" height="60" rx="10" fill="#6a1b9a" stroke="#ba68c8" stroke-width="1.5" />
+  <text x="520" y="275" text-anchor="middle" class="box-title">FastAPI Server (Uvicorn)</text>
+  <text x="520" y="298" text-anchor="middle" class="box-text">POST /run · POST /run/stream (SSE) · /sessions/* · /skills/* · /docs</text>
+  <rect x="920" y="250" width="700" height="60" rx="10" fill="#7b1fa2" stroke="#ba68c8" stroke-width="1.5" />
+  <text x="1270" y="275" text-anchor="middle" class="box-title">微信个人号接入 WeChat Personal (iLink Bot API)</text>
+  <text x="1270" y="298" text-anchor="middle" class="box-text">扫码登录 · 消息轮询 · 会话同步 · 图文消息 · /wechat/* 管理端点</text>
+
+  <!-- Layer 1: User Layer -->
+  <rect x="80" y="90" width="1760" height="80" rx="12" fill="url(#layer-user)" stroke="#1976d2" stroke-width="1" />
+  <text x="960" y="120" text-anchor="middle" class="layer-title">用户层 User Layer</text>
+  <rect x="300" y="132" width="220" height="28" rx="6" fill="#1565c0" stroke="#42a5f5" stroke-width="0.8" />
+  <text x="410" y="150" text-anchor="middle" class="box-text" style="fill:#ffffff;">浏览器桌面 UI</text>
+  <rect x="580" y="132" width="220" height="28" rx="6" fill="#1565c0" stroke="#42a5f5" stroke-width="0.8" />
+  <text x="690" y="150" text-anchor="middle" class="box-text" style="fill:#ffffff;">curl / API 调用</text>
+  <rect x="860" y="132" width="260" height="28" rx="6" fill="#1565c0" stroke="#42a5f5" stroke-width="0.8" />
+  <text x="990" y="150" text-anchor="middle" class="box-text" style="fill:#ffffff;">微信个人号用户</text>
+  <rect x="1160" y="132" width="260" height="28" rx="6" fill="#1565c0" stroke="#42a5f5" stroke-width="0.8" />
+  <text x="1290" y="150" text-anchor="middle" class="box-text" style="fill:#ffffff;">移动端（未来扩展）</text>
+
+  <!-- Vertical arrows between layers -->
+  <line x1="520" y1="170" x2="520" y2="200" stroke="#5e8cff" stroke-width="2.5" marker-end="url(#arrowhead)" />
+  <text x="540" y="188" class="arrow-text">HTTP / SSE</text>
+  <line x1="1270" y1="170" x2="1270" y2="200" stroke="#5e8cff" stroke-width="2.5" marker-end="url(#arrowhead)" />
+  <text x="1290" y="188" class="arrow-text">Webhook / API</text>
+  <line x1="960" y1="330" x2="960" y2="370" stroke="#5e8cff" stroke-width="2.5" marker-end="url(#arrowhead)" />
+  <text x="980" y="352" class="arrow-text">内部调用</text>
+  <line x1="1180" y1="540" x2="1180" y2="580" stroke="#5e8cff" stroke-width="2.5" marker-end="url(#arrowhead)" />
+  <text x="1200" y="562" class="arrow-text">Tool 调用</text>
+  <line x1="960" y1="720" x2="960" y2="770" stroke="#5e8cff" stroke-width="2.5" marker-end="url(#arrowhead)" />
+  <text x="980" y="748" class="arrow-text">读写</text>
+  <line x1="960" y1="890" x2="960" y2="930" stroke="#5e8cff" stroke-width="2.5" marker-end="url(#arrowhead)" />
+  <text x="980" y="912" class="arrow-text">API 调用</text>
+
+  <!-- Side annotations -->
+  <text x="30" y="135" text-anchor="middle" class="note" transform="rotate(-90 30,135)">用户层</text>
+  <text x="30" y="270" text-anchor="middle" class="note" transform="rotate(-90 30,270)">接入层</text>
+  <text x="30" y="460" text-anchor="middle" class="note" transform="rotate(-90 30,460)">核心层</text>
+  <text x="30" y="660" text-anchor="middle" class="note" transform="rotate(-90 30,660)">工具/技能/监控</text>
+  <text x="30" y="835" text-anchor="middle" class="note" transform="rotate(-90 30,835)">存储层</text>
+  <text x="30" y="980" text-anchor="middle" class="note" transform="rotate(-90 30,980)">外部服务</text>
+</svg>

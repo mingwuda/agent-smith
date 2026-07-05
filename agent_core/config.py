@@ -283,6 +283,20 @@ class AgentConfig:
         provider["base_url"] = base_url
         self._sync_effective_model()
     
+    def delete_provider(self, provider_id: str):
+        """删除自定义 Provider"""
+        self._normalize_providers()
+        if provider_id not in self.providers:
+            raise ValueError(f"Provider '{provider_id}' 不存在")
+        provider = self.providers[provider_id]
+        if not provider.get("is_custom"):
+            raise ValueError(f"内置 Provider '{provider_id}' 不可删除")
+        del self.providers[provider_id]
+        # 如果删除的是当前激活的 provider，回退到 openai
+        if self.active_provider == provider_id:
+            self.active_provider = "openai"
+        self._sync_effective_model()
+
     def save(self):
         """保存配置到文件"""
         CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)

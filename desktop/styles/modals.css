@@ -52,6 +52,8 @@
   .provider-row select { flex:1; min-width:0; }
   .provider-row button { padding:0 12px; border:1px solid #ddd; border-radius:8px; background:#f0f0f0; cursor:pointer; white-space:nowrap; }
   .provider-row button:hover { background:#e0e0e0; }
+  .provider-row .btn-danger { border-color:#ff4d4f; background:#fff; color:#ff4d4f; }
+  .provider-row .btn-danger:hover { background:#ff4d4f; color:#fff; }
   .hidden { display:none; }
   .modal .btn-primary,
   .modal .btn-secondary {
