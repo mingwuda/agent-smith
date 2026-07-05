@@ -36,10 +36,6 @@
       <span class="accordion-chevron">▶</span>
     </button>
     <div class="accordion-body monitoring-body" id="monitoring-body">
-      <div class="stat-card" id="provider-card" style="border:none;display:none;">
-        <div class="label" data-i18n="modelProvider">🌐 模型服务商</div>
-        <select id="quick-provider-select" title="切换模型厂商" data-i18n-title="switchProviderTitle" onchange="quickSwitchProvider()" style="width:100%;margin-top:4px;padding:6px 8px;background:#2c2c2e;color:#fff;border:1px solid #3a3a3c;border-radius:6px;font-size:13px;outline:none;"></select>
-      </div>
       <div class="stat-card" style="border:none;">
         <div class="label" data-i18n="toolCalls">工具调用</div>
         <div class="value" id="stat-calls">-</div>
@@ -75,7 +71,8 @@
     <div class="left">
       <button id="sidebar-toggle">☰</button>
       <span id="status-dot"></span>
-      <span id="status-text" data-i18n="connecting">连接中...</span>
+      <span id="status-text" data-i18n="connecting" style="cursor:pointer;" onclick="toggleProviderDropdown(event)">连接中...</span>
+      <div id="header-provider-dropdown" class="header-dropdown" style="display:none;"></div>
       <span id="workspace-display" style="display:none;font-size:11px;color:#8e8e93;margin-left:10px;cursor:pointer;" onclick="promptSetWorkspace()" title="点击修改工作目录">📁</span>
     </div>
     <div class="right">

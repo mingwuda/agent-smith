@@ -44,10 +44,26 @@
   #status-dot { width:8px; height:8px; border-radius:50%; background:#aaa; }
   #status-dot.online { background:#30d158; }
   #status-dot.error { background:#ff453a; }
-  #status-text { font-size:12px; color:#8e8e93; }
-  #header .right { display:flex; align-items:center; gap:8px; position:relative; z-index:1001; }
-  #quick-provider-select { min-width:220px; max-width:320px; padding:6px 10px; background:#fff; border:1px solid #ddd; border-radius:8px; font-size:13px; outline:none; }
-  #quick-provider-select:focus { border-color:#007aff; }
+#status-text { font-size:12px; color:#8e8e93; cursor:default; }
+#status-text.clickable { cursor:pointer; }
+#status-text.clickable:hover { color:#007aff; }
+/* 顶部 Provider 下拉菜单 */
+#header-provider-dropdown {
+  position:absolute; top:100%; left:0; min-width:240px;
+  background:#fff; border:1px solid #e0e0e3; border-radius:10px;
+  box-shadow:0 8px 24px rgba(0,0,0,.12); padding:4px 0;
+  z-index:1002; margin-top:4px;
+}
+.header-dropdown-item {
+  padding:8px 14px; font-size:13px; cursor:pointer;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  transition:background .12s;
+}
+.header-dropdown-item:hover { background:#f0f0f5; }
+.header-dropdown-item.active { color:#007aff; font-weight:500; }
+.header-dropdown-item.active::before { content:'✓ '; }
+#header .left { position:relative; } /* positioning anchor for the dropdown */
+#header .right { display:flex; align-items:center; gap:8px; position:relative; z-index:1001; }
   .header-btn { padding:6px 12px; background:#f0f0f0; border:1px solid #ddd; border-radius:8px; font-size:13px; cursor:pointer; transition:all .2s; }
   .header-btn:hover { background:#e0e0e0; }
   #user-avatar { width:36px; height:36px; border-radius:50%; background:#007aff; color:#fff; display:flex; align-items:center; justify-content:center; cursor:pointer; font-size:15px; font-weight:600; flex-shrink:0; user-select:none; transition:opacity .15s; }

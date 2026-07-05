@@ -15,7 +15,6 @@ async function loadCurrentUser() {
   }
   isAdmin = currentUser && currentUser.id === 'admin';
   settingsBtn.style.display = isAdmin ? '' : 'none';
-  providerCard.style.display = isAdmin ? '' : 'none';
   if (!isAdmin) {
     document.getElementById('settings-modal').classList.remove('active');
   }

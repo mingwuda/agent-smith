@@ -31,11 +31,51 @@ function populateProviderSelect(data) {
   select.value = data.active_provider || 'openai';
 }
 
-function refreshQuickProviderSelect(data) {
+// ── 顶部状态栏 Provider 切换下拉菜单 ──
+
+function refreshHeaderProviderDropdown(data) {
   settingsData = data;
-  populateProviderOptions(quickProviderSelect, data, true);
-  quickProviderSelect.value = data.active_provider || 'openai';
+  const dropdown = document.getElementById('header-provider-dropdown');
+  if (!dropdown) return;
+  dropdown.innerHTML = '';
+  const active = data.active_provider || 'openai';
+  const entries = Object.entries(data.providers || {});
+  
+  // 有多个 provider 时才让状态栏可点击
+  const statusText = document.getElementById('status-text');
+  if (statusText) {
+    statusText.classList.toggle('clickable', isAdmin && entries.length > 0);
+  }
+  
+  entries.forEach(([id, provider]) => {
+    const item = document.createElement('div');
+    item.className = 'header-dropdown-item' + (id === active ? ' active' : '');
+    item.textContent = providerLabel(provider, id);
+    item.onclick = function(e) {
+      e.stopPropagation();
+      dropdown.style.display = 'none';
+      quickSwitchProvider(id);
+    };
+    dropdown.appendChild(item);
+  });
 }
+
+function toggleProviderDropdown(event) {
+  if (!isAdmin) return;
+  event.stopPropagation();
+  const dropdown = document.getElementById('header-provider-dropdown');
+  if (!dropdown || !dropdown.children.length) return;
+  const isVisible = dropdown.style.display === 'block';
+  // 关闭其他可能的弹出层
+  document.getElementById('user-menu').classList.remove('show');
+  dropdown.style.display = isVisible ? 'none' : 'block';
+}
+
+// 点击页面其他地方关闭 provider 下拉菜单
+document.addEventListener('click', function() {
+  var dd = document.getElementById('header-provider-dropdown');
+  if (dd) dd.style.display = 'none';
+});
 
 async function loadSettingsForSwitcher() {
   if (!isAdmin) return null;
@@ -43,7 +83,7 @@ async function loadSettingsForSwitcher() {
     const res = await fetch('/settings');
     if (!res.ok) return null;
     const data = await res.json();
-    refreshQuickProviderSelect(data);
+    refreshHeaderProviderDropdown(data);
     return data;
   } catch {
     return null;
@@ -122,7 +162,7 @@ function openSettings() {
   fetch('/settings').then(r => r.json()).then(data => {
     settingsData = data;
     populateProviderSelect(data);
-    refreshQuickProviderSelect(data);
+    refreshHeaderProviderDropdown(data);
     renderProviderFields(data.active_provider || 'openai');
   }).catch(() => {});
 }
@@ -187,14 +227,11 @@ async function saveSettings() {
   }
 }
 
-async function quickSwitchProvider() {
-  if (!isAdmin) return;
-  const providerId = quickProviderSelect.value;
-  if (!providerId || !settingsData || !settingsData.providers) return;
+async function quickSwitchProvider(providerId) {
+  if (!isAdmin || !providerId || !settingsData || !settingsData.providers) return;
   const provider = settingsData.providers[providerId];
   if (!provider) return;
   
-  quickProviderSelect.disabled = true;
   try {
     const res = await fetch('/settings', {
       method: 'POST',
@@ -224,8 +261,6 @@ async function quickSwitchProvider() {
     await checkHealth();
   } catch {
     addMessage(t('switchProviderNetworkFailed'), 'system');
-  } finally {
-    quickProviderSelect.disabled = false;
   }
 }
 
