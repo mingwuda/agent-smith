@@ -95,12 +95,13 @@ async def run_agent(req: RunRequest, request: Request):
     model_override = _image_model_override(attachments)
     # ── 解析文本文件内容，直接嵌入 agent 消息 ──
     agent_message = req.message
-    if attachments and any("content" in a for a in attachments):
+    if attachments:
         try:
             parsed = json.loads(display_text)
-            text_content = parsed.get("text", "")
-            if text_content and text_content != req.message:
-                agent_message = text_content
+            if isinstance(parsed, dict) and parsed.get("text_files"):
+                text_content = parsed.get("text", "")
+                if text_content and text_content != req.message:
+                    agent_message = text_content
         except (json.JSONDecodeError, TypeError):
             pass
     # ── 解析 ZIP 清单，追加到 LLM 消息中 ──
@@ -182,12 +183,13 @@ async def run_agent_stream(req: RunRequest, request: Request):
 
     # ── 解析文本文件内容，直接嵌入 agent 消息 ──
     agent_message = req.message
-    if attachments and any("content" in a for a in attachments):
+    if attachments:
         try:
             parsed = json.loads(display_text)
-            text_content = parsed.get("text", "")
-            if text_content and text_content != req.message:
-                agent_message = text_content
+            if isinstance(parsed, dict) and parsed.get("text_files"):
+                text_content = parsed.get("text", "")
+                if text_content and text_content != req.message:
+                    agent_message = text_content
         except (json.JSONDecodeError, TypeError):
             pass
     # ── 解析 ZIP 清单，追加到 LLM 消息中 ──
