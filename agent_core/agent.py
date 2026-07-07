@@ -393,6 +393,8 @@ def session_messages_to_langchain(messages: list[dict]) -> list:
             if content:
                 converted.append(HumanMessage(content=content))
         elif role == "assistant" and content:
+            # 剥离历史截图引用，避免 LLM 在后续回复中重复输出
+            content = _strip_screenshot_urls_from_text(content)[0]
             converted.append(AIMessage(content=content))
     return converted
 
@@ -1357,8 +1359,11 @@ class DesktopAgent:
                 len(final_buffer), usage_recorded,
             )
             self._hydrated_threads.add(thread_key)
-            if attachments:
+            # 始终清理 checkpoint 中的图片/截图引用，避免跨请求残留
+            try:
                 await self._strip_checkpoint_images(run_config, graph)
+            except Exception:
+                pass
             # 清理 todo 清单缓存（按 thread_id 清理，保留磁盘文件供恢复）
             try:
                 from tools.todo_tools import pop_todo_list
