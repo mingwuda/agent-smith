@@ -31,22 +31,35 @@ function addMessage(text, role) {
 
 function addUserMessage(text, attachments = []) {
   const hasZip = attachments.some(item => item.mime_type === 'application/zip' || (item.name || '').endsWith('.zip'));
-  const msgFallback = hasZip ? '分析项目中...' : t('analyzingImages');
+  const hasText = !hasZip && attachments.some(function(item) {
+    return /\.(md|txt|json|yaml|yml|xml|html|css|js|ts|jsx|tsx|py|java|c|cpp|h|hpp|go|rs|rb|php|sh|bash|zsh|sql|csv|log|env|toml|ini|cfg|conf|vue|svelte|kt|swift|scala)$/i.test(item.name || '');
+  });
+  var msgFallback = '分析附件中...';
+  if (hasZip) msgFallback = '分析项目中...';
+  else if (hasText) msgFallback = '分析文件中...';
   const div = addMessage(text || (attachments.length ? msgFallback : ''), 'user');
   if (attachments.length) {
     const grid = document.createElement('div');
     grid.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;';
     attachments.forEach(item => {
-      const isZip = item.mime_type === 'application/zip' || (item.name || '').endsWith('.zip');
+      const name = item.name || '';
+      const isZip = item.mime_type === 'application/zip' || name.endsWith('.zip');
+      const isText = !isZip && /\.(md|txt|json|yaml|yml|xml|html|css|js|ts|jsx|tsx|py|java|c|cpp|h|hpp|go|rs|rb|php|sh|bash|zsh|sql|csv|log|env|toml|ini|cfg|conf|vue|svelte|kt|swift|scala)$/i.test(name);
       if (isZip) {
         const badge = document.createElement('div');
         badge.style.cssText = 'width:96px;height:96px;display:flex;flex-direction:column;align-items:center;justify-content:center;border-radius:8px;background:#e0f2fe;color:#0369a1;border:1px solid rgba(255,255,255,.5);font-size:12px;';
-        badge.innerHTML = '<span style="font-size:28px">📦</span><span style="margin-top:4px">' + escapeHtml(item.name) + '</span>';
+        badge.innerHTML = '<span style="font-size:28px">📦</span><span style="margin-top:4px">' + escapeHtml(name) + '</span>';
+        grid.appendChild(badge);
+      } else if (isText) {
+        const badge = document.createElement('div');
+        const ext = name.lastIndexOf('.') >= 0 ? name.slice(name.lastIndexOf('.') + 1).toUpperCase() : 'FILE';
+        badge.style.cssText = 'width:96px;height:96px;display:flex;flex-direction:column;align-items:center;justify-content:center;border-radius:8px;background:#f3f4f6;color:#374151;border:1px solid rgba(255,255,255,.5);font-size:11px;font-weight:bold;';
+        badge.innerHTML = '<span style="font-size:28px;line-height:1">📄</span><span style="margin-top:4px">' + escapeHtml(name) + '</span>';
         grid.appendChild(badge);
       } else {
         const img = document.createElement('img');
         img.src = item.data_url;
-        img.alt = item.name || 'pasted image';
+        img.alt = name || 'pasted image';
         img.style.cssText = 'width:96px;height:96px;object-fit:cover;border-radius:8px;border:1px solid rgba(255,255,255,.5);';
         grid.appendChild(img);
       }
@@ -69,16 +82,24 @@ function renderAttachmentPreview() {
     const chip = document.createElement('div');
     chip.className = 'attachment-chip';
 
-    const isZip = item.mime_type === 'application/zip' || (item.name || '').endsWith('.zip');
+    var name = item.name || '';
+    var isZip = item.mime_type === 'application/zip' || name.endsWith('.zip');
+    var isText = !isZip && /\.(md|txt|json|yaml|yml|xml|html|css|js|ts|jsx|tsx|py|java|c|cpp|h|hpp|go|rs|rb|php|sh|bash|zsh|sql|csv|log|env|toml|ini|cfg|conf|vue|svelte|kt|swift|scala)$/i.test(name);
     if (isZip) {
       const icon = document.createElement('div');
       icon.style.cssText = 'width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:28px;background:#e0f2fe;color:#0369a1;font-weight:bold;';
       icon.textContent = '📦';
       chip.appendChild(icon);
+    } else if (isText) {
+      const icon = document.createElement('div');
+      var ext = name.lastIndexOf('.') >= 0 ? name.slice(name.lastIndexOf('.') + 1).toUpperCase() : 'FILE';
+      icon.style.cssText = 'width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;font-size:11px;background:#f3f4f6;color:#374151;font-weight:bold;';
+      icon.textContent = ext;
+      chip.appendChild(icon);
     } else {
       const img = document.createElement('img');
       img.src = item.data_url;
-      img.alt = item.name || 'pasted image';
+      img.alt = name || 'pasted image';
       chip.appendChild(img);
     }
 
@@ -95,14 +116,19 @@ function renderAttachmentPreview() {
   });
 }
 
-function addImageFile(file) {
-  const isZip = file.name.endsWith('.zip') || file.type === 'application/zip' || file.type === 'application/x-zip-compressed';
-  if (!isZip && !file.type.startsWith('image/')) return;
+function addFile(file) {
+  var name = file.name || '';
+  var isZip = name.endsWith('.zip') || file.type === 'application/zip' || file.type === 'application/x-zip-compressed';
+  var TEXT_EXTS = ['.md','.txt','.json','.yaml','.yml','.xml','.html','.css','.js','.ts','.jsx','.tsx',
+    '.py','.java','.c','.cpp','.h','.hpp','.go','.rs','.rb','.php','.sh','.bash','.zsh','.sql',
+    '.csv','.log','.env','.toml','.ini','.cfg','.conf','.vue','.svelte','.kt','.swift','.scala'];
+  var isText = !isZip && TEXT_EXTS.some(function(ext) { return name.toLowerCase().endsWith(ext); });
 
-  // 大小限制：ZIP 50MB，图片 6MB
-  const maxSize = isZip ? 50 * 1024 * 1024 : 6 * 1024 * 1024;
+  if (!isZip && !isText && !file.type.startsWith('image/')) return;
+
+  var maxSize = isZip ? 50 * 1024 * 1024 : (isText ? 1 * 1024 * 1024 : 6 * 1024 * 1024);
   if (file.size > maxSize) {
-    addMessage(t('imageTooLarge', { name: file.name || '' }), 'system');
+    addMessage(t('imageTooLarge', { name: name }), 'system');
     return;
   }
 
@@ -111,11 +137,11 @@ function addImageFile(file) {
     return;
   }
 
-  const reader = new FileReader();
-  reader.onload = () => {
+  var reader = new FileReader();
+  reader.onload = function() {
     pendingAttachments.push({
-      name: file.name,
-      mime_type: isZip ? 'application/zip' : (file.type || 'image/png'),
+      name: name,
+      mime_type: isZip ? 'application/zip' : (isText ? 'text/plain' : (file.type || 'image/png')),
       data_url: String(reader.result || ''),
     });
     renderAttachmentPreview();
@@ -124,7 +150,7 @@ function addImageFile(file) {
 }
 
 function handleFiles(files) {
-  files.forEach(addImageFile);
+  files.forEach(addFile);
 }
 
 // ---------- 文件上传按钮 ----------

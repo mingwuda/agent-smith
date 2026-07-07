@@ -160,7 +160,7 @@ def _extract_zip(raw: bytes, zip_name: str) -> tuple[str, str]:
 
 
 def _display_user_message(uid: str, message: str, attachments: list[dict]) -> str:
-    """生成用户消息的存储文本。有图片/压缩包时保存到磁盘，返回摘要信息。"""
+    """生成用户消息的存储文本。有图片/压缩包/文本文件时保存到磁盘，返回摘要信息。"""
     if not attachments:
         return message
 
@@ -169,7 +169,7 @@ def _display_user_message(uid: str, message: str, attachments: list[dict]) -> st
     for item in attachments:
         if item.get("mime_type") == "application/zip" and "raw" in item:
             name = item.get("name", "project.zip")
-            raw = item.pop("raw")  # 移除原始字节，不保留
+            raw = item.pop("raw")
             dest, manifest = _extract_zip(raw, name)
             if dest:
                 zip_notes = manifest
@@ -177,6 +177,21 @@ def _display_user_message(uid: str, message: str, attachments: list[dict]) -> st
 
     if zip_notes:
         return json.dumps({"text": message or "请分析这个项目。", "zip_manifest": zip_notes}, ensure_ascii=False)
+
+    # ── 文本文件处理 ──
+    text_files: list[dict] = []
+    for item in attachments:
+        if "content" in item:
+            text_files.append({
+                "name": item.get("name", "file.txt"),
+                "content": item.pop("content"),
+            })
+    if text_files:
+        parts = [message or ""]
+        for tf in text_files:
+            parts.append(f"\n── 文件: {tf['name']} ──\n{tf['content']}")
+        combined = "\n".join(parts).strip()
+        return json.dumps({"text": combined or "请分析这些文件。", "text_files": [tf["name"] for tf in text_files]}, ensure_ascii=False)
 
     # ── 图片处理 ──
     image_paths: list[str] = []
@@ -209,39 +224,63 @@ def _display_user_message(uid: str, message: str, attachments: list[dict]) -> st
 
 def _safe_attachments(attachments: list[Any]) -> list[dict]:
     safe: list[dict] = []
+    TEXT_EXTS = {".md", ".txt", ".json", ".yaml", ".yml", ".xml", ".html", ".css",
+                 ".js", ".ts", ".jsx", ".tsx", ".py", ".java", ".c", ".cpp", ".h",
+                 ".hpp", ".go", ".rs", ".rb", ".php", ".sh", ".bash", ".zsh", ".sql",
+                 ".cfg", ".ini", ".conf", ".toml", ".env", ".gitignore", ".dockerfile",
+                 ".log", ".csv", ".svg", ".vue", ".svelte", ".kt", ".swift", ".scala"}
     for item in attachments[:4]:
         mime = (item.mime_type or "").strip().lower()
+        ext = Path(item.name or "").suffix.lower()
         data_url = (item.data_url or "").strip()
-        is_zip = mime in ("application/zip", "application/x-zip-compressed") or item.name.endswith(".zip")
+        is_zip = mime in ("application/zip", "application/x-zip-compressed") or ext == ".zip"
+        is_text = mime.startswith("text/") or ext in TEXT_EXTS
         prefix = "data:application/zip;base64," if is_zip else f"data:{mime};base64,"
 
         if not data_url.startswith(prefix):
             if not is_zip:
-                continue  # 非 ZIP 非图片，跳过
-            # ZIP 用更宽松的 base64 检测
-            if not data_url.startswith("data:") or ";base64," not in data_url:
-                continue
-            # 取实际 base64 数据
-            base64_data = data_url.split(";base64,", 1)[-1]
-            try:
-                raw = base64.b64decode(base64_data)
-            except Exception:
-                continue
+                if not is_text:
+                    continue
+                # 文本文件：宽松检测 base64
+                if not data_url.startswith("data:") or ";base64," not in data_url:
+                    continue
+                base64_data = data_url.split(";base64,", 1)[-1]
+            else:
+                # ZIP 宽松检测
+                if not data_url.startswith("data:") or ";base64," not in data_url:
+                    continue
+                base64_data = data_url.split(";base64,", 1)[-1]
         else:
             base64_data = data_url[len(prefix):]
-            try:
-                raw = base64.b64decode(base64_data)
-            except Exception:
-                continue
+        try:
+            raw = base64.b64decode(base64_data)
+        except Exception:
+            continue
 
         if is_zip:
-            if len(raw) > 50 * 1024 * 1024:  # ZIP 上限 50MB
+            if len(raw) > 50 * 1024 * 1024:
                 continue
             safe.append({
                 "name": item.name or "project.zip",
                 "mime_type": "application/zip",
                 "data_url": data_url,
                 "raw": raw,
+            })
+        elif is_text:
+            if len(raw) > 1 * 1024 * 1024:  # 文本上限 1MB
+                continue
+            try:
+                decoded = raw.decode("utf-8")
+            except UnicodeDecodeError:
+                try:
+                    decoded = raw.decode("gbk")
+                except UnicodeDecodeError:
+                    decoded = raw.decode("utf-8", errors="replace")
+            safe.append({
+                "name": item.name or "file.txt",
+                "mime_type": mime,
+                "data_url": data_url,
+                "content": decoded,
             })
         else:
             if not mime.startswith("image/") or len(data_url) > 8 * 1024 * 1024:
