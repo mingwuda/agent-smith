@@ -2,10 +2,16 @@
 
 Agent 在接到复杂任务（≥3 个独立步骤）时使用此工具创建可追踪的任务清单。
 Todo 数据通过 yield 事件流式推送到前端，最终随 assistant message 持久化。
+
+持久化：每个 thread_id 的 todo 清单会保存到磁盘文件，
+即使进程重启或页面刷新后，用户说"继续"也能恢复。
 """
+import json
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 
 
@@ -13,39 +19,66 @@ def _now() -> str:
     return datetime.now().isoformat()
 
 
-# 单例 todo 清单缓存（agent 一次只处理一个请求，无需多线程隔离）
-_TODO_LIST_CACHE: Optional[dict] = None
-_CACHE_KEY: str = ""
+# 单例 todo 清单缓存（避免频繁读盘）
+_TODO_CACHE: dict[str, Optional[dict]] = {}
 
 
-def get_todo_list(key: str = "") -> Optional[dict]:
-    """获取 todo 清单（key 匹配时返回，否则返回 None）"""
-    if key and key != _CACHE_KEY:
+def _todo_dir() -> Path:
+    return Path.home() / ".desktop_agent" / "todos"
+
+
+def _todo_path(thread_id: str) -> Path:
+    return _todo_dir() / f"{thread_id}.json"
+
+
+def get_todo_list(thread_id: str = "") -> Optional[dict]:
+    """获取 todo 清单。优先查缓存，缓存未命中时从磁盘加载。"""
+    if thread_id:
+        # 按 thread_id 查找
+        cached = _TODO_CACHE.get(thread_id)
+        if cached is not None:
+            return cached
+        # 尝试从磁盘恢复
+        path = _todo_path(thread_id)
+        if path.exists():
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                _TODO_CACHE[thread_id] = data
+                return data
+            except (json.JSONDecodeError, OSError):
+                pass
         return None
-    return _TODO_LIST_CACHE
+    
+    # 兼容旧调用（无 thread_id）：从缓存中取第一个非 None
+    for v in _TODO_CACHE.values():
+        if v is not None:
+            return v
+    return None
 
 
-def set_todo_list(key: str, todo_list: dict):
-    """设置 todo 清单"""
-    global _TODO_LIST_CACHE, _CACHE_KEY
-    _TODO_LIST_CACHE = todo_list
-    _CACHE_KEY = key
+def set_todo_list(thread_id: str, todo_list: dict):
+    """设置 todo 清单并持久化到磁盘。"""
+    _TODO_CACHE[thread_id] = todo_list
+    path = _todo_path(thread_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(todo_list, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
 
 
-def pop_todo_list(key: str = "") -> Optional[dict]:
-    """取出并移除 todo 清单"""
-    global _TODO_LIST_CACHE, _CACHE_KEY
-    if key and key != _CACHE_KEY:
+def pop_todo_list(thread_id: str = "") -> Optional[dict]:
+    """取出并移除 todo 清单（仅清理进程内缓存，磁盘文件保留供恢复）。"""
+    if not thread_id or thread_id not in _TODO_CACHE:
         return None
-    result = _TODO_LIST_CACHE
-    _TODO_LIST_CACHE = None
-    _CACHE_KEY = ""
+    result = _TODO_CACHE.pop(thread_id, None)
     return result
 
 
 @tool
 def manage_todo(
     action: str,
+    config: RunnableConfig,
     items: Optional[list[str]] = None,
     todo_id: Optional[str] = None,
     content: Optional[str] = None,
@@ -65,11 +98,9 @@ def manage_todo(
         todo_id: 任务项 ID（仅 update_todo / complete_todo 使用）
         content: 新增任务内容（仅 add_todo 使用）
         status: 新状态（仅 update_todo 使用）：in_progress | done | blocked
-
-    Returns:
-        JSON 格式的当前 todo 清单状态
     """
-    todo_list = get_todo_list()
+    thread_id = config.get("configurable", {}).get("thread_id", "default")
+    todo_list = get_todo_list(thread_id)
     prefix = "📋 任务清单"
 
     if action == "create_todo":
@@ -91,11 +122,12 @@ def manage_todo(
             "items": todo_items,
             "summary": f"共 {total} 项，已完成 0 项",
         }
-        set_todo_list("current", todo_list)
+        set_todo_list(thread_id, todo_list)
         return f"{prefix}已创建，共 {total} 项"
 
     if not todo_list:
-        return "❌ 当前没有活跃的 todo 清单，请先使用 create_todo 创建"
+        # 尝试从上一轮对话历史恢复（用户说"继续"时）
+        return "❌ 当前没有活跃的 todo 清单，请先使用 create_todo 创建一个新的清单"
 
     items_list = todo_list["items"]
 
@@ -114,6 +146,7 @@ def manage_todo(
         total = len(items_list)
         done_count = sum(1 for item in items_list if item["status"] == "done")
         todo_list["summary"] = f"共 {total} 项，已完成 {done_count} 项"
+        set_todo_list(thread_id, todo_list)
         return f"{prefix}已新增「{content}」"
 
     if action == "update_todo":
@@ -131,6 +164,7 @@ def manage_todo(
         total = len(items_list)
         done_count = sum(1 for item in items_list if item["status"] == "done")
         todo_list["summary"] = f"共 {total} 项，已完成 {done_count} 项"
+        set_todo_list(thread_id, todo_list)
         return f"{prefix}已更新「{todo_id}」→ {status}"
 
     if action == "complete_todo":
@@ -146,6 +180,7 @@ def manage_todo(
         total = len(items_list)
         done_count = sum(1 for item in items_list if item["status"] == "done")
         todo_list["summary"] = f"共 {total} 项，已完成 {done_count} 项"
+        set_todo_list(thread_id, todo_list)
         return f"{prefix}已完成「{item['content']}」✅"
 
     return f"❌ 未知操作: {action}，允许: create_todo|update_todo|add_todo|complete_todo"

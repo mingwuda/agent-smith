@@ -1359,10 +1359,10 @@ class DesktopAgent:
             self._hydrated_threads.add(thread_key)
             if attachments:
                 await self._strip_checkpoint_images(run_config, graph)
-            # 清理 todo 清单缓存
+            # 清理 todo 清单缓存（按 thread_id 清理，保留磁盘文件供恢复）
             try:
                 from tools.todo_tools import pop_todo_list
-                pop_todo_list()
+                pop_todo_list(tid)
             except Exception:
                 pass
             # 释放该会话的浏览器页面，避免跨会话页面状态串扰
