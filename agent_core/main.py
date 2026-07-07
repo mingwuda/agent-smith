@@ -64,10 +64,14 @@ def _app_base_dir() -> Path:
 @asynccontextmanager
 async def lifespan(app):
     setup_logging()
-    logger.info("🔄 服务启动中...（Agent 将在首次请求时初始化）")
     _init_default_users()
     # 保存主事件循环引用，供 sync 线程调度 async 任务
     app.state.main_loop = asyncio.get_running_loop()
+    # 启动时直接初始化 Agent，不再延迟到首次请求
+    try:
+        init_agent()
+    except Exception:
+        logger.exception("Agent 启动时初始化失败，将在首次请求时重试")
     yield
 
 app = FastAPI(
