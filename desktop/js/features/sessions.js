@@ -111,6 +111,8 @@ async function loadSessionMessages(sessionId, source) {
 
 // 恢复带步骤卡片的助手消息（从历史加载时使用）
 function addBotMessageWithSteps(content, steps, todoList) {
+  // 防止前一条消息的 _lastToolImageHtml 泄露到当前消息
+  _lastToolImageHtml = null;
   // 先渲染 assistant 的文本回复（之前被忽略，导致历史消息只显示工具过程）
   if (content) {
     addMessage(content, 'bot');
@@ -154,9 +156,7 @@ function addBotMessageWithSteps(content, steps, todoList) {
   });
   removeGeneratingBadge();
 
-  if (content) {
-    addMessage(content, 'bot');
-  }
+  // 注意：content 已在开头渲染，这里不再重复渲染
   currentBotMsgEl = null;
   currentStepsEl = null;
 }
