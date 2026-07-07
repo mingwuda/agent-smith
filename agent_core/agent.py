@@ -734,6 +734,7 @@ class DesktopAgent:
             return
         stripped, changed = _strip_image_content_from_messages(messages)
         if changed:
+            logger.info("[_strip_checkpoint_images] 已从 %d 个消息中移除图片/截图引用", len(messages))
             await graph.aupdate_state(run_config, {"messages": checkpoint_replacement(stripped)})
 
     def _thread_key(self, thread_id: str = "") -> str:

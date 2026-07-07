@@ -308,6 +308,8 @@ async def run_agent_stream(req: RunRequest, request: Request):
             final_content = final_content or ""
             if final_content:
                 final_content = _append_artifact_links(final_content, uid, artifact_paths)
+                if "/api/screenshot" in final_content:
+                    logger.warning("[run/stream] ⚠️ final_content 仍包含截图引用！来源待查")
                 logger.info("[run/stream] 发送 done: content_len=%d", len(final_content))
                 yield f"data: {json.dumps({'type': 'done', 'content': final_content}, ensure_ascii=False)}\n\n"
                 _save_assistant_result(uid, session_id, req.message, final_content, collected_steps, collected_todo_list)
