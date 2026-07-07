@@ -393,9 +393,17 @@ def session_messages_to_langchain(messages: list[dict]) -> list:
             if content:
                 converted.append(HumanMessage(content=content))
         elif role == "assistant" and content:
+            # 只取 text 字段，丢弃 steps/steps_full 等前端展示用字段，避免 LLM 看到工具过程记录
+            try:
+                parsed = json.loads(content)
+                if isinstance(parsed, dict) and parsed.get("text"):
+                    content = parsed["text"]
+            except (json.JSONDecodeError, TypeError):
+                pass
             # 剥离历史截图引用，避免 LLM 在后续回复中重复输出
             content = _strip_screenshot_urls_from_text(content)[0]
-            converted.append(AIMessage(content=content))
+            if content:
+                converted.append(AIMessage(content=content))
     return converted
 
 

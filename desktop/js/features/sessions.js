@@ -111,6 +111,10 @@ async function loadSessionMessages(sessionId, source) {
 
 // 恢复带步骤卡片的助手消息（从历史加载时使用）
 function addBotMessageWithSteps(content, steps, todoList) {
+  // 先渲染 assistant 的文本回复（之前被忽略，导致历史消息只显示工具过程）
+  if (content) {
+    addMessage(content, 'bot');
+  }
   // 重置状态，模拟新一轮流式输出的初始条件
   currentBotMsgEl = null;
   currentStepsEl = null;
