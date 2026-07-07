@@ -24,14 +24,19 @@ def _decode_message_content(content: str) -> dict:
             images = payload.get("images", [])
             if images:
                 data_urls = []
-                for img_path in images:
-                    try:
-                        raw = Path(img_path).read_bytes()
-                        ext = Path(img_path).suffix.lstrip(".") or "png"
-                        b64 = base64.b64encode(raw).decode()
-                        data_urls.append(f"data:image/{ext};base64,{b64}")
-                    except Exception:
-                        pass
+                for img in images:
+                    # 已经是 data URL 格式（如微信 Bot 直接传入的 base64）
+                    if str(img).startswith("data:image/"):
+                        data_urls.append(str(img))
+                    # 本地文件路径（如 Web 端上传后保存的路径）
+                    else:
+                        try:
+                            raw = Path(img).read_bytes()
+                            ext = Path(img).suffix.lstrip(".") or "png"
+                            b64 = base64.b64encode(raw).decode()
+                            data_urls.append(f"data:image/{ext};base64,{b64}")
+                        except Exception:
+                            pass
                 if data_urls:
                     result["images"] = data_urls
             # 步骤卡片（助手消息）

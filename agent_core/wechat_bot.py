@@ -743,21 +743,28 @@ class WeChatBot:
                 data_url = await self._download_image_as_data_url(img_to_use)
                 if data_url:
                     mime_type = data_url.split(";")[0].split(":")[1] if ";" in data_url else "image/png"
+                    # 同时设置 attachments 供 agent 处理，并保存 JSON 格式供前端渲染
                     attachments = [{"mime_type": mime_type, "data_url": data_url}]
-                    # 保存图片记录到消息
                     img_text = f"[图片: {img_to_use.get('msg_id', '')[-8:]}]"
-                    session_store.add_message(wechat_uid, session_id, "user", img_text)
+                    payload = json.dumps(
+                        {"text": text or img_text, "images": [data_url]},
+                        ensure_ascii=False,
+                    )
+                    session_store.add_message(wechat_uid, session_id, "user", payload)
                     logger.info("[微信Bot:%s] 合并图片+文本消息", self.user_id)
             except Exception as e:
                 logger.warning("[微信Bot:%s] 图片下载/转换失败: %s", self.user_id, e)
+                # 降级为纯文本保存
+                session_store.add_message(wechat_uid, session_id, "user", text)
         else:
             # 无图片时清理可能的残留（另一用户的 pending 不会被误pop）
             self._pending_images.pop(from_user, None)
 
-        # 保存用户文本消息
-        add_ret = session_store.add_message(wechat_uid, session_id, "user", text)
-        if add_ret is None:
-            logger.warning("[微信Bot:%s] 用户消息保存失败: session=%s 不存在", self.user_id, session_id)
+        # 保存用户文本消息（无图片时的纯文本）
+        if not img_to_use:
+            add_ret = session_store.add_message(wechat_uid, session_id, "user", text)
+            if add_ret is None:
+                logger.warning("[微信Bot:%s] 用户消息保存失败: session=%s 不存在", self.user_id, session_id)
 
         # 发送"正在输入"状态
         await self.send_typing(from_user, context_token)
