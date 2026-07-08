@@ -52,15 +52,16 @@ _DEFAULT_TIMEOUT = 120
 def _detect_shell() -> list[str]:
     """检测当前操作系统并返回 shell 命令。"""
     if sys.platform == "win32":
-        # Windows：优先用 PowerShell，降级到 cmd
+        # Windows：优先用 cmd（兼容用户常见的 cmd 语法 || && >nul 等）
+        # PowerShell 不兼容这些语法，作为降级选项
         try:
             subprocess.run(
-                ["powershell", "-Command", "echo 1"],
+                ["cmd", "/c", "echo 1"],
                 capture_output=True, timeout=5, check=False,
             )
-            return ["powershell", "-NoProfile", "-Command"]
-        except Exception:
             return ["cmd", "/c"]
+        except Exception:
+            return ["powershell", "-NoProfile", "-Command"]
     else:
         # Unix/Linux/macOS：用 bash，降级到 sh
         for shell_cmd in ["bash", "zsh", "sh"]:
@@ -96,7 +97,7 @@ def _clean_command_for_cmd(command: str) -> str:
 @tool
 def run_shell(command: str, timeout: int = _DEFAULT_TIMEOUT) -> str:
     """执行 Shell 命令并返回 stdout/stderr 输出。
-    自动检测操作系统选择合适的 shell（Linux/macOS 用 bash，Windows 用 powershell）。
+    自动检测操作系统选择合适的 shell（Linux/macOS 用 bash，Windows 用 cmd）。
 
     参数:
       command: 要执行的 shell 命令字符串
@@ -136,15 +137,10 @@ def run_shell(command: str, timeout: int = _DEFAULT_TIMEOUT) -> str:
     raw_output = ""
     start_time = time.time()
     try:
-        # Windows 下 cmd/powershell 默认使用 GBK/cp936 编码，
+        # Windows 下 cmd 默认使用 GBK/cp936 编码，
         # 强制切换到 UTF-8 代码页，避免中文乱码
-        if sys.platform == "win32":
-            if "powershell" in shell_cmd[0].lower():
-                # PowerShell: 设置控制台输出编码为 UTF-8
-                cmd = f"[Console]::OutputEncoding = [Text.UTF8Encoding]::new(); {cmd}"
-            else:
-                # cmd: @ 抑制回显，>nul 重定向，&& 顺序执行
-                cmd = f"@chcp 65001 >nul && {cmd}"
+        if sys.platform == "win32" and shell_cmd[0] == "cmd":
+            cmd = f"@chcp 65001 >nul && {cmd}"
         proc = subprocess.Popen(
             shell_cmd + [cmd],
             stdout=subprocess.PIPE,
