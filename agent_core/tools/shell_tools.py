@@ -139,7 +139,12 @@ def run_shell(command: str, timeout: int = _DEFAULT_TIMEOUT) -> str:
         # Windows 下 cmd/powershell 默认使用 GBK/cp936 编码，
         # 强制切换到 UTF-8 代码页，避免中文乱码
         if sys.platform == "win32":
-            cmd = f"@chcp 65001 >nul && {cmd}"
+            if "powershell" in shell_cmd[0].lower():
+                # PowerShell: 设置控制台输出编码为 UTF-8
+                cmd = f"[Console]::OutputEncoding = [Text.UTF8Encoding]::new(); {cmd}"
+            else:
+                # cmd: @ 抑制回显，>nul 重定向，&& 顺序执行
+                cmd = f"@chcp 65001 >nul && {cmd}"
         proc = subprocess.Popen(
             shell_cmd + [cmd],
             stdout=subprocess.PIPE,
