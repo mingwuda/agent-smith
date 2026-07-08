@@ -86,12 +86,17 @@ def _is_command_forbidden(command: str) -> tuple[bool, str]:
 
 
 def _clean_command_for_cmd(command: str) -> str:
-    """Windows cmd 下替换路径分隔符等。"""
-    return (
-        command.replace("/", "\\")
-        if sys.platform == "win32"
-        else command
-    )
+    """Windows cmd 下替换路径分隔符等（跳过 URL 避免破坏协议头）。"""
+    if sys.platform != "win32":
+        return command
+    # 只在非 URL 片段中将 / 替换为 \
+    parts = []
+    for segment in command.split():
+        if "://" in segment:
+            parts.append(segment)  # URL 原样保留
+        else:
+            parts.append(segment.replace("/", "\\"))
+    return " ".join(parts)
 
 
 @tool
