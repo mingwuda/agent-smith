@@ -114,8 +114,11 @@ def save_settings(req: SettingsRequest, request: Request):
     cfg.api_timeout_seconds = max(60.0, float(req.api_timeout_seconds or 120.0))
     cfg.api_host_ips = req.api_host_ips or cfg.api_host_ips
     cfg.context_window_tokens = max(0, int(req.context_window_tokens or 0))
-    cfg.review_provider_id = req.review_provider_id or ""
-    cfg.review_model = req.review_model or ""
+    # 审核模型：仅在显式提交时更新，避免未提交此字段的请求（如 quickSwitch）清空
+    if req.review_provider_id is not None:
+        cfg.review_provider_id = req.review_provider_id
+    if req.review_model is not None:
+        cfg.review_model = req.review_model
     cfg.tavily_search_enabled = bool(req.tavily_search_enabled)
     if req.tavily_api_key:
         cfg.tavily_api_key = req.tavily_api_key

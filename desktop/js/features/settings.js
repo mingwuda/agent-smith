@@ -360,6 +360,8 @@ async function quickSwitchProvider(providerId) {
         tavily_api_key: '',
         tavily_search_url: settingsData.tavily_search_url || 'https://api.tavily.com/search',
         anysearch_api_key: '',
+        review_provider_id: settingsData.review_provider_id || '',
+        review_model: settingsData.review_model || '',
       }),
     });
     const data = await res.json();
