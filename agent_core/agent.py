@@ -979,6 +979,9 @@ class DesktopAgent:
                         })
                     if running_tools:
                         last_progress_at = now
+                    else:
+                        # 无运行中工具时仍发送 ping 事件，避免连接因空闲断开
+                        yield _sse({"type": "ping"})
                     # 子代理结束但父模型长时间没有产生最终回复，强制终止
                     # 以 subagent_end 发送时间为基准，避免父模型内部的慢速/空轮询刷新 idle 时间
                     if subagent_end_sent_at and not running_tools and not loop_guard_triggered:
@@ -1405,16 +1408,18 @@ class DesktopAgent:
         Python 会抛出 RuntimeError），因此将 done 事件放在外层生成器发送。
         """
         done_yielded = False
+        cancelled = False
         try:
             async for sse in self.stream_run(*args, **kwargs):
                 yield sse
                 if '"type": "done"' in sse or '"type": "error"' in sse:
                     done_yielded = True
         except GeneratorExit:
-            # aclose() 被调用，stream_run 内部已处理 cleanup
-            pass
+            # aclose() 被调用，stream_run 内部已清理。GeneratorExit 后不能 yield
+            cancelled = True
+            return
         
-        if not done_yielded:
+        if not done_yielded and not cancelled:
             yield _sse({"type": "done", "content": ""})
             yield "data: [DONE]\n\n"
     

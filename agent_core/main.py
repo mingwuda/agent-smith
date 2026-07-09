@@ -344,4 +344,5 @@ if __name__ == "__main__":
         reload=False,
         log_level="info",
         loop="asyncio",
+        timeout_keep_alive=120,  # 保持连接 120 秒，减少代理/浏览器空闲断开
     )
