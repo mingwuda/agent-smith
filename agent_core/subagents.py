@@ -84,11 +84,13 @@ class SubagentManager:
         self._tasks: dict[str, SubagentTask] = {}
         self._config: Optional[AgentConfig] = None
         self._tools: list = []
+        self._review_llm: Optional[ChatOpenAI] = None  # 审核子代理用独立模型
         # 当前批次任务列表（按 capsule_id 索引），供前端 SSE 轮询用
         self._current_batch: list[SubagentTask] = []
 
-    def configure(self, config: AgentConfig, tools: list):
+    def configure(self, config: AgentConfig, tools: list, review_llm=None):
         self._config = config
+        self._review_llm = review_llm
         all_tools = [
             item for item in tools
             if getattr(item, "name", "") not in {"delegate_task", "delegate_tasks_parallel"}
@@ -200,18 +202,23 @@ class SubagentManager:
 
     async def _run_agent(self, item: SubagentTask) -> str:
         assert self._config is not None
-        if self._config.base_url:
-            host = urlparse(self._config.base_url).hostname
-            if host:
-                configure_host_resolution(host, self._config.api_host_ips)
-        llm = ChatOpenAI(
-            model=self._config.model,
-            api_key=self._config.api_key or "sk-no-key-required",
-            base_url=self._config.base_url or None,
-            temperature=0,
-            max_retries=self._config.api_max_retries,
-            timeout=self._config.api_timeout_seconds,
-        )
+        # reviewer 子代理使用审核模型（如果已配置），其余使用主模型
+        is_reviewer = item.agent_type == "reviewer"
+        if is_reviewer and self._review_llm is not None:
+            llm = self._review_llm
+        else:
+            if self._config.base_url:
+                host = urlparse(self._config.base_url).hostname
+                if host:
+                    configure_host_resolution(host, self._config.api_host_ips)
+            llm = ChatOpenAI(
+                model=self._config.model,
+                api_key=self._config.api_key or "sk-no-key-required",
+                base_url=self._config.base_url or None,
+                temperature=0,
+                max_retries=self._config.api_max_retries,
+                timeout=self._config.api_timeout_seconds,
+            )
         prompt = (
             f"{SUBAGENT_PROMPTS[item.agent_type]}\n\n"
             "你是主代理派发出的子代理。你的输出会返回给主代理整合。"

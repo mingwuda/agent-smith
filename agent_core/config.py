@@ -80,6 +80,10 @@ class AgentConfig:
     active_provider: str = "openai"
     providers: dict[str, dict[str, Any]] = field(default_factory=lambda: deepcopy(DEFAULT_PROVIDERS))
     
+    # 审核模型（从已有 providers 中选择）
+    review_provider_id: str = ""
+    review_model: str = ""
+    
     # 工作区
     workspace: str = str(Path.home() / "agent_workspace")
     
@@ -323,6 +327,8 @@ class AgentConfig:
             "tavily_api_key": self.tavily_api_key,
             "tavily_search_url": self.tavily_search_url,
             "anysearch_api_key": self.anysearch_api_key,
+            "review_provider_id": self.review_provider_id,
+            "review_model": self.review_model,
         }
         CONFIG_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     
@@ -366,4 +372,6 @@ class AgentConfig:
             "tavily_search_url": self.tavily_search_url or "https://api.tavily.com/search",
             "anysearch_api_key_configured": bool(self.anysearch_api_key),
             "anysearch_api_key_preview": self.anysearch_api_key[:8] + "..." if len(self.anysearch_api_key) > 8 else ("已设置" if self.anysearch_api_key else "未设置"),
+            "review_provider_id": self.review_provider_id,
+            "review_model": self.review_model,
         }

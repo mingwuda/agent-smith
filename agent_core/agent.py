@@ -462,6 +462,7 @@ class DesktopAgent:
     def __init__(self, config: AgentConfig):
         self.config = config
         self.llm = self._build_llm()
+        self.review_llm = self._build_review_llm()  # 审核模型（可选）
         self.memory = MemorySaver()
         self._user_id = "default"
         self._tracker: UsageTracker = get_tracker(self._user_id)
@@ -509,6 +510,26 @@ class DesktopAgent:
             if host:
                 configure_host_resolution(host, self.config.api_host_ips)
         return ChatOpenAI(**kwargs)
+
+    def _build_review_llm(self):
+        """构建审核模型 LLM 实例（从 review_provider_id 配置）。"""
+        pid = (self.config.review_provider_id or "").strip()
+        if not pid or pid not in self.config.providers:
+            return None
+        prov = self.config.providers[pid]
+        model = (self.config.review_model or "").strip() or prov.get("model", "")
+        api_key = prov.get("api_key", "") or ""
+        base_url = prov.get("base_url", "") or ""
+        if not model:
+            return None
+        return ChatOpenAI(
+            model=model,
+            api_key=api_key or "sk-no-key-required",
+            base_url=base_url or None,
+            temperature=0,
+            max_retries=self.config.api_max_retries,
+            timeout=self.config.api_timeout_seconds,
+        )
 
     def _create_graph(self, model_override: str = ""):
         return create_react_agent(

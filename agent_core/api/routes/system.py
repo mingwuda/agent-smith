@@ -35,6 +35,8 @@ class SettingsRequest(BaseModel):
     tavily_api_key: str = ""
     tavily_search_url: str = "https://api.tavily.com/search"
     anysearch_api_key: str = ""
+    review_provider_id: str = ""
+    review_model: str = ""
 
 
 class UserInfo(BaseModel):
@@ -112,6 +114,8 @@ def save_settings(req: SettingsRequest, request: Request):
     cfg.api_timeout_seconds = max(60.0, float(req.api_timeout_seconds or 120.0))
     cfg.api_host_ips = req.api_host_ips or cfg.api_host_ips
     cfg.context_window_tokens = max(0, int(req.context_window_tokens or 0))
+    cfg.review_provider_id = req.review_provider_id or ""
+    cfg.review_model = req.review_model or ""
     cfg.tavily_search_enabled = bool(req.tavily_search_enabled)
     if req.tavily_api_key:
         cfg.tavily_api_key = req.tavily_api_key

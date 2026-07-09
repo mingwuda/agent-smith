@@ -217,6 +217,22 @@
             <input id="s-base-url" placeholder="留空用 OpenAI 官方，DeepSeek: https://api.deepseek.com" data-i18n-placeholder="baseUrlPlaceholder" />
             <div class="hint" data-i18n="baseUrlHint">自定义 API 地址，如 DeepSeek 填 https://api.deepseek.com</div>
           </div>
+
+          <hr style="margin:16px 0;border:0;border-top:1px solid #333;" />
+          <div class="form-group">
+            <label for="s-review-provider">审核模型（可选）</label>
+            <select id="s-review-provider" onchange="onReviewProviderChange()">
+              <option value="">— 不启用 —</option>
+            </select>
+            <div class="hint">用于代码审核的子代理将使用此模型，开发模型不变。</div>
+          </div>
+          <div class="form-group" id="s-review-model-group" style="display:none">
+            <label for="s-review-model">审核模型名称</label>
+            <input id="s-review-model" list="s-review-model-options" placeholder="留空用该厂商的默认模型" />
+            <datalist id="s-review-model-options"></datalist>
+            <div class="hint">留空则使用所选厂商配置的默认模型。</div>
+          </div>
+
           <div class="form-group">
             <label for="s-recursion-limit" data-i18n="recursionLimitLabel">最大推理步数</label>
             <input id="s-recursion-limit" type="number" min="10" max="200" step="1" />

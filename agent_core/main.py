@@ -160,7 +160,7 @@ def init_agent():
     all_tools.extend(shell_tools.TOOLS)
     all_tools.extend(browser_tools.TOOLS)
     all_tools.extend(todo_tools.TOOLS)
-    subagents.manager.configure(config, all_tools)
+    subagents.manager.configure(config, all_tools, review_llm=getattr(agent, "review_llm", None))
     
     # 先加载 Skills，再构建 Agent graph
     app_base = _app_base_dir()

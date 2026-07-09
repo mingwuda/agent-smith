@@ -29,6 +29,18 @@ function populateProviderSelect(data) {
   const select = document.getElementById('s-provider');
   populateProviderOptions(select, data, true);
   select.value = data.active_provider || 'openai';
+  // 同时填充审核模型下拉框
+  const reviewSelect = document.getElementById('s-review-provider');
+  var curVal = reviewSelect.value;
+  reviewSelect.innerHTML = '<option value="">— 不启用 —</option>';
+  Object.entries(data.providers || {}).forEach(function(entry) {
+    var id = entry[0], provider = entry[1];
+    var opt = document.createElement('option');
+    opt.value = id;
+    opt.textContent = providerLabel(provider, id);
+    reviewSelect.appendChild(opt);
+  });
+  reviewSelect.value = data.review_provider_id || curVal || '';
 }
 
 // ── 顶部状态栏 Provider 切换下拉菜单 ──
@@ -138,6 +150,52 @@ function renderProviderFields(providerId) {
   document.getElementById('s-anysearch-api-key-hint').textContent = settingsData.anysearch_api_key_configured
     ? t('anysearchApiKeySaved', { preview: settingsData.anysearch_api_key_preview })
     : t('anysearchApiKeyNotSaved');
+
+  // ── 审核模型 ──
+  var reviewSelect = document.getElementById('s-review-provider');
+  var currentReview = settingsData.review_provider_id || '';
+  for (var i = 0; i < reviewSelect.options.length; i++) {
+    reviewSelect.options[i].selected = reviewSelect.options[i].value === currentReview;
+  }
+  document.getElementById('s-review-model').value = settingsData.review_model || '';
+  var reviewModelGroup = document.getElementById('s-review-model-group');
+  if (reviewModelGroup) {
+    reviewModelGroup.style.display = currentReview ? '' : 'none';
+  }
+  // 填充审核模型候选列表
+  var reviewModelOpts = document.getElementById('s-review-model-options');
+  reviewModelOpts.innerHTML = '';
+  var selProv = settingsData.providers[currentReview];
+  if (selProv && selProv.models) {
+    selProv.models.forEach(function(m) {
+      var opt = document.createElement('option');
+      opt.value = m;
+      reviewModelOpts.appendChild(opt);
+    });
+  }
+}
+
+function onReviewProviderChange() {
+  var sel = document.getElementById('s-review-provider');
+  var g = document.getElementById('s-review-model-group');
+  if (g) g.style.display = sel.value ? '' : 'none';
+  // 更新候选列表
+  var opts = document.getElementById('s-review-model-options');
+  opts.innerHTML = '';
+  if (sel.value && settingsData && settingsData.providers) {
+    var prov = settingsData.providers[sel.value];
+    if (prov && prov.models) {
+      prov.models.forEach(function(m) {
+        var opt = document.createElement('option');
+        opt.value = m;
+        opts.appendChild(opt);
+      });
+    }
+    // 默认填入该提供商的 model
+    if (prov && prov.model) {
+      document.getElementById('s-review-model').value = prov.model;
+    }
+  }
 }
 
 function onProviderChange() {
@@ -246,6 +304,8 @@ async function saveSettings() {
         tavily_api_key: document.getElementById('s-tavily-api-key').value,
         tavily_search_url: document.getElementById('s-tavily-search-url').value,
         anysearch_api_key: document.getElementById('s-anysearch-api-key').value,
+        review_provider_id: document.getElementById('s-review-provider').value,
+        review_model: document.getElementById('s-review-model').value,
       }),
     });
     const data = await res.json();
