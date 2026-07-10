@@ -82,10 +82,12 @@ def delete_settings_provider(provider_id: str, request: Request):
     try:
         cfg.delete_provider(provider_id)
         cfg.save()
-        # 重启 Agent（同时同步 monitoring 引用）
+        # 重启 Agent（同时同步 monitoring 与 agent 路由引用）
         from api.routes.monitoring import init_agent as _monitoring_init
+        from api.routes.agent import init_agent as _agent_init
         try:
             _monitoring_init()
+            _agent_init()
         except Exception:
             logger.exception("删除 Provider 后 Agent 重新初始化失败")
         return {"status": "ok", "message": f"已删除 Provider '{provider_id}'"}
@@ -160,10 +162,13 @@ def save_settings(req: SettingsRequest, request: Request):
     else:
         os.environ.pop("LLM_BASE_URL", None)
     
-    # 重启 Agent（同时同步 monitoring 的引用，确保 /health 读到新模型）
+    # 重启 Agent（同时同步 monitoring 与 agent 路由的引用，
+    # 确保 /health 读到新模型、聊天接口用上新的 LLM client）
     from api.routes.monitoring import init_agent as _monitoring_init
+    from api.routes.agent import init_agent as _agent_init
     try:
         _monitoring_init()
+        _agent_init()
         return {"status": "ok", "message": "设置已保存，Agent 已重新初始化"}
     except Exception as e:
         logger.exception("保存设置后 Agent 重新初始化失败")
