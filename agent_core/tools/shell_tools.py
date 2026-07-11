@@ -125,17 +125,44 @@ def _is_command_forbidden(command: str) -> tuple[bool, str]:
     return False, ""
 
 
+# cmd 参数标志：以 / 开头、第二字符为字母，且不含点号与额外斜杠（如 /i /s /c:"x" /d:C:\p）
+# ponytail: 旧实现把所有非 URL 片段的 / 都替换成 \，会把 findstr /i、dir /s 等参数
+# 标志破坏成 \i、\s，导致命令报错（FINDSTR: Cannot open ...）。现跳过疑似 cmd 标志的片段。
+_CMD_FLAG_RE = re.compile(r"^/[a-zA-Z][^./\s]*$")
+
+
+def _is_cmd_flag(segment: str) -> bool:
+    """判定片段是否为 cmd 参数标志（如 /i /s /fi /c:"x"），应原样保留。"""
+    return bool(_CMD_FLAG_RE.match(segment))
+
+
+def _smart_decode(data: bytes) -> str:
+    """尝试 UTF-8 解码，失败回退 GBK。
+
+    ponytail: Windows cmd 下 Python 等输出 UTF-8，而 wmic 等系统命令在 chcp 65001
+    下仍输出 GBK，单一编码必有一方乱码，故做编码回退。上限：同一流混合两种编码会
+    失败，但罕见；真遇此情况最终以 utf-8+replace 兜底。
+    """
+    for enc in ("utf-8", "gbk"):
+        try:
+            return data.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return data.decode("utf-8", errors="replace")
+
+
 def _clean_command_for_cmd(command: str) -> str:
-    """Windows cmd 下替换路径分隔符等（跳过 URL 避免破坏协议头）。"""
+    """Windows cmd 下将路径分隔符 / 替换为 \\，但保留 cmd 参数标志（如 /i /s /c:）。"""
     if sys.platform != "win32":
         return command
-    # 只在非 URL 片段中将 / 替换为 \
     parts = []
     for segment in command.split():
         if "://" in segment:
-            parts.append(segment)  # URL 原样保留
+            parts.append(segment)       # URL 原样保留
+        elif _is_cmd_flag(segment):
+            parts.append(segment)       # cmd 参数标志，原样保留
         else:
-            parts.append(segment.replace("/", "\\"))
+            parts.append(segment.replace("/", "\\"))  # 路径等：/ -> \
     return " ".join(parts)
 
 
@@ -174,27 +201,29 @@ def run_shell(command: str, timeout: int = _DEFAULT_TIMEOUT) -> str:
         before_files = _snapshot_meta(_workspace)
 
     # ── 执行 ──
-    raw_output = ""
+    raw_bytes = b""
     start_time = time.time()
     try:
-        # Windows 下 cmd 默认使用 GBK/cp936 编码，
-        # 强制切换到 UTF-8 代码页，避免中文乱码
+        # Windows 下 cmd 默认使用 GBK/cp936 编码。
+        # 强制切到 UTF-8 代码页让 Python 等命令中文不乱码；
+        # 但 wmic 等系统命令在该代码页下仍输出 GBK，
+        # 故读取后做 utf-8 优先、GBK 回退的智能解码（见 _smart_decode）。
         if sys.platform == "win32" and shell_cmd[0] == "cmd":
             cmd = f"@chcp 65001 >nul && {cmd}"
         proc = subprocess.Popen(
             shell_cmd + [cmd],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
             cwd=str(_workspace) if _workspace else None,
         )
 
         def _reader():
-            nonlocal raw_output
-            for line in proc.stdout:
-                raw_output += line
+            nonlocal raw_bytes
+            while True:
+                chunk = proc.stdout.read(4096)
+                if not chunk:
+                    break
+                raw_bytes += chunk
 
         reader_thread = threading.Thread(target=_reader, daemon=True)
         reader_thread.start()
@@ -202,12 +231,14 @@ def run_shell(command: str, timeout: int = _DEFAULT_TIMEOUT) -> str:
         proc.wait(timeout=timeout)
         reader_thread.join(timeout=5)
 
+        raw_output = _smart_decode(raw_bytes)
         elapsed = time.time() - start_time
         returncode = proc.returncode
     except subprocess.TimeoutExpired:
         proc.kill()
         reader_thread.join(timeout=2)
         elapsed = time.time() - start_time
+        raw_output = _smart_decode(raw_bytes)
         return (
             f"❌ 命令执行超时（{elapsed:.0f}s，上限 {timeout}s）。\n"
             f"已输出 {len(raw_output)} 字符:\n{_truncate(raw_output)}"

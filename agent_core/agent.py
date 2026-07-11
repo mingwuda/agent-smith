@@ -686,6 +686,13 @@ class DesktopAgent:
     def _record_model_usage(self, input_tokens: int, output_tokens: int, cached_tokens: int = 0, source: str = "llm", thread_id: str = ""):
         if input_tokens <= 0 and output_tokens <= 0:
             return
+        # ponytail: 上游网关偶发把 session 累计 token 当作单次 input_tokens 上报（虚高），
+        # 真实单次调用不可能在数秒内处理数百万 token。此处仅告警、不改值，避免污染用量统计。
+        if input_tokens > 500_000:
+            logger.warning(
+                "[usage] 单次 input_tokens=%d 异常偏高（疑似网关累计值虚高，已照实记录但不修正）",
+                input_tokens,
+            )
         self.tracker.record_model_call(
             provider=self.config.active_provider,
             model=self.config.model,
