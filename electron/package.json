@@ -1,0 +1,42 @@
+{
+  "name": "desktop-agent-electron",
+  "version": "0.1.0",
+  "description": "Electron 窗口壳：把 Desktop Agent 后端（FastAPI）包进原生窗口，用户无需打开浏览器或记忆端口",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder"
+  },
+  "build": {
+    "appId": "com.desktopagent.app",
+    "productName": "Desktop Agent",
+    "files": [
+      "main.js",
+      "loading.html"
+    ],
+    "extraResources": [
+      {
+        "from": "../dist/windows/DesktopAgent-Windows",
+        "to": "agent",
+        "filter": ["**/*"]
+      }
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "artifactName": "DesktopAgent-Setup-${version}.${ext}"
+    }
+  },
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3"
+  }
+}

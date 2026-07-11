@@ -345,15 +345,41 @@ app.include_router(monitoring_router)
 
 if __name__ == "__main__":
     import uvicorn
-    # 兼容 start.sh 的 AGENT_PORT 和标准 DESKTOP_AGENT_PORT
+
+    # 兼容 start.sh 的 AGENT_PORT / DESKTOP_AGENT_PORT；host 可由 AGENT_HOST 覆盖
+    # （Electron 壳场景绑定 127.0.0.1，仅本机可访问，不暴露到局域网）
+    host = os.getenv("AGENT_HOST") or os.getenv("DESKTOP_AGENT_HOST") or "0.0.0.0"
     port = int(os.getenv("DESKTOP_AGENT_PORT") or os.getenv("AGENT_PORT") or "8899")
-    logger.info("🚀 Desktop Agent 启动中: http://127.0.0.1:%d", port)
-    uvicorn.run(
-        "main:app",
-        host="0.0.0.0",
+
+    config = uvicorn.Config(
+        app,
+        host=host,
         port=port,
         reload=False,
         log_level="info",
         loop="asyncio",
         timeout_keep_alive=120,  # 保持连接 120 秒，减少代理/浏览器空闲断开
     )
+    server = uvicorn.Server(config)
+
+    async def _serve():
+        # ponytail: 复刻 uvicorn.Server._serve 的启动序列，以便在 startup 之后、
+        # main_loop 之前读取 port=0 时系统分配的真实端口并打印供 Electron 解析。
+        # 不能直接调 server.startup()，因为 self.lifespan 要在 config.load() 之后才赋值。
+        config.load()
+        server.lifespan = config.lifespan_class(config)
+        await server.startup()
+        # port=0 时由系统分配随机端口，启动后读取真实端口
+        actual_port = port
+        if port == 0 and server.servers:
+            actual_port = server.servers[0].sockets[0].getsockname()[1]
+        # 打印一行固定前缀的监听地址，Electron 主进程用正则提取后即可 loadURL
+        print(f"AGENT_LISTEN_URL=http://{host}:{actual_port}", flush=True)
+        logger.info("🚀 Desktop Agent 就绪: http://%s:%d", host, actual_port)
+        await server.main_loop()
+        await server.shutdown()
+
+    try:
+        asyncio.run(_serve())
+    except KeyboardInterrupt:
+        pass
