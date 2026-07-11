@@ -24,7 +24,7 @@ def main():
 
     extras = [
         (root / "packaging" / "windows" / "Start Desktop Agent.bat", dest / "Start Desktop Agent.bat"),
-        (root / "packaging" / "windows" / "README-Windows.txt", dest / "README-Windows.txt"),
+        (root / "packaging" / "windows" / "README-Windows.md", dest / "README-Windows.md"),
     ]
 
     if not src.is_dir():
