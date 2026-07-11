@@ -178,10 +178,27 @@ input.addEventListener('compositionend', () => {
 input.addEventListener('input', resizeComposer);
 
 input.addEventListener('paste', (e) => {
-  const files = Array.from(e.clipboardData?.files || []).filter(file => file.type.startsWith('image/'));
-  if (!files.length) return;
+  // ponytail: 系统截图（Win+Shift+S / Snip 等）粘贴时 clipboardData.files 常为空，
+  // 图片只存在于 items 中，必须通过 item.getAsFile() 取出；旧实现只读 files 且误调用
+  // 未定义的 addImageFile → 截图粘贴彻底失效。这里优先遍历 items，回退到 files。
+  const dt = e.clipboardData;
+  if (!dt) return;
+
+  // 优先从 items 取（截图必经之路），再回退到 files（资源管理器复制图片文件时）
+  let images = [];
+  if (dt.items && dt.items.length) {
+    images = Array.from(dt.items)
+      .filter(it => it.kind === 'file' && it.type.startsWith('image/'))
+      .map(it => it.getAsFile())
+      .filter(Boolean);
+  }
+  if (!images.length && dt.files && dt.files.length) {
+    images = Array.from(dt.files).filter(file => file.type.startsWith('image/'));
+  }
+  if (!images.length) return;
+
   e.preventDefault();
-  files.forEach(addImageFile);
+  images.forEach(addFile);
 });
 
 input.addEventListener('keydown', (e) => {
