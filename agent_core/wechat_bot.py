@@ -605,6 +605,34 @@ class WeChatBot:
 
     # ── 消息处理 ──────────────────────────────────
 
+    def _build_session_list_text(self, wechat_uid: str, from_user: str) -> str:
+        """构建带序号的会话清单文本，并刷新 from_user 的序号映射缓存。
+
+        供 /list 与 /delete 复用。无会话时返回提示并清空缓存。
+        """
+        all_sessions = session_store.list_sessions(wechat_uid)
+        if not all_sessions:
+            # 清空缓存，避免陈旧序号残留
+            self._wechat_session_menu.pop(from_user, None)
+            return "📭 暂无会话。发送 /new 创建新会话。"
+        menu: dict[str, str] = {}
+        lines = [f"📋 共有 {len(all_sessions)} 个会话（用序号切换/删除）："]
+        for i, s in enumerate(all_sessions, 1):
+            sid = s["id"]
+            menu[str(i)] = sid
+            # 取最后一条用户消息作为摘要
+            sess_detail = session_store.get_session(wechat_uid, sid)
+            last_user_msg = ""
+            if sess_detail and sess_detail.get("messages"):
+                for m in reversed(sess_detail["messages"]):
+                    if m.get("role") == "user":
+                        last_user_msg = m.get("content", "")[:50]
+                        break
+            marker = "→ " if sid == self._wechat_sessions.get(from_user) else "  "
+            lines.append(f"{marker}{i}. {sid}: {last_user_msg or '(空)'}")
+        self._wechat_session_menu[from_user] = menu
+        return "\n".join(lines)
+
     async def _handle_message(self, msg: dict):
         """处理单条微信消息：调用 agent 并回复，同时保存到会话存储"""
         from_user = msg.get("from_user_id", "")
@@ -705,28 +733,8 @@ class WeChatBot:
 
         # ── /list 命令：列出所有会话（带序号，供 /switch /delete 按序号操作）──
         if text.strip() == "/list":
-            all_sessions = session_store.list_sessions(wechat_uid)
-            if not all_sessions:
-                await self.send_message(from_user, context_token, "📭 暂无会话。发送 /new 创建新会话。")
-                return
-            # 建立序号 → sessionId 映射并缓存，保证后续按序号解析与本列表一致
-            menu: dict[str, str] = {}
-            lines = [f"📋 共有 {len(all_sessions)} 个会话（用序号切换/删除）："]
-            for i, s in enumerate(all_sessions, 1):
-                sid = s["id"]
-                menu[str(i)] = sid
-                # 取最后一条用户消息作为摘要
-                sess_detail = session_store.get_session(wechat_uid, sid)
-                last_user_msg = ""
-                if sess_detail and sess_detail.get("messages"):
-                    for m in reversed(sess_detail["messages"]):
-                        if m.get("role") == "user":
-                            last_user_msg = m.get("content", "")[:50]
-                            break
-                marker = "→ " if sid == self._wechat_sessions.get(from_user) else "  "
-                lines.append(f"{marker}{i}. {sid}: {last_user_msg or '(空)'}")
-            self._wechat_session_menu[from_user] = menu
-            await self.send_message(from_user, context_token, "\n".join(lines))
+            list_text = self._build_session_list_text(wechat_uid, from_user)
+            await self.send_message(from_user, context_token, list_text)
             return
 
         # ── /switch 命令：切换会话（支持序号或原始 sessionId）──
@@ -777,8 +785,8 @@ class WeChatBot:
                 if self._wechat_sessions.get(from_user) == sid:
                     self._wechat_sessions.pop(from_user, None)
                     current_deleted = True
-            # 删除后列表已变，序号映射失效
-            self._wechat_session_menu.pop(from_user, None)
+            # 删除后列表已变，重新生成最新清单并刷新序号映射缓存
+            list_text = self._build_session_list_text(wechat_uid, from_user)
             # 构造汇总回复
             parts = [f"🗑️ 已删除 {len(deleted_sids)} 个会话"]
             if deleted_sids:
@@ -791,6 +799,8 @@ class WeChatBot:
                 parts.append(f"\n❌ 删除失败：{', '.join(failed)}")
             if current_deleted:
                 parts.append("\n（当前会话已删除，下一轮消息将自动重建默认会话）")
+            # 回显删除后的最新会话清单，便于用户确认与继续操作（序号映射已刷新）
+            parts.append("\n\n" + list_text)
             await self.send_message(from_user, context_token, "".join(parts))
             logger.info("[微信Bot:%s] 用户 %s 批量删除会话: 成功=%s 无效=%s 跳过=%s 失败=%s",
                         self.user_id, from_user[:16], deleted_sids, invalid, skipped, failed)
