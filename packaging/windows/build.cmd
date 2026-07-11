@@ -158,7 +158,7 @@ echo   %PACKAGE_DIR%
 echo.
 echo Next, build the desktop installer:
 echo   packaging\windows\build-electron.cmd
-echo It consumes the bundle above and produces electron\dist\DesktopAgent-Setup-0.1.0.exe
+echo It consumes the bundle above and produces dist\electron\DesktopAgent-Setup-0.1.0.exe
 echo ^(the only Windows desktop deliverable - no extracted folder / Start script is distributed^).
 
 endlocal

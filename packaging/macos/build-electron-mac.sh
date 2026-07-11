@@ -3,7 +3,7 @@
 # Build the distributable Desktop Agent Electron app for macOS.
 # Chains: PyInstaller backend (build.sh) -> electron-builder (dmg).
 #
-# MUST run on macOS. Produces: electron/dist/Desktop Agent-0.1.0-arm64.dmg
+# MUST run on macOS. Produces: dist/electron/Desktop Agent-0.1.0-arm64.dmg
 #
 # Usage:
 #   packaging/macos/build-electron-mac.sh                 # full build (backend + app)
@@ -69,7 +69,7 @@ echo "=== Running electron-builder (macOS, $EB_ARCH) ==="
 "$NODE" node_modules/electron-builder/cli.js --mac "$EB_ARCH"
 
 echo
-echo "macOS app built. Find it in electron/dist/ (a .dmg installer)."
+echo "macOS app built. Find it in dist/electron/ (a .dmg installer)."
 echo
 echo "IMPORTANT - distribution:"
 echo "  The .dmg is produced unsigned by default. macOS Gatekeeper will block it on other"

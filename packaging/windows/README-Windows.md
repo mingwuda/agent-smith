@@ -8,7 +8,7 @@ Windows 只提供 Electron 安装包这一种桌面交付物：
 
 | 产物 | 说明 |
 | --- | --- |
-| `electron/dist/DesktopAgent-Setup-0.1.0.exe` | NSIS 安装包，内置 Electron 运行时、Python 后端与 Playwright Chromium |
+| `dist/electron/DesktopAgent-Setup-0.1.0.exe` | NSIS 安装包，内置 Electron 运行时、Python 后端与 Playwright Chromium |
 
 > 早期提供过的「解压即用」版（`Start Desktop Agent.bat` + zip）已不再分发，以减少维护成本；PyInstaller 构建出的后端目录仅作为 electron-builder 的内部输入，不直接对外交付。
 
@@ -28,7 +28,7 @@ Windows 只提供 Electron 安装包这一种桌面交付物：
    packaging\windows\build-electron.cmd
    ```
 
-   产物：`electron/dist/DesktopAgent-Setup-0.1.0.exe`。可加 `--skip-backend` 跳过后端重建，只用现有目录重新打包。
+   产物：`dist/electron/DesktopAgent-Setup-0.1.0.exe`。可加 `--skip-backend` 跳过后端重建，只用现有目录重新打包。
 
 ## 安装包内容
 

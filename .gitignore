@@ -22,7 +22,7 @@ build_*.log
 
 # Electron（node_modules 含 Electron 运行时二进制，体积大，由 npm install 重新生成）
 electron/node_modules/
-electron/dist/
+# electron-builder 产物统一输出到 dist/electron/（已被上方 dist/ 忽略）
 # electron-builder 打包时生成在仓库根的空缓存文件（忽略即可）
 /electron-builder
 tmp_verify/

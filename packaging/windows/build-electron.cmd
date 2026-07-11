@@ -6,13 +6,20 @@ rem ============================================================
 rem  build-electron.cmd
 rem  One-click build of the Electron installer (nsis .exe).
 rem  Flow: build PyInstaller backend product -> electron-builder pack
-rem  Output: electron\dist\DesktopAgent-Setup-<version>.exe
+rem  Output: dist\electron\DesktopAgent-Setup-<version>.exe
+rem
+rem  Backend build is AUTO-DETECTED by default:
+rem    - if dist\windows\DesktopAgent-Windows\DesktopAgent.exe exists,
+rem      the backend build is skipped automatically (fast repack);
+rem    - otherwise the backend is built first.
 rem
 rem  Usage:
-rem    packaging\windows\build-electron.cmd            full build (recommended)
+rem    packaging\windows\build-electron.cmd
+rem        auto: skip backend build if product exists, else build it
+rem    packaging\windows\build-electron.cmd --rebuild-backend
+rem        force a fresh backend build even if a product exists
 rem    packaging\windows\build-electron.cmd --skip-backend
-rem        skip backend rebuild, only repack the Electron shell
-rem        (use when only electron/ changed)
+rem        force skip backend build (error out if product is missing)
 rem ============================================================
 
 set "ROOT=%~dp0..\.."
@@ -20,32 +27,56 @@ for %%I in ("%ROOT%") do set "ROOT=%%~fI"
 set "ELECTRON_DIR=%ROOT%\electron"
 set "PACKAGE_DIR=%ROOT%\dist\windows\DesktopAgent-Windows"
 set "SKIP_BACKEND=0"
+set "FORCE_BACKEND=0"
+
+:parse_args
+if "%~1"=="" goto after_args
 if /I "%~1"=="--skip-backend" set "SKIP_BACKEND=1"
+if /I "%~1"=="--rebuild-backend" set "FORCE_BACKEND=1"
+if /I "%~1"=="--force-backend" set "FORCE_BACKEND=1"
+shift
+goto parse_args
+:after_args
 
 cd /d "%ROOT%" || exit /b 1
 
-rem ---- 1) Build PyInstaller backend product ----
-if "%SKIP_BACKEND%"=="1" (
-  echo [1/3] Skipping backend build ^(--skip-backend^)
-  if not exist "%PACKAGE_DIR%\DesktopAgent.exe" (
-    echo Error: backend product not found at:
-    echo   %PACKAGE_DIR%\DesktopAgent.exe
-    echo Run without --skip-backend to build it first.
-    exit /b 1
-  )
-) else (
-  echo [1/3] Building PyInstaller backend product...
-  call "%ROOT%\packaging\windows\build.cmd"
-  if errorlevel 1 (
-    echo Error: backend build failed. See output above.
-    exit /b 1
-  )
-  if not exist "%PACKAGE_DIR%\DesktopAgent.exe" (
-    echo Error: backend build finished but DesktopAgent.exe is missing at:
-    echo   %PACKAGE_DIR%\DesktopAgent.exe
-    exit /b 1
-  )
+rem ---- 1) Build PyInstaller backend product (auto-detect) ----
+if "%FORCE_BACKEND%"=="1" goto do_build
+if "%SKIP_BACKEND%"=="1" goto do_skip
+if exist "%PACKAGE_DIR%\DesktopAgent.exe" goto auto_skip
+goto do_build
+
+:auto_skip
+echo [1/3] Found existing backend product, skipping backend build.
+echo       %PACKAGE_DIR%\DesktopAgent.exe
+echo       ^(use --rebuild-backend to force a fresh backend build^)
+goto backend_done
+
+:do_skip
+echo [1/3] Skipping backend build ^(--skip-backend^)
+if not exist "%PACKAGE_DIR%\DesktopAgent.exe" (
+  echo Error: backend product not found at:
+  echo   %PACKAGE_DIR%\DesktopAgent.exe
+  echo Run without --skip-backend to build it first.
+  exit /b 1
 )
+goto backend_done
+
+:do_build
+echo [1/3] Building PyInstaller backend product...
+call "%ROOT%\packaging\windows\build.cmd"
+if errorlevel 1 (
+  echo Error: backend build failed. See output above.
+  exit /b 1
+)
+if not exist "%PACKAGE_DIR%\DesktopAgent.exe" (
+  echo Error: backend build finished but DesktopAgent.exe is missing at:
+  echo   %PACKAGE_DIR%\DesktopAgent.exe
+  exit /b 1
+)
+goto backend_done
+
+:backend_done
 
 rem ---- 2) Locate node and check electron toolchain ----
 echo [2/3] Checking Electron toolchain...
@@ -95,8 +126,8 @@ if errorlevel 1 (
 echo.
 echo ============================================================
 echo Electron installer created under:
-echo   %ELECTRON_DIR%\dist\
-for %%F in ("%ELECTRON_DIR%\dist\*.exe") do echo   %%~nxF  (%%~zF bytes)
+echo   %ROOT%\dist\electron\
+for %%F in ("%ROOT%\dist\electron\*.exe") do echo   %%~nxF  (%%~zF bytes)
 echo ============================================================
 echo Distribute the DesktopAgent-Setup-*.exe. It bundles the Electron
 echo runtime + Python backend + Chromium. End users just double-click

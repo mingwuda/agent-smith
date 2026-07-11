@@ -4,6 +4,7 @@
   "description": "Electron 窗口壳：把 Desktop Agent 后端（FastAPI）包进原生窗口，用户无需打开浏览器或记忆端口",
   "main": "main.js",
   "private": true,
+  "author": "Desktop Agent Team",
   "scripts": {
     "start": "electron .",
     "pack": "electron-builder --dir",
@@ -16,22 +17,20 @@
       "main.js",
       "loading.html"
     ],
-    "extraResources": [
-      {
-        "from": "../dist/windows/DesktopAgent-Windows",
-        "to": "agent",
-        "filter": ["**/*"],
-        "os": "win"
-      },
-      {
-        "from": "../dist/macos/DesktopAgent-macOS",
-        "to": "agent",
-        "filter": ["**/*"],
-        "os": "darwin"
-      }
-    ],
+    "directories": {
+      "output": "../dist/electron"
+    },
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "extraResources": [
+        {
+          "from": "../dist/windows/DesktopAgent-Windows",
+          "to": "agent",
+          "filter": [
+            "**/*"
+          ]
+        }
+      ]
     },
     "mac": {
       "target": [
@@ -40,7 +39,16 @@
           "arch": "arm64"
         }
       ],
-      "category": "public.app-category.productivity"
+      "category": "public.app-category.productivity",
+      "extraResources": [
+        {
+          "from": "../dist/macos/DesktopAgent-macOS",
+          "to": "agent",
+          "filter": [
+            "**/*"
+          ]
+        }
+      ]
     },
     "dmg": {
       "title": "Desktop Agent ${version}"

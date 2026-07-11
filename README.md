@@ -831,7 +831,7 @@ packaging\windows\build-electron.cmd
 输出：
 
 ```text
-electron\dist\DesktopAgent-Setup-0.1.0.exe   # NSIS 安装包
+dist\electron\DesktopAgent-Setup-0.1.0.exe   # NSIS 安装包
 ```
 
 安装包内置 Electron 运行时、Python 后端（含 Playwright Chromium）。用户双击安装后从桌面/开始菜单快捷方式启动，首次启动自动拉起后端并加载窗口，**全程不出现浏览器、不显示端口、无需联网下载任何东西**。
@@ -863,9 +863,9 @@ bash packaging/macos/build-electron-mac.sh
 输出（取决于架构参数）：
 
 ```text
-electron/dist/Desktop Agent-0.1.0-arm64.dmg      # Apple Silicon 安装镜像（默认）
-electron/dist/Desktop Agent-0.1.0-x64.dmg        # Intel 安装镜像
-electron/dist/Desktop Agent-0.1.0.dmg            # 通用安装镜像（--universal）
+dist/electron/Desktop Agent-0.1.0-arm64.dmg      # Apple Silicon 安装镜像（默认）
+dist/electron/Desktop Agent-0.1.0-x64.dmg        # Intel 安装镜像
+dist/electron/Desktop Agent-0.1.0.dmg            # 通用安装镜像（--universal）
 ```
 
 > 代码签名：未签名的 dmg 在其它 Mac 上会被 Gatekeeper 拦截（"无法验证开发者"）。如需对外分发，请在 `electron/package.json` 的 `mac.identity` 填入 Apple 开发者证书、并配置 `afterSign` / `notarize` 后重跑脚本。开发自用可在「系统设置 → 隐私与安全性」中手动允许。
