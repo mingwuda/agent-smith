@@ -53,8 +53,11 @@ function addUserMessage(text, attachments = []) {
       } else if (isText) {
         const badge = document.createElement('div');
         const ext = name.lastIndexOf('.') >= 0 ? name.slice(name.lastIndexOf('.') + 1).toUpperCase() : 'FILE';
-        badge.style.cssText = 'width:96px;height:96px;display:flex;flex-direction:column;align-items:center;justify-content:center;border-radius:8px;background:#f3f4f6;color:#374151;border:1px solid rgba(255,255,255,.5);font-size:11px;font-weight:bold;';
+        badge.style.cssText = 'width:96px;height:96px;display:flex;flex-direction:column;align-items:center;justify-content:center;border-radius:8px;background:#f3f4f6;color:#374151;border:1px solid rgba(255,255,255,.5);font-size:11px;font-weight:bold;cursor:pointer;';
         badge.innerHTML = '<span style="font-size:28px;line-height:1">📄</span><span style="margin-top:4px">' + escapeHtml(name) + '</span>';
+        // ponytail: 文本附件默认只显示图标，用户双击才展开内容（刷新恢复的消息 item.content 已有内容；实时消息从 data_url 解码）
+        badge.title = currentLanguage === 'en' ? 'Double-click to view file content' : '双击查看文件内容';
+        badge.addEventListener('dblclick', () => toggleTextExpand(div, item, badge));
         grid.appendChild(badge);
       } else {
         const img = document.createElement('img');
@@ -67,6 +70,65 @@ function addUserMessage(text, attachments = []) {
     div.appendChild(grid);
   }
   return div;
+}
+
+// ---------- 文本附件：解析 / 双击展开 ----------
+// 后端把文本附件内联成 "消息\n── 文件: 名称 ──\n内容" 存进用户消息 text 字段；
+// 刷新恢复时据此把内联文本还原成「图标 + 双击展开」，与实时发送表现一致。
+const TEXT_FILE_RE = /\n── 文件: ([^\n]+?) ──\n([\s\S]*?)(?=\n── 文件: |$)/g;
+
+function parseTextFilesFromContent(content) {
+  if (!content || content.indexOf('\n── 文件:') === -1) {
+    return { message: content || '', files: [] };
+  }
+  const files = [];
+  let m;
+  TEXT_FILE_RE.lastIndex = 0;
+  while ((m = TEXT_FILE_RE.exec(content)) !== null) {
+    files.push({ name: m[1], content: m[2] });
+  }
+  const firstIdx = content.indexOf('\n── 文件:');
+  const message = content.slice(0, firstIdx).trim();
+  return { message: message, files: files };
+}
+
+// 取文本附件内容：优先用 item.content（刷新恢复），否则从 data_url(base64) 解码（实时发送）
+function attachmentTextContent(item) {
+  if (item && item.content) return item.content;
+  if (item && typeof item.data_url === 'string' && item.data_url.indexOf('data:') === 0) {
+    const comma = item.data_url.indexOf(',');
+    if (comma >= 0) {
+      try {
+        const bin = atob(item.data_url.slice(comma + 1));
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        // ponytail: 文本附件 ≤1MB，utf-8 优先；gbk 仅作极端回退
+        try {
+          return new TextDecoder('utf-8').decode(bytes);
+        } catch (e) {
+          try { return new TextDecoder('gbk').decode(bytes); } catch (e2) { return ''; }
+        }
+      } catch (e) {
+        return '';
+      }
+    }
+  }
+  return '';
+}
+
+// 双击文本徽章：在消息气泡内展开/收起内容面板
+function toggleTextExpand(msgDiv, item, chip) {
+  const existing = msgDiv.querySelector(':scope > .text-expand-panel');
+  if (existing) {
+    existing.remove();
+    chip.classList.remove('expanded');
+    return;
+  }
+  const panel = document.createElement('pre');
+  panel.className = 'text-expand-panel';
+  panel.textContent = attachmentTextContent(item);
+  msgDiv.appendChild(panel);
+  chip.classList.add('expanded');
 }
 
 function resizeComposer() {

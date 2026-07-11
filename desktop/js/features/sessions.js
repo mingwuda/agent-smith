@@ -79,15 +79,22 @@ async function loadSessionMessages(sessionId, source) {
       _msgHistoryIndex = -1;
       if (data.messages && data.messages.length > 0) {
       data.messages.forEach(msg => {
-        if (msg.role === 'user' && msg.content) {
-          // 只存纯文本，排除含图片的消息
-          if (!msg.images || msg.images.length === 0) {
-            _msgHistory.push(msg.content);
-          }
-        }
         const role = msg.role === 'user' ? 'user' : 'bot';
         const content = msg.content || '';
-        if (role === 'user' && msg.images && msg.images.length) {
+        const parsed = role === 'user' ? parseTextFilesFromContent(content) : null;
+
+        if (msg.role === 'user' && msg.content) {
+          // 只存纯文本，排除含图片/文本文件的消息（避免把 base64 或文件正文塞进历史）
+          const histText = (parsed && parsed.files.length) ? parsed.message : msg.content;
+          if ((!msg.images || msg.images.length === 0) && histText) {
+            _msgHistory.push(histText);
+          }
+        }
+
+        if (role === 'user' && parsed && parsed.files.length) {
+          // ponytail: 文本附件刷新后也显示为图标，双击展开内容（与实时发送一致）
+          addUserMessage(parsed.message, parsed.files.map(f => ({ name: f.name, mime_type: 'text/plain', content: f.content })));
+        } else if (role === 'user' && msg.images && msg.images.length) {
           addUserMessage(content, msg.images.map(u => ({data_url: u})));
         } else if (role === 'bot' && msg.steps && msg.steps.length) {
           addBotMessageWithSteps(content, msg.steps, msg.todo_list);
