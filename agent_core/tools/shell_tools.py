@@ -49,8 +49,15 @@ _TAIL_CHARS = 8000
 _DEFAULT_TIMEOUT = 120
 
 
+_SHELL_CMD_CACHE: Optional[list[str]] = None
+
+
 def _detect_shell() -> list[str]:
-    """检测当前操作系统并返回 shell 命令。"""
+    """检测当前操作系统并返回 shell 命令（进程内缓存，避免每次调用都启动子进程探测）。"""
+    global _SHELL_CMD_CACHE
+    if _SHELL_CMD_CACHE is not None:
+        return _SHELL_CMD_CACHE
+    result: list[str]
     if sys.platform == "win32":
         # Windows：优先用 cmd（兼容用户常见的 cmd 语法 || && >nul 等）
         # PowerShell 不兼容这些语法，作为降级选项
@@ -59,21 +66,54 @@ def _detect_shell() -> list[str]:
                 ["cmd", "/c", "echo 1"],
                 capture_output=True, timeout=5, check=False,
             )
-            return ["cmd", "/c"]
+            result = ["cmd", "/c"]
         except Exception:
-            return ["powershell", "-NoProfile", "-Command"]
+            result = ["powershell", "-NoProfile", "-Command"]
     else:
         # Unix/Linux/macOS：用 bash，降级到 sh
+        result = ["sh", "-c"]
         for shell_cmd in ["bash", "zsh", "sh"]:
             try:
                 subprocess.run(
                     [shell_cmd, "-c", "echo 1"],
                     capture_output=True, timeout=5, check=False,
                 )
-                return [shell_cmd, "-c"]
+                result = [shell_cmd, "-c"]
+                break
             except Exception:
                 continue
-        return ["sh", "-c"]
+    _SHELL_CMD_CACHE = result
+    return result
+
+
+# 变更检测时跳过的目录：点目录一律跳过（含 .venv / .venv-windows-build / .git / .workbuddy），
+# 再加上这些非点目录的巨型依赖/缓存目录
+_SKIP_DIRS = {"node_modules", "dist", "build", "__pycache__"}
+_SNAPSHOT_LIMIT = 5000  # 元数据快照最多记录的文件数（仅 stat，开销极低）
+
+
+def _snapshot_meta(workspace: Path) -> dict[str, tuple]:
+    """扫描工作区，返回 {相对路径: (mtime, size)} 元数据快照。
+
+    ponytail: 只 stat 文件、不读内容；跳过巨型依赖/缓存目录并限制数量，
+    避免 run_shell 在含 .venv/node_modules 的工作区上卡死（原实现全量 read_text 读全文）。
+    mtime/size 足以检测任意内容变更，且比读全文更快更准。
+    """
+    snap: dict[str, tuple] = {}
+    count = 0
+    for root, dirs, files in os.walk(workspace):
+        dirs[:] = [d for d in dirs if not d.startswith(".") and d not in _SKIP_DIRS]
+        for f in files:
+            if f.startswith(".") or count >= _SNAPSHOT_LIMIT:
+                continue
+            fp = os.path.join(root, f)
+            try:
+                st = os.stat(fp)
+                snap[os.path.relpath(fp, workspace)] = (st.st_mtime, st.st_size)
+                count += 1
+            except OSError:
+                pass
+    return snap
 
 
 def _is_command_forbidden(command: str) -> tuple[bool, str]:
@@ -128,15 +168,10 @@ def run_shell(command: str, timeout: int = _DEFAULT_TIMEOUT) -> str:
     # ── 选择 shell ──
     shell_cmd = _detect_shell()
 
-    # ── 记录执行前文件快照（仅工作区） ──
-    before_files: dict[str, str] = {}
+    # ── 记录执行前文件元数据快照（仅工作区，用于变更检测）──
+    before_files: dict[str, tuple] = {}
     if _workspace and _workspace.is_dir():
-        for f in sorted(_workspace.rglob("*")):
-            if f.is_file() and not f.name.startswith("."):
-                try:
-                    before_files[str(f.relative_to(_workspace))] = f.read_text(errors="replace")
-                except Exception:
-                    pass
+        before_files = _snapshot_meta(_workspace)
 
     # ── 执行 ──
     raw_output = ""
@@ -180,21 +215,16 @@ def run_shell(command: str, timeout: int = _DEFAULT_TIMEOUT) -> str:
     except Exception as e:
         return f"❌ 执行失败: {e}"
 
-    # ── 对比工作区文件变更 ──
+    # ── 对比工作区文件变更（基于 mtime/size，不读取文件内容）──
     workspace_changes = ""
     if _workspace and _workspace.is_dir() and raw_output.strip():
+        after_files = _snapshot_meta(_workspace)
         changed: list[str] = []
-        for f in sorted(_workspace.rglob("*")):
-            if f.is_file() and not f.name.startswith("."):
-                try:
-                    rel = str(f.relative_to(_workspace))
-                    new_content = f.read_text(errors="replace")
-                    if rel not in before_files:
-                        changed.append(f"  + {rel}")
-                    elif before_files[rel] != new_content:
-                        changed.append(f"  ~ {rel}")
-                except Exception:
-                    pass
+        for rel, meta in after_files.items():
+            if rel not in before_files:
+                changed.append(f"  + {rel}")
+            elif before_files[rel] != meta:
+                changed.append(f"  ~ {rel}")
         if changed:
             workspace_changes = (
                 f"\n\n工作区文件变更（{len(changed)} 个）:\n"
