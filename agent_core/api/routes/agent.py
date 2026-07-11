@@ -22,6 +22,7 @@ from services.agent_service import (
     _resolve_user,
     _apply_session_workspace,
     _async_reflect,
+    _strip_screenshot_urls,
 )
 from logger import set_log_context, get_logger
 from config import AgentConfig
@@ -327,9 +328,9 @@ async def run_agent_stream(req: RunRequest, request: Request):
         try:
             final_content = final_content or ""
             if final_content:
+                # ponytail: 真正剥离历史/复读的截图引用，而非仅告警 —— 旧 token 已被清理，留着只会渲染破图
+                final_content = _strip_screenshot_urls(final_content)
                 final_content = _append_artifact_links(final_content, uid, artifact_paths)
-                if "/api/screenshot" in final_content:
-                    logger.warning("[run/stream] ⚠️ final_content 仍包含截图引用！来源待查")
                 logger.info("[run/stream] 发送 done: content_len=%d", len(final_content))
                 yield f"data: {json.dumps({'type': 'done', 'content': final_content}, ensure_ascii=False)}\n\n"
                 _save_assistant_result(uid, session_id, req.message, final_content, collected_steps, collected_todo_list)

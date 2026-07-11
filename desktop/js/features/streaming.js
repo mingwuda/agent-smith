@@ -135,6 +135,7 @@ async function send() {
   hasToolCalls = false;
   generatingBadgeEl = null;
   _currentTodoPanel = null;  // 新任务重新创建 todo 面板
+  _lastToolImageHtml = null;  // ponytail: 清空上一轮残留的工具截图，避免串入本轮最终输出
   startStreamIdleWatch();
   
   let streamDone = false;
@@ -869,6 +870,7 @@ function handleStreamEvent(data) {
       document.querySelectorAll('.tool-status-dot.running').forEach(d => {
         d.className = 'tool-status-dot error';
       });
+      _lastToolImageHtml = null;  // ponytail: error 收尾也会残留截图缓存，必须清空
       addMessage('❌ ' + data.content, 'system');
       break;
 

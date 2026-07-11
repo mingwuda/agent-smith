@@ -236,11 +236,14 @@ def release_browser_page(thread_id: str):
 
     在会话结束时调用，释放不再使用的资源。
     非阻塞：将清理任务提交到浏览器事件循环后立即返回。
-    如果浏览器从未启动过，直接返回（零开销）。
 
-    同时清理该会话产生的截图文件，避免旧截图 URL 在后续请求中被复用。
+    截图文件位于磁盘，与浏览器是否初始化无关，因此无条件先清理，
+    ponytail: 避免浏览器未启动时（_browser is None）跳过清理导致旧截图 token 残留、继续渲染旧图。
     """
-    # 浏览器从未初始化 → 无任何需要清理的资源
+    # 截图文件在磁盘上，独立于浏览器状态，无论浏览器是否启动都先清理
+    _cleanup_screenshots(thread_id)
+
+    # 浏览器从未初始化 → 无需释放页面/上下文
     if _browser is None:
         return
 
@@ -254,9 +257,6 @@ def release_browser_page(thread_id: str):
             del _contexts[thread_id]
         _pages.pop(thread_id, None)
         _page_locks.pop(thread_id, None)
-
-        # 清理该会话的截图文件（基于时间戳匹配）
-        _cleanup_screenshots(thread_id)
 
         logger.info("🧹 已释放会话 %s 的浏览器页面", thread_id[:16])
     try:
