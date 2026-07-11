@@ -839,6 +839,40 @@ electron\dist\DesktopAgent-Setup-0.1.0.exe   # NSIS 安装包
 
 > 说明：Electron 封装与原浏览器形态并存。后端 `main.py` 已支持随机端口（`AGENT_PORT=0`）并把监听地址打印为 `AGENT_LISTEN_URL=` 一行供 Electron 解析；前端代码零改动，浏览器形态（`start.sh` / 解压版 `Start Desktop Agent.bat`）依旧可用。
 
+#### macOS 打包（Electron 桌面应用）
+
+同样用 Electron 把同一套后端与前端包装成 macOS 原生窗口应用。**打包必须在 macOS 机器上完成**——electron-builder 需要系统的 `codesign` / `ditto`，且 PyInstaller 不支持交叉编译（无法在 Windows 上打出 macOS 二进制）。
+
+后端构建（PyInstaller，产出 `dist/macos/DesktopAgent-macOS/`）：
+
+```bash
+bash packaging/macos/build.sh
+```
+
+一键打包成 dmg（默认 Apple Silicon / arm64，适配 M 系列 Mac）：
+
+```bash
+bash packaging/macos/build-electron-mac.sh
+```
+
+可选参数：
+
+- `--skip-backend`：跳过后端重建（后端产物已存在且未改动时），只把现有 `dist/macos/DesktopAgent-macOS` 重新打包进 Electron。
+- `--x64`：打包 Intel 版（x86_64）。
+- `--universal`：打包通用二进制（同时含 arm64 与 x86_64）。
+
+输出（取决于架构参数）：
+
+```text
+electron/dist/Desktop Agent-0.1.0-arm64.dmg      # Apple Silicon 安装镜像（默认）
+electron/dist/Desktop Agent-0.1.0-x64.dmg        # Intel 安装镜像
+electron/dist/Desktop Agent-0.1.0.dmg            # 通用安装镜像（--universal）
+```
+
+> 代码签名：未签名的 dmg 在其它 Mac 上会被 Gatekeeper 拦截（"无法验证开发者"）。如需对外分发，请在 `electron/package.json` 的 `mac.identity` 填入 Apple 开发者证书、并配置 `afterSign` / `notarize` 后重跑脚本。开发自用可在「系统设置 → 隐私与安全性」中手动允许。
+
+> 说明：macOS 与 Windows 共用同一套 `electron/` 桌面壳——`main.js` 已跨平台识别后端产物（Windows 的 `DesktopAgent.exe` 与 macOS 的 `DesktopAgent`），前端 / 后端代码均无需改动。
+
 依赖排查：
 
 ```cmd
@@ -913,8 +947,9 @@ desktop-agent/
 ├── desktop/
 │   └── index.html              # 单页前端（已拆分为 js/styles/libs 子目录）
 ├── skills/                     # 项目内 Skills（9 个 oh-my-openagent + 5 个 Superpowers）
-├── electron/                   # Electron 桌面壳（main.js / package.json / build-electron.cmd）
-├── packaging/windows/          # Windows 打包脚本
+├── electron/                   # Electron 桌面壳（跨平台：main.js / package.json / loading.html）
+├── packaging/windows/          # Windows 打包脚本（build.cmd / build-electron.cmd）
+├── packaging/macos/            # macOS 打包脚本（build.sh / build-electron-mac.sh）
 ├── start.sh
 ├── start.cmd
 ├── generate_login_url.py
