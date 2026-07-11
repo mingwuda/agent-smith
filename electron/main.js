@@ -25,9 +25,16 @@ function findBackend() {
   if (process.env.AGENT_BACKEND_EXE && fs.existsSync(process.env.AGENT_BACKEND_EXE)) {
     return { exe: process.env.AGENT_BACKEND_EXE, isExe: true, args: [] };
   }
-  const packedExe = path.join(process.resourcesPath || "", "agent", "DesktopAgent.exe");
-  if (fs.existsSync(packedExe)) {
-    return { exe: packedExe, isExe: true, args: [] };
+  const agentDir = path.join(process.resourcesPath || "", "agent");
+  // Windows 打包态：DesktopAgent.exe
+  const winExe = path.join(agentDir, "DesktopAgent.exe");
+  if (fs.existsSync(winExe)) {
+    return { exe: winExe, isExe: true, args: [] };
+  }
+  // macOS 打包态：one-folder 产物，可执行文件无扩展名（DesktopAgent）
+  const macExe = path.join(agentDir, "DesktopAgent");
+  if (fs.existsSync(macExe)) {
+    return { exe: macExe, isExe: true, args: [] };
   }
   return { exe: path.join(repoRoot, "agent_core", "main.py"), isExe: false, args: [] };
 }

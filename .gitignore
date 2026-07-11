@@ -10,6 +10,7 @@ build/
 .venv/
 .venv-windows-build/
 .venv-windows-verify/
+.venv-macos-build/
 .pip-cache/
 .playwright-browsers/
 venv/
