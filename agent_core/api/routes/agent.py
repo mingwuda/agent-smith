@@ -301,7 +301,10 @@ async def run_agent_stream(req: RunRequest, request: Request):
                     m = re.search(r'data: ({.*})', sse_event)
                     if m:
                         final_content = json.loads(m.group(1)).get("content", "")
-                    forwarded_terminal_event = True
+                    # ponytail: 仅当 done 有实际内容才算已转发 terminal；空 done（模型只输出推理、
+                    # 无正文无工具调用就 stop）不置位，让下方兜底逻辑发出提示，避免前端"秒终止无回复"。
+                    if final_content:
+                        forwarded_terminal_event = True
                     continue
                 if '"type": "error"' in sse_event:
                     m = re.search(r'data: ({.*})', sse_event)
@@ -344,9 +347,10 @@ async def run_agent_stream(req: RunRequest, request: Request):
                 _save_assistant_result(uid, session_id, req.message, summary, collected_steps, collected_todo_list)
             elif not forwarded_terminal_event:
                 fallback = (
-                    "任务已结束，但模型没有生成最终回答。"
-                    "这通常发生在接近最大推理步数时，模型仍在继续调用工具。"
-                    f"当前最大推理步数为 {agent.config.recursion_limit}，可以提高该值，或把任务拆小后重试。"
+                    "任务已结束，但模型没有生成最终回答"
+                    "（本轮只输出了推理内容、未给出正文，或已接近最大推理步数）。"
+                    f"当前最大推理步数为 {agent.config.recursion_limit}。可直接重试；"
+                    "若任务较复杂，可提高该值或把任务拆小后再试。"
                 )
                 logger.info("[run/stream] 发送 fallback: %s", fallback)
                 yield f"data: {json.dumps({'type': 'done', 'content': fallback}, ensure_ascii=False)}\n\n"
