@@ -56,22 +56,14 @@ def _artifact_link(path: str) -> str:
     return f"- {name}: {download} (`{path}`)"
 
 
-def _artifact_candidates(text: str) -> list[str]:
-    candidates: list[str] = []
-    for match in re.finditer(r"`([^`\n]+?\.[A-Za-z0-9]{1,8})`", text or ""):
-        candidates.append(match.group(1).strip())
-    for token in re.split(r"[\s\n\r\t，。；;：:、（）()\[\]{}<>]+", text or ""):
-        token = token.strip("`'\"")
-        if re.search(r"\.[A-Za-z0-9]{1,8}$", token):
-            candidates.append(token)
-    return candidates
-
-
 def _append_artifact_links(content: str, uid: str, paths: Optional[list[str]] = None) -> str:
     cleaned_content = _strip_existing_artifact_section(content)
     found: list[str] = []
     seen: set[str] = set()
-    for candidate in (paths or []) + _artifact_candidates(cleaned_content):
+    # ponytail: 只信任来自工具调用的显式路径（write_file/append_to_file），
+    # 不再从回复文本里扫描文件名——文本里出现的 README.md、ARCHITECTURE.md
+    # 等只是被引用/阅读过的文件，误当成制品会误导用户下载错文件。
+    for candidate in (paths or []):
         try:
             rel = _relative_artifact_path(uid, candidate)
         except Exception:

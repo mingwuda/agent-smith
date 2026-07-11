@@ -148,7 +148,7 @@ async def run_agent(req: RunRequest, request: Request):
         str(step.get("args", {}).get("path", ""))
         for step in steps
         if step.get("type") == "tool_call"
-        and step.get("tool") in {"write_file", "append_to_file"}
+        and step.get("tool") in {"write_file", "append_to_file", "edit_file"}
         and isinstance(step.get("args"), dict)
         and step.get("args", {}).get("path")
     ]
@@ -261,7 +261,7 @@ async def run_agent_stream(req: RunRequest, request: Request):
                         if m:
                             data = json.loads(m.group(1))
                             args = data.get("args") or {}
-                            if data.get("tool") in {"write_file", "append_to_file"} and args.get("path"):
+                            if data.get("tool") in {"write_file", "append_to_file", "edit_file"} and args.get("path"):
                                 artifact_paths.append(str(args["path"]))
                             collected_steps.append(data)  # 收集步骤
                     except Exception:
