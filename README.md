@@ -481,7 +481,7 @@ http://localhost:8899/wechat/qrcode
 | `/new` | 创建新会话 |
 | `/list` | 列出所有会话，显示 sessionId 和最后一条用户消息，当前会话用 `→` 标记 |
 | `/switch <sessionId>` | 切换到指定会话 |
-| `/delete <sessionId>` | 删除指定历史会话（删除当前会话后，下一轮消息会自动重建默认会话） |
+| `/delete <sessionId> [...]` | 删除一个或多个历史会话（空格分隔多个 ID；删除当前会话后，下一轮消息会自动重建默认会话） |
 
 ### 管理端点
 

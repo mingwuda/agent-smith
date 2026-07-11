@@ -718,26 +718,43 @@ class WeChatBot:
             logger.info("[微信Bot:%s] 用户 %s 切换到会话 %s", self.user_id, from_user[:16], target_sid)
             return
 
-        # ── /delete 命令：删除历史会话 ──
+        # ── /delete 命令：删除一个或多个历史会话（空格分隔多个 sessionId）──
         if text.strip().startswith("/delete "):
-            target_sid = text.strip()[len("/delete "):].strip()
-            if not target_sid:
-                await self.send_message(from_user, context_token, "❌ 请指定会话 ID，格式：/delete &lt;sessionId&gt;")
+            raw = text.strip()[len("/delete "):].strip()
+            if not raw:
+                await self.send_message(from_user, context_token, "❌ 请指定会话 ID，格式：/delete &lt;sessionId&gt; [&lt;sessionId&gt; ...]")
                 return
-            # 验证会话是否存在
-            sess = session_store.get_session(wechat_uid, target_sid)
-            if not sess:
-                await self.send_message(from_user, context_token, f"❌ 会话 {target_sid} 不存在。发送 /list 查看可用会话。")
-                return
-            deleted = session_store.delete_session(wechat_uid, target_sid)
-            if not deleted:
-                await self.send_message(from_user, context_token, f"❌ 删除会话 {target_sid} 失败，请稍后重试。")
-                return
-            # 若删除的是当前会话，清空映射，下一轮消息会重新创建默认会话
-            if self._wechat_sessions.get(from_user) == target_sid:
-                self._wechat_sessions.pop(from_user, None)
-            await self.send_message(from_user, context_token, f"🗑️ 已删除会话 {target_sid}")
-            logger.info("[微信Bot:%s] 用户 %s 删除会话 %s", self.user_id, from_user[:16], target_sid)
+            sids = raw.split()
+            deleted_sids: list[str] = []
+            skipped: list[str] = []   # 不存在，跳过
+            failed: list[str] = []    # 删除失败
+            current_deleted = False
+            for sid in sids:
+                sess = session_store.get_session(wechat_uid, sid)
+                if not sess:
+                    skipped.append(sid)
+                    continue
+                if not session_store.delete_session(wechat_uid, sid):
+                    failed.append(sid)
+                    continue
+                deleted_sids.append(sid)
+                # 若删除的是当前会话，清空映射，下一轮消息会重新创建默认会话
+                if self._wechat_sessions.get(from_user) == sid:
+                    self._wechat_sessions.pop(from_user, None)
+                    current_deleted = True
+            # 构造汇总回复
+            parts = [f"🗑️ 已删除 {len(deleted_sids)} 个会话"]
+            if deleted_sids:
+                parts.append("：" + "、".join(deleted_sids))
+            if skipped:
+                parts.append(f"\n⚠️ 不存在已跳过：{', '.join(skipped)}")
+            if failed:
+                parts.append(f"\n❌ 删除失败：{', '.join(failed)}")
+            if current_deleted:
+                parts.append("\n（当前会话已删除，下一轮消息将自动重建默认会话）")
+            await self.send_message(from_user, context_token, "".join(parts))
+            logger.info("[微信Bot:%s] 用户 %s 批量删除会话: 成功=%s 跳过=%s 失败=%s",
+                        self.user_id, from_user[:16], deleted_sids, skipped, failed)
             return
 
         # ── 会话管理 ──
