@@ -176,6 +176,25 @@ def aes_decrypt_ecb(ciphertext: bytes, key_hex: str) -> bytes:
 
 # ── WeChat Bot 类 ─────────────────────────────────────────────────
 
+def _resolve_session_ref(wechat_uid: str, token: str, menu: Optional[dict]) -> Optional[str]:
+    """将 /switch /delete 的参数解析为真实 sessionId。
+
+    - token 为数字 → 优先用 /list 时缓存的序号映射，否则回退到当前列表顺序
+    - 非数字 → 当作原始 sessionId（需真实存在）
+    - 无法解析返回 None
+    """
+    if token.isdigit():
+        n = int(token)
+        if menu and str(n) in menu:
+            return menu[str(n)]
+        sessions = session_store.list_sessions(wechat_uid)
+        if 1 <= n <= len(sessions):
+            return sessions[n - 1]["id"]
+        return None
+    if session_store.get_session(wechat_uid, token):
+        return token
+    return None
+
 
 class WeChatBot:
     """微信 iLink Bot API 客户端（按用户隔离）"""
@@ -191,6 +210,8 @@ class WeChatBot:
         self._update_buf: str = ""
         self._seen_msg_ids: set[str] = set()
         self._wechat_sessions: dict[str, str] = {}  # wx_user_id → current session_id
+        # /list 时缓存「序号 → sessionId」映射，供 /switch /delete 按序号解析（见 _resolve_session_arg）
+        self._wechat_session_menu: dict[str, dict[str, str]] = {}
         # 暂存用户最近发送的图片（key=from_user），等待后续文本合并为图文消息
         # 值: {"data": dict, "time": float}，5 分钟后自动清理
         self._pending_images: dict[str, dict] = {}
@@ -676,19 +697,24 @@ class WeChatBot:
                 wechat_uid, title=f"[微信] 新会话", session_id=new_sid,
             )
             self._wechat_sessions[from_user] = new_sid
+            # 会话列表已变化，序号映射失效
+            self._wechat_session_menu.pop(from_user, None)
             await self.send_message(from_user, context_token, "✅ 已创建新会话，可以开始新的对话了")
             logger.info("[微信Bot:%s] 用户 %s 创建新会话 %s", self.user_id, from_user[:16], new_sid)
             return
 
-        # ── /list 命令：列出所有会话 ──
+        # ── /list 命令：列出所有会话（带序号，供 /switch /delete 按序号操作）──
         if text.strip() == "/list":
             all_sessions = session_store.list_sessions(wechat_uid)
             if not all_sessions:
                 await self.send_message(from_user, context_token, "📭 暂无会话。发送 /new 创建新会话。")
                 return
-            lines = [f"📋 共有 {len(all_sessions)} 个会话："]
-            for s in all_sessions:
+            # 建立序号 → sessionId 映射并缓存，保证后续按序号解析与本列表一致
+            menu: dict[str, str] = {}
+            lines = [f"📋 共有 {len(all_sessions)} 个会话（用序号切换/删除）："]
+            for i, s in enumerate(all_sessions, 1):
                 sid = s["id"]
+                menu[str(i)] = sid
                 # 取最后一条用户消息作为摘要
                 sess_detail = session_store.get_session(wechat_uid, sid)
                 last_user_msg = ""
@@ -698,17 +724,21 @@ class WeChatBot:
                             last_user_msg = m.get("content", "")[:50]
                             break
                 marker = "→ " if sid == self._wechat_sessions.get(from_user) else "  "
-                lines.append(f"{marker}{sid}: {last_user_msg or '(空)'}")
+                lines.append(f"{marker}{i}. {sid}: {last_user_msg or '(空)'}")
+            self._wechat_session_menu[from_user] = menu
             await self.send_message(from_user, context_token, "\n".join(lines))
             return
 
-        # ── /switch 命令：切换会话 ──
+        # ── /switch 命令：切换会话（支持序号或原始 sessionId）──
         if text.strip().startswith("/switch "):
-            target_sid = text.strip()[len("/switch "):].strip()
-            if not target_sid:
-                await self.send_message(from_user, context_token, "❌ 请指定会话 ID，格式：/switch &lt;sessionId&gt;")
+            arg = text.strip()[len("/switch "):].strip()
+            if not arg:
+                await self.send_message(from_user, context_token, "❌ 请指定会话序号或 ID，格式：/switch &lt;序号|sessionId&gt;")
                 return
-            # 验证会话是否存在
+            target_sid = _resolve_session_ref(wechat_uid, arg, self._wechat_session_menu.get(from_user))
+            if target_sid is None:
+                await self.send_message(from_user, context_token, f"❌ 序号 {arg} 无效。发送 /list 查看可用会话。")
+                return
             sess = session_store.get_session(wechat_uid, target_sid)
             if not sess:
                 await self.send_message(from_user, context_token, f"❌ 会话 {target_sid} 不存在。发送 /list 查看可用会话。")
@@ -718,18 +748,23 @@ class WeChatBot:
             logger.info("[微信Bot:%s] 用户 %s 切换到会话 %s", self.user_id, from_user[:16], target_sid)
             return
 
-        # ── /delete 命令：删除一个或多个历史会话（空格分隔多个 sessionId）──
+        # ── /delete 命令：删除一个或多个历史会话（序号或 sessionId，空格分隔）──
         if text.strip().startswith("/delete "):
             raw = text.strip()[len("/delete "):].strip()
             if not raw:
-                await self.send_message(from_user, context_token, "❌ 请指定会话 ID，格式：/delete &lt;sessionId&gt; [&lt;sessionId&gt; ...]")
+                await self.send_message(from_user, context_token, "❌ 请指定会话序号或 ID，格式：/delete &lt;序号|sessionId&gt; [&lt;...&gt;]")
                 return
-            sids = raw.split()
+            tokens = raw.split()
             deleted_sids: list[str] = []
-            skipped: list[str] = []   # 不存在，跳过
+            invalid: list[str] = []   # 序号无效，无法解析
+            skipped: list[str] = []   # 解析到但不存在，跳过
             failed: list[str] = []    # 删除失败
             current_deleted = False
-            for sid in sids:
+            for tok in tokens:
+                sid = _resolve_session_ref(wechat_uid, tok, self._wechat_session_menu.get(from_user))
+                if sid is None:
+                    invalid.append(tok)
+                    continue
                 sess = session_store.get_session(wechat_uid, sid)
                 if not sess:
                     skipped.append(sid)
@@ -742,10 +777,14 @@ class WeChatBot:
                 if self._wechat_sessions.get(from_user) == sid:
                     self._wechat_sessions.pop(from_user, None)
                     current_deleted = True
+            # 删除后列表已变，序号映射失效
+            self._wechat_session_menu.pop(from_user, None)
             # 构造汇总回复
             parts = [f"🗑️ 已删除 {len(deleted_sids)} 个会话"]
             if deleted_sids:
                 parts.append("：" + "、".join(deleted_sids))
+            if invalid:
+                parts.append(f"\n⚠️ 无效序号已忽略：{', '.join(invalid)}")
             if skipped:
                 parts.append(f"\n⚠️ 不存在已跳过：{', '.join(skipped)}")
             if failed:
@@ -753,11 +792,13 @@ class WeChatBot:
             if current_deleted:
                 parts.append("\n（当前会话已删除，下一轮消息将自动重建默认会话）")
             await self.send_message(from_user, context_token, "".join(parts))
-            logger.info("[微信Bot:%s] 用户 %s 批量删除会话: 成功=%s 跳过=%s 失败=%s",
-                        self.user_id, from_user[:16], deleted_sids, skipped, failed)
+            logger.info("[微信Bot:%s] 用户 %s 批量删除会话: 成功=%s 无效=%s 跳过=%s 失败=%s",
+                        self.user_id, from_user[:16], deleted_sids, invalid, skipped, failed)
             return
 
         # ── 会话管理 ──
+        # 用户发起了真正的对话，会话列表可能已变化，序号映射失效
+        self._wechat_session_menu.pop(from_user, None)
         session_id = self._wechat_sessions.get(from_user)
         if session_id is None:
             # 首次消息：用微信用户 ID 的 md5 作为稳定会话 ID
