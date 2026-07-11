@@ -17,7 +17,7 @@ venv/
 
 # 调试/构建产物（本地临时，不入仓）
 .browser_screenshots/
-build_browser_fix*.log
+build_*.log
 tmp_verify/
 run_test.log
 run_verify.log
