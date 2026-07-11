@@ -149,6 +149,10 @@ if not exist "%BUILD_ROOT%\DesktopAgent\DesktopAgent.exe" (
 "%PYTHON%" "%ROOT%\packaging\windows\package_dist.py" "%BUILD_ROOT%\DesktopAgent" "%PACKAGE_DIR%" "%ZIP_PATH%" "%ROOT%"
 if errorlevel 1 exit /b 1
 
+rem 打包成功后删除 PyInstaller 中间产物，避免 dist 下残留第二个无用 exe
+if exist "%BUILD_ROOT%\DesktopAgent" rmdir /s /q "%BUILD_ROOT%\DesktopAgent"
+if exist "%ROOT%\build\DesktopAgent" rmdir /s /q "%ROOT%\build\DesktopAgent"
+
 echo.
 echo Windows package created:
 echo   %PACKAGE_DIR%
