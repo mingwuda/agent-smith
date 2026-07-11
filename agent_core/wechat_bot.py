@@ -718,6 +718,28 @@ class WeChatBot:
             logger.info("[微信Bot:%s] 用户 %s 切换到会话 %s", self.user_id, from_user[:16], target_sid)
             return
 
+        # ── /delete 命令：删除历史会话 ──
+        if text.strip().startswith("/delete "):
+            target_sid = text.strip()[len("/delete "):].strip()
+            if not target_sid:
+                await self.send_message(from_user, context_token, "❌ 请指定会话 ID，格式：/delete &lt;sessionId&gt;")
+                return
+            # 验证会话是否存在
+            sess = session_store.get_session(wechat_uid, target_sid)
+            if not sess:
+                await self.send_message(from_user, context_token, f"❌ 会话 {target_sid} 不存在。发送 /list 查看可用会话。")
+                return
+            deleted = session_store.delete_session(wechat_uid, target_sid)
+            if not deleted:
+                await self.send_message(from_user, context_token, f"❌ 删除会话 {target_sid} 失败，请稍后重试。")
+                return
+            # 若删除的是当前会话，清空映射，下一轮消息会重新创建默认会话
+            if self._wechat_sessions.get(from_user) == target_sid:
+                self._wechat_sessions.pop(from_user, None)
+            await self.send_message(from_user, context_token, f"🗑️ 已删除会话 {target_sid}")
+            logger.info("[微信Bot:%s] 用户 %s 删除会话 %s", self.user_id, from_user[:16], target_sid)
+            return
+
         # ── 会话管理 ──
         session_id = self._wechat_sessions.get(from_user)
         if session_id is None:
