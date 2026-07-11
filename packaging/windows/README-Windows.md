@@ -36,3 +36,13 @@
 
 - **浏览器未自动打开**：保持控制台窗口运行，手动访问 `http://127.0.0.1:8899/`。
 - **端口 8899 被占用**：编辑 `Start Desktop Agent.bat`，将 `set AGENT_PORT=8899` 改为其它空闲端口后重新启动。
+
+## Electron 安装包（桌面应用版）
+
+如果你希望用户获得"像原生 App 一样"的体验，可使用 Electron 安装包版：
+
+1. 运行 `packaging\windows\build-electron.cmd`（或加 `--skip-backend` 仅重新打包 Electron）。
+2. 产物 `electron\dist\DesktopAgent-Setup-0.1.0.exe` 为 NSIS 安装包。
+3. 用户双击安装后，从桌面/开始菜单快捷方式启动，自动出现原生窗口——**全程不出现浏览器、不显示端口、无需联网下载**。
+
+该版与解压版（`Start Desktop Agent.bat`）共享同一套后端与前端，仅交互入口不同：解压版用系统浏览器打开 `http://127.0.0.1:8899/`，安装包版用内置 Electron 窗口加载同一地址，端口随机且对用户隐藏。

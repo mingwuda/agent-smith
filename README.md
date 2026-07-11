@@ -817,6 +817,28 @@ dist\windows\DesktopAgent-Windows.zip
 
 用户解压后双击 `Start Desktop Agent.bat` 即可启动。配置、会话和工作区默认保存在用户目录。
 
+### Electron 桌面应用（推荐）
+
+如果你希望用户像使用原生桌面软件一样——**双击安装、无浏览器、不暴露本地端口**，可用 Electron 把同一套后端与前端包装成原生窗口：
+
+```cmd
+packaging\windows\build-electron.cmd
+```
+
+可选参数：
+
+- `--skip-backend`：跳过后端重建（后端产物已存在且未改动时），只把现有 `dist\windows\DesktopAgent-Windows` 重新打包进 Electron。
+
+输出：
+
+```text
+electron\dist\DesktopAgent-Setup-0.1.0.exe   # NSIS 安装包
+```
+
+安装包内置 Electron 运行时、Python 后端（含 Playwright Chromium）。用户双击安装后从桌面/开始菜单快捷方式启动，首次启动自动拉起后端并加载窗口，**全程不出现浏览器、不显示端口、无需联网下载任何东西**。
+
+> 说明：Electron 封装与原浏览器形态并存。后端 `main.py` 已支持随机端口（`AGENT_PORT=0`）并把监听地址打印为 `AGENT_LISTEN_URL=` 一行供 Electron 解析；前端代码零改动，浏览器形态（`start.sh` / 解压版 `Start Desktop Agent.bat`）依旧可用。
+
 依赖排查：
 
 ```cmd
@@ -891,6 +913,7 @@ desktop-agent/
 ├── desktop/
 │   └── index.html              # 单页前端（已拆分为 js/styles/libs 子目录）
 ├── skills/                     # 项目内 Skills（9 个 oh-my-openagent + 5 个 Superpowers）
+├── electron/                   # Electron 桌面壳（main.js / package.json / build-electron.cmd）
 ├── packaging/windows/          # Windows 打包脚本
 ├── start.sh
 ├── start.cmd
