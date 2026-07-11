@@ -796,7 +796,9 @@ journalctl -u desktop-agent -f
 
 ## Windows 打包
 
-生成可分发包：
+Windows 桌面版**统一以 Electron 安装包形式分发**（双击安装、无浏览器、不暴露端口）。PyInstaller 构建出的后端目录只作为 Electron 打包的内部输入，不再单独对外分发。
+
+底层后端构建（供 Electron 打包消费，不直接分发）：
 
 ```cmd
 packaging\windows\build.cmd
@@ -811,13 +813,10 @@ powershell -ExecutionPolicy Bypass -File .\packaging\windows\build.ps1
 输出：
 
 ```text
-dist\windows\DesktopAgent-Windows\
-dist\windows\DesktopAgent-Windows.zip
+dist\windows\DesktopAgent-Windows\   # 自包含后端目录（被 electron-builder 收进安装包）
 ```
 
-用户解压后双击 `Start Desktop Agent.bat` 即可启动。配置、会话和工作区默认保存在用户目录。
-
-### Electron 桌面应用（推荐）
+### Electron 桌面应用（唯一桌面交付形态）
 
 如果你希望用户像使用原生桌面软件一样——**双击安装、无浏览器、不暴露本地端口**，可用 Electron 把同一套后端与前端包装成原生窗口：
 

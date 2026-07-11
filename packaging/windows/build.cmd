@@ -11,7 +11,6 @@ set "SPEC=%ROOT%\packaging\windows\DesktopAgent.spec"
 set "BUILD_ROOT=%ROOT%\dist"
 set "PACKAGE_ROOT=%BUILD_ROOT%\windows"
 set "PACKAGE_DIR=%PACKAGE_ROOT%\DesktopAgent-Windows"
-set "ZIP_PATH=%PACKAGE_ROOT%\DesktopAgent-Windows.zip"
 set "EMPTY_PIP_CONFIG=%ROOT%\.venv-windows-build\pip-empty.ini"
 
 set "PIP_NO_DEPS="
@@ -146,7 +145,7 @@ if not exist "%BUILD_ROOT%\DesktopAgent\DesktopAgent.exe" (
   exit /b 1
 )
 
-"%PYTHON%" "%ROOT%\packaging\windows\package_dist.py" "%BUILD_ROOT%\DesktopAgent" "%PACKAGE_DIR%" "%ZIP_PATH%" "%ROOT%"
+"%PYTHON%" "%ROOT%\packaging\windows\package_dist.py" "%BUILD_ROOT%\DesktopAgent" "%PACKAGE_DIR%" "%ROOT%"
 if errorlevel 1 exit /b 1
 
 rem 打包成功后删除 PyInstaller 中间产物，避免 dist 下残留第二个无用 exe
@@ -154,15 +153,12 @@ if exist "%BUILD_ROOT%\DesktopAgent" rmdir /s /q "%BUILD_ROOT%\DesktopAgent"
 if exist "%ROOT%\build\DesktopAgent" rmdir /s /q "%ROOT%\build\DesktopAgent"
 
 echo.
-echo Windows package created:
+echo Backend bundle created (used as input for the Electron installer):
 echo   %PACKAGE_DIR%
-if exist "%ZIP_PATH%" (
-  echo   %ZIP_PATH%
-) else (
-  echo Zip creation was skipped or blocked. Use the package directory above.
-)
 echo.
-echo To distribute: send DesktopAgent-Windows.zip (or the folder) to the target machine,
-echo unzip, then double-click "Start Desktop Agent.bat". No Python install required.
+echo Next, build the desktop installer:
+echo   packaging\windows\build-electron.cmd
+echo It consumes the bundle above and produces electron\dist\DesktopAgent-Setup-0.1.0.exe
+echo ^(the only Windows desktop deliverable - no extracted folder / Start script is distributed^).
 
 endlocal

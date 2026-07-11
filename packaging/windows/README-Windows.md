@@ -1,25 +1,42 @@
 # Desktop Agent for Windows（桌面智能体 · Windows 版）
 
-本运行包**完全自包含**：已内置 Web 界面、智能体引擎以及全部内置技能，**目标机器无需安装 Python** 即可运行。
+Windows 桌面版以 **Electron 安装包** 形式分发：双击安装后即为原生窗口应用，**无需开浏览器、不暴露本地端口、目标机器免装 Python**。
 
-## 如何运行
+## 交付形态
 
-1. 双击 `Start Desktop Agent.bat`。
-2. 浏览器会自动打开 `http://127.0.0.1:8899/`。
-3. 在页面右上角「设置」中配置你的模型服务商与 API Key。
+Windows 只提供 Electron 安装包这一种桌面交付物：
 
-## 包含内容
-
-解压后顶层只有以下几项：
-
-| 文件 / 目录 | 说明 |
+| 产物 | 说明 |
 | --- | --- |
-| `Start Desktop Agent.bat` | 启动脚本（**双击这个运行**） |
-| `DesktopAgent.exe` | 智能体服务端主程序 |
-| `README-Windows.md` | 本说明文件 |
-| `_internal/` | 运行依赖目录（**勿删、勿改**） |
+| `electron/dist/DesktopAgent-Setup-0.1.0.exe` | NSIS 安装包，内置 Electron 运行时、Python 后端与 Playwright Chromium |
 
-`_internal/` 内已打包全部运行所需内容：Web 前端（`desktop/`）、内置技能（`skills/`）、智能体运行指引（`AGENTS.md`）、Python 运行时与第三方依赖、以及浏览器工具所需的 Chromium（`ms-playwright/`）。这些由程序自动读取，无需手动操作。
+> 早期提供过的「解压即用」版（`Start Desktop Agent.bat` + zip）已不再分发，以减少维护成本；PyInstaller 构建出的后端目录仅作为 electron-builder 的内部输入，不直接对外交付。
+
+## 构建（开发者）
+
+1. 构建自包含后端目录：
+
+   ```cmd
+   packaging\windows\build.cmd
+   ```
+
+   产物：`dist\windows\DesktopAgent-Windows\`（含 `DesktopAgent.exe` 与 `_internal/`），**不直接对外分发**。
+
+2. 打包成 Electron 安装包：
+
+   ```cmd
+   packaging\windows\build-electron.cmd
+   ```
+
+   产物：`electron/dist/DesktopAgent-Setup-0.1.0.exe`。可加 `--skip-backend` 跳过后端重建，只用现有目录重新打包。
+
+## 安装包内容
+
+安装包内含三层，全部自包含、无需联网：
+
+- **Electron 运行时**：提供原生窗口壳，隐藏随机端口
+- **Python 后端 `DesktopAgent.exe`**：FastAPI 服务，启动后随机端口被 Electron 读取并加载
+- **Playwright Chromium**：浏览器自动化工具所需，位于后端 `_internal/ms-playwright/`
 
 ## 数据存放位置
 
@@ -30,19 +47,9 @@
 
 ## 安全软件提示
 
-若 Windows Defender / SmartScreen 拦截该程序，选择「**更多信息**」→「**仍要运行**」即可（本包为本地构建的程序，属正常提示）。
+若 Windows Defender / SmartScreen 拦截安装包或程序，选择「**更多信息**」→「**仍要运行**」即可（本包为本地构建的程序，属正常提示）。如要彻底消除提示，需对安装包进行代码签名。
 
 ## 常见问题排查
 
-- **浏览器未自动打开**：保持控制台窗口运行，手动访问 `http://127.0.0.1:8899/`。
-- **端口 8899 被占用**：编辑 `Start Desktop Agent.bat`，将 `set AGENT_PORT=8899` 改为其它空闲端口后重新启动。
-
-## Electron 安装包（桌面应用版）
-
-如果你希望用户获得"像原生 App 一样"的体验，可使用 Electron 安装包版：
-
-1. 运行 `packaging\windows\build-electron.cmd`（或加 `--skip-backend` 仅重新打包 Electron）。
-2. 产物 `electron\dist\DesktopAgent-Setup-0.1.0.exe` 为 NSIS 安装包。
-3. 用户双击安装后，从桌面/开始菜单快捷方式启动，自动出现原生窗口——**全程不出现浏览器、不显示端口、无需联网下载**。
-
-该版与解压版（`Start Desktop Agent.bat`）共享同一套后端与前端，仅交互入口不同：解压版用系统浏览器打开 `http://127.0.0.1:8899/`，安装包版用内置 Electron 窗口加载同一地址，端口随机且对用户隐藏。
+- **默认浏览器未自动打开**：这是正常的——Electron 版用内置窗口加载应用，不调用系统浏览器。
+- **安装包体积较大（约 375MB）**：因为内置了 Electron 运行时、Python 后端与 Chromium，属于一次性的离线自包含包，无需运行时联网下载。

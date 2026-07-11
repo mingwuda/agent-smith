@@ -1,31 +1,29 @@
-"""Package the PyInstaller one-folder build into a distributable folder + zip.
+"""Assemble the PyInstaller one-folder build into the backend bundle folder.
 
-Used by build.cmd. Copies the built bundle with shutil.copytree (faithful,
-low memory - unlike xcopy which corrupts trees with trailing backslashes and
-chokes on large dirs), then streams a zip with zipfile (no RAM buffering,
-unlike PowerShell Compress-Archive which fails with "Insufficient memory" on
-large packages).
+Used by build.cmd as the input for electron-builder. The Windows desktop
+deliverable is the Electron installer, not a standalone extracted folder, so
+this step only assembles the self-contained backend directory.
+
+Copies the built bundle with shutil.copytree (faithful, low memory - unlike
+xcopy which corrupts trees with trailing backslashes and chokes on large
+dirs), then bundles the Playwright Chromium binaries into _internal/.
 
 Usage:
-    package_dist.py <src_dir> <dest_dir> <zip_path> <root_dir>
+    package_dist.py <src_dir> <dest_dir> <root_dir>
 """
-import os
 import shutil
 import sys
-import zipfile
 from pathlib import Path
 
 
 def main():
     src = Path(sys.argv[1])
     dest = Path(sys.argv[2])
-    zip_path = Path(sys.argv[3]) if len(sys.argv) > 3 else None
-    root = Path(sys.argv[4]) if len(sys.argv) > 4 else src.parent.parent
+    root = Path(sys.argv[3]) if len(sys.argv) > 3 else src.parent.parent
 
-    extras = [
-        (root / "packaging" / "windows" / "Start Desktop Agent.bat", dest / "Start Desktop Agent.bat"),
-        (root / "packaging" / "windows" / "README-Windows.md", dest / "README-Windows.md"),
-    ]
+    # The standalone extracted folder is no longer a distributed deliverable,
+    # so no extra files (Start Desktop Agent.bat / README) are injected.
+    extras = []
 
     if not src.is_dir():
         print(f"Error: build output not found: {src}")
@@ -55,20 +53,8 @@ def main():
     else:
         print("Warning: .playwright-browsers not found - browser tool will not work in package.")
 
-    if zip_path:
-        if zip_path.exists():
-            zip_path.unlink()
-        with zipfile.ZipFile(str(zip_path), "w", zipfile.ZIP_DEFLATED, allowZip64=True) as z:
-            # store with the top-level folder name so unzip yields DesktopAgent-Windows/
-            for root_dir, _dirs, files in os.walk(str(dest)):
-                for f in files:
-                    fp = os.path.join(root_dir, f)
-                    arcname = os.path.relpath(fp, str(dest.parent))
-                    z.write(fp, arcname)
-        size_mb = os.path.getsize(str(zip_path)) // 1024 // 1024
-        print(f"Zip created: {zip_path} ({size_mb} MB)")
-
-    print(f"Packaging done: {dest}")
+    print(f"Backend bundle assembled: {dest}")
+    print("This folder is consumed by electron-builder (packaging/windows/build-electron.cmd).")
 
 
 if __name__ == "__main__":
