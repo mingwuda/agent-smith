@@ -1,5 +1,6 @@
 @echo off
 setlocal EnableExtensions
+chcp 65001 >nul
 
 set "ROOT=%~dp0..\.."
 for %%I in ("%ROOT%") do set "ROOT=%%~fI"
@@ -16,10 +17,28 @@ set "EMPTY_PIP_CONFIG=%ROOT%\.venv-windows-build\pip-empty.ini"
 set "PIP_NO_DEPS="
 set "PIP_CONFIG_FILE=%EMPTY_PIP_CONFIG%"
 set "PIP_ONLY_BINARY="
-if not defined DESKTOP_AGENT_PIP_INDEX_URL set "DESKTOP_AGENT_PIP_INDEX_URL=http://maven.paic.com.cn:8445/repository/pypi/simple/"
-if not defined DESKTOP_AGENT_PIP_TRUSTED_HOST set "DESKTOP_AGENT_PIP_TRUSTED_HOST=maven.paic.com.cn"
+
+rem 本地 wheel 缓存：跨打包复用，避免重复下载
+set "PIP_CACHE_DIR=%ROOT%\.pip-cache"
+if not exist "%PIP_CACHE_DIR%" mkdir "%PIP_CACHE_DIR%"
+
+rem 包索引：优先使用环境变量指定的镜像；未设置时回退官方 PyPI
+set "PIP_INDEX_ARG="
+set "PIP_TRUST_ARG="
+if defined DESKTOP_AGENT_PIP_INDEX_URL (
+  set "PIP_INDEX_ARG=--index-url %DESKTOP_AGENT_PIP_INDEX_URL%"
+  if defined DESKTOP_AGENT_PIP_TRUSTED_HOST set "PIP_TRUST_ARG=--trusted-host %DESKTOP_AGENT_PIP_TRUSTED_HOST%"
+)
 
 cd /d "%ROOT%" || exit /b 1
+
+rem 传入 --clean 时清空构建 venv，强制全新安装依赖
+if /I "%~1"=="--clean" (
+  if exist "%VENV%" (
+    echo Cleaning build virtual environment...
+    rmdir /s /q "%VENV%"
+  )
+)
 
 if not exist "%PYTHON%" (
   where py >nul 2>nul
@@ -42,11 +61,30 @@ if not exist "%PYTHON%" (
   echo no-dependencies = false
 ) > "%EMPTY_PIP_CONFIG%"
 
-"%PYTHON%" -m pip install --index-url "%DESKTOP_AGENT_PIP_INDEX_URL%" --trusted-host "%DESKTOP_AGENT_PIP_TRUSTED_HOST%" --upgrade pip
-if errorlevel 1 exit /b 1
+rem 仅在显式要求时升级 pip/依赖；默认复用已装版本，避免重复下载
+set "PIP_UPGRADE_ARG="
+if "%DESKTOP_AGENT_PIP_UPGRADE%"=="1" set "PIP_UPGRADE_ARG=--upgrade"
 
-"%PYTHON%" -m pip install --index-url "%DESKTOP_AGENT_PIP_INDEX_URL%" --trusted-host "%DESKTOP_AGENT_PIP_TRUSTED_HOST%" --upgrade --force-reinstall -r "%ROOT%\requirements.txt" -r "%ROOT%\requirements-build.txt"
-if errorlevel 1 exit /b 1
+rem 依赖指纹：requirements 内容未变化则跳过安装，直接复用已有 venv 与本地 wheel 缓存
+set "REQ_SIG_FILE=%VENV%\.req-sig.txt"
+set "CURRENT_SIG="
+if exist "%PYTHON%" (
+  for /f "usebackq delims=" %%s in (`"%PYTHON%" -c "import hashlib; h=hashlib.sha256(); [h.update(open(f,'rb').read()) for f in [r'%ROOT%\requirements.txt', r'%ROOT%\requirements-build.txt']]; print(h.hexdigest())"`) do set "CURRENT_SIG=%%s"
+)
+set "SKIP_INSTALL=0"
+if exist "%REQ_SIG_FILE%" if defined CURRENT_SIG (
+  for /f "usebackq delims=" %%p in ("%REQ_SIG_FILE%") do if "%%p"=="%CURRENT_SIG%" set "SKIP_INSTALL=1"
+)
+
+if "%SKIP_INSTALL%"=="1" (
+  echo Dependencies unchanged since last build - reusing cached venv and wheels.
+) else (
+  "%PYTHON%" -m pip install %PIP_INDEX_ARG% %PIP_TRUST_ARG% %PIP_UPGRADE_ARG% --cache-dir "%PIP_CACHE_DIR%" pip
+  if errorlevel 1 exit /b 1
+  "%PYTHON%" -m pip install %PIP_INDEX_ARG% %PIP_TRUST_ARG% %PIP_UPGRADE_ARG% --cache-dir "%PIP_CACHE_DIR%" -r "%ROOT%\requirements.txt" -r "%ROOT%\requirements-build.txt"
+  if errorlevel 1 exit /b 1
+  if defined CURRENT_SIG echo %CURRENT_SIG%> "%REQ_SIG_FILE%"
+)
 
 echo Installed packages:
 "%PYTHON%" -m pip list
@@ -81,23 +119,35 @@ if errorlevel 1 (
   exit /b 1
 )
 
+rem Bundle Chromium so the packaged app is self-contained (no network needed on target machine).
+rem Prefer copying from the local Playwright cache; only download if that cache is missing.
+set "PLAYWRIGHT_BROWSERS_PATH=%ROOT%\.playwright-browsers"
+set "LOCAL_BROWSERS=%LOCALAPPDATA%\ms-playwright"
+if exist "%LOCAL_BROWSERS%" (
+  echo Copying Chromium from local Playwright cache - no download needed
+  "%PYTHON%" -c "import shutil; shutil.rmtree(r'%PLAYWRIGHT_BROWSERS_PATH%', ignore_errors=True); shutil.copytree(r'%LOCAL_BROWSERS%', r'%PLAYWRIGHT_BROWSERS_PATH%')"
+) else (
+  echo Local Playwright cache not found - downloading Chromium - needs network
+  if not exist "%PLAYWRIGHT_BROWSERS_PATH%" mkdir "%PLAYWRIGHT_BROWSERS_PATH%"
+  "%PYTHON%" -m playwright install chromium
+  if errorlevel 1 (
+    echo Error: failed to install Chromium for bundling.
+    echo Browser tool will not work in the packaged build.
+    exit /b 1
+  )
+)
+
 "%PYINSTALLER%" --clean --noconfirm "%SPEC%"
 if errorlevel 1 exit /b 1
 
-if exist "%PACKAGE_DIR%" rmdir /s /q "%PACKAGE_DIR%"
-if not exist "%PACKAGE_ROOT%" mkdir "%PACKAGE_ROOT%"
-
-xcopy "%BUILD_ROOT%\DesktopAgent" "%PACKAGE_DIR%\" /E /I /Y >nul
-if errorlevel 1 exit /b 1
-
-copy /Y "%ROOT%\packaging\windows\Start Desktop Agent.bat" "%PACKAGE_DIR%\Start Desktop Agent.bat" >nul
-copy /Y "%ROOT%\packaging\windows\README-Windows.txt" "%PACKAGE_DIR%\README-Windows.txt" >nul
-
-if exist "%ZIP_PATH%" del /f /q "%ZIP_PATH%"
-where powershell >nul 2>nul
-if %ERRORLEVEL%==0 (
-  powershell -NoProfile -ExecutionPolicy Bypass -Command "Compress-Archive -Path '%PACKAGE_DIR%\*' -DestinationPath '%ZIP_PATH%' -Force" >nul 2>nul
+if not exist "%BUILD_ROOT%\DesktopAgent\DesktopAgent.exe" (
+  echo Error: PyInstaller did not produce DesktopAgent.exe.
+  echo Check the build output above for missing modules or import errors.
+  exit /b 1
 )
+
+"%PYTHON%" "%ROOT%\packaging\windows\package_dist.py" "%BUILD_ROOT%\DesktopAgent" "%PACKAGE_DIR%" "%ZIP_PATH%" "%ROOT%"
+if errorlevel 1 exit /b 1
 
 echo.
 echo Windows package created:
@@ -107,5 +157,8 @@ if exist "%ZIP_PATH%" (
 ) else (
   echo Zip creation was skipped or blocked. Use the package directory above.
 )
+echo.
+echo To distribute: send DesktopAgent-Windows.zip (or the folder) to the target machine,
+echo unzip, then double-click "Start Desktop Agent.bat". No Python install required.
 
 endlocal

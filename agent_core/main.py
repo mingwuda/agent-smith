@@ -45,6 +45,17 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 from wechat_bot import WeChatBot
 
 
+# 打包环境下让 Playwright 使用包内的 Chromium 二进制
+# （build 时已通过 DesktopAgent.spec 把 .playwright-browsers 打进包内 ms-playwright）
+if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+    _meipass = Path(sys._MEIPASS)
+    # ponytail: one-folder 模式下 datas 实际落在 _internal/ 子目录，
+    # 这里同时尝试两种布局，避免 _MEIPASS 指向差异导致找不到浏览器。
+    _browsers_candidates = [_meipass / "ms-playwright", _meipass / "_internal" / "ms-playwright"]
+    _browsers_path = next((c for c in _browsers_candidates if c.is_dir()), _browsers_candidates[0])
+    os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(_browsers_path))
+
+
 # ---------- 全局变量 ----------
 
 agent: Optional[DesktopAgent] = None

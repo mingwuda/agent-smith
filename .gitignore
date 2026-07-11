@@ -8,7 +8,20 @@ agent.log
 dist/
 build/
 .venv/
+.venv-windows-build/
+.venv-windows-verify/
+.pip-cache/
+.playwright-browsers/
 venv/
 .env
+
+# 调试/构建产物（本地临时，不入仓）
+.browser_screenshots/
+build_browser_fix*.log
+tmp_verify/
+run_test.log
+run_verify.log
+defender_check.txt
+procs.txt
 *.db
 *.sqlite3
