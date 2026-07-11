@@ -10,13 +10,16 @@
 
 ## 包含内容
 
+解压后顶层只有以下几项：
+
 | 文件 / 目录 | 说明 |
 | --- | --- |
-| `DesktopAgent.exe` | 智能体服务端 |
-| `desktop/` | Web 前端界面（已打包） |
-| `skills/` | 内置智能体技能（已打包） |
-| `AGENTS.md` | 智能体运行指引（已打包） |
-| `_internal/` | 运行依赖与浏览器（已打包，勿删） |
+| `Start Desktop Agent.bat` | 启动脚本（**双击这个运行**） |
+| `DesktopAgent.exe` | 智能体服务端主程序 |
+| `README-Windows.md` | 本说明文件 |
+| `_internal/` | 运行依赖目录（**勿删、勿改**） |
+
+`_internal/` 内已打包全部运行所需内容：Web 前端（`desktop/`）、内置技能（`skills/`）、智能体运行指引（`AGENTS.md`）、Python 运行时与第三方依赖、以及浏览器工具所需的 Chromium（`ms-playwright/`）。这些由程序自动读取，无需手动操作。
 
 ## 数据存放位置
 
