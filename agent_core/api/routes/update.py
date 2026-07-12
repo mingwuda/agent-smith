@@ -4,9 +4,9 @@ from __future__ import annotations
 from fastapi import APIRouter
 from pydantic import BaseModel
 
-from ..deps import admin_required
-from ...config import AgentConfig
-from ...updater import check_update, install_update
+from api.deps import admin_required
+from config import AgentConfig
+from updater import check_update, install_update
 
 router = APIRouter()
 

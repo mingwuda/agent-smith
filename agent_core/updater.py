@@ -51,7 +51,7 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-from .version import __version__
+from version import __version__
 
 # 默认更新源（Gitee Releases 页面，用于解析 latest tag）
 DEFAULT_UPDATE_SERVER = (
