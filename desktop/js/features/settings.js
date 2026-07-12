@@ -132,6 +132,7 @@ function renderProviderFields(providerId) {
   document.getElementById('s-model').value = provider.model || '';
   document.getElementById('s-base-url').value = provider.base_url || '';
   document.getElementById('s-recursion-limit').value = settingsData.recursion_limit || 60;
+  document.getElementById('s-enable-loop-guard').checked = settingsData.enable_loop_guard !== false;
   document.getElementById('s-api-timeout').value = settingsData.api_timeout_seconds || 120;
   document.getElementById('s-tavily-enabled').checked = !!settingsData.tavily_search_enabled;
   document.getElementById('s-tavily-api-key').value = '';
@@ -296,6 +297,7 @@ async function saveSettings() {
         model: document.getElementById('s-model').value,
         base_url: document.getElementById('s-base-url').value,
         recursion_limit: Number(document.getElementById('s-recursion-limit').value || 60),
+        enable_loop_guard: document.getElementById('s-enable-loop-guard').checked,
         api_max_retries: settingsData?.api_max_retries ?? 3,
         api_timeout_seconds: Number(document.getElementById('s-api-timeout').value || 120),
         api_host_ips: settingsData?.api_host_ips || '',
@@ -306,6 +308,7 @@ async function saveSettings() {
         anysearch_api_key: document.getElementById('s-anysearch-api-key').value,
         review_provider_id: document.getElementById('s-review-provider').value,
         review_model: document.getElementById('s-review-model').value,
+        update_server: document.getElementById('s-update-server') ? document.getElementById('s-update-server').value : '',
       }),
     });
     const data = await res.json();
@@ -352,6 +355,7 @@ async function quickSwitchProvider(providerId) {
         model: provider.model || '',
         base_url: provider.base_url || '',
         recursion_limit: settingsData.recursion_limit || 60,
+        enable_loop_guard: settingsData.enable_loop_guard !== false,
         api_max_retries: settingsData.api_max_retries ?? 3,
         api_timeout_seconds: settingsData.api_timeout_seconds ?? 120,
         api_host_ips: settingsData.api_host_ips || '',
@@ -382,6 +386,97 @@ async function quickSwitchProvider(providerId) {
     }
   } catch {
     showToast('⚠️ ' + t('switchProviderNetworkFailed'), 'error');
+  }
+}
+
+// ── 更新功能 ──
+
+let lastUpdateCheck = null;
+
+async function renderUpdatePanel() {
+  if (!settingsData) return;
+  const serverInput = document.getElementById('s-update-server');
+  if (serverInput) serverInput.value = settingsData.update_server || '';
+  // 打开即检查一次，顺便显示当前版本与可用更新
+  await checkForUpdate();
+}
+
+async function checkForUpdate() {
+  const btn = document.getElementById('check-update-btn');
+  const installBtn = document.getElementById('install-update-btn');
+  const feedback = document.getElementById('update-feedback');
+  const curEl = document.getElementById('s-current-version');
+  if (btn) btn.disabled = true;
+  if (feedback) { feedback.textContent = currentLanguage === 'en' ? 'Checking…' : '检查中…'; feedback.className = 'save-feedback'; }
+  try {
+    const res = await fetch('/update/check');
+    const data = await res.json();
+    lastUpdateCheck = data;
+    if (curEl) curEl.textContent = data.current_version || '—';
+    if (data.error) {
+      if (feedback) { feedback.textContent = '⚠️ ' + data.error; feedback.className = 'save-feedback err'; }
+      if (installBtn) installBtn.disabled = true;
+      return;
+    }
+    if (!data.has_update) {
+      if (feedback) {
+        feedback.textContent = '✅ ' + (currentLanguage === 'en' ? `Up to date (${data.current_version})` : `已是最新版本（${data.current_version}）`);
+        feedback.className = 'save-feedback ok';
+      }
+      if (installBtn) installBtn.disabled = true;
+      return;
+    }
+    const typeText = data.update_type === 'incremental'
+      ? (currentLanguage === 'en' ? 'incremental' : '增量')
+      : (currentLanguage === 'en' ? 'full' : '全量');
+    let msg = `🔄 ${data.current_version} → ${data.latest_version}（${typeText}）`;
+    if (data.changelog) msg += '\n' + data.changelog;
+    if (feedback) { feedback.textContent = msg; feedback.className = 'save-feedback ok'; }
+    if (installBtn) installBtn.disabled = false;
+  } catch {
+    if (feedback) { feedback.textContent = currentLanguage === 'en' ? 'Network error' : '网络错误'; feedback.className = 'save-feedback err'; }
+    if (installBtn) installBtn.disabled = true;
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function installUpdate() {
+  if (!lastUpdateCheck || !lastUpdateCheck.has_update) return;
+  const installBtn = document.getElementById('install-update-btn');
+  const feedback = document.getElementById('update-feedback');
+  if (installBtn) installBtn.disabled = true;
+  if (feedback) { feedback.textContent = currentLanguage === 'en' ? 'Installing…' : '安装中…'; feedback.className = 'save-feedback'; }
+  try {
+    const res = await fetch('/update/install', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        patches: lastUpdateCheck.patches || [],
+        full_url: lastUpdateCheck.full_url || '',
+        target_version: lastUpdateCheck.latest_version || '',
+        full_sha256: lastUpdateCheck.full_sha256 || '',
+      }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      const needRestart = currentLanguage === 'en'
+        ? 'Installed. Please restart the backend to apply.'
+        : '安装完成，请重启后端以生效。';
+      showToast('✅ ' + needRestart, 'success');
+      if (feedback) { feedback.textContent = '✅ ' + needRestart; feedback.className = 'save-feedback ok'; }
+      if (installBtn) installBtn.disabled = true;
+      lastUpdateCheck = null;
+    } else {
+      if (feedback) {
+        feedback.textContent = '⚠️ ' + (data.error || (currentLanguage === 'en' ? 'Install failed' : '安装失败'));
+        feedback.className = 'save-feedback err';
+      }
+      if (installBtn) installBtn.disabled = false;
+    }
+  } catch {
+    if (feedback) { feedback.textContent = currentLanguage === 'en' ? 'Network error' : '网络错误'; feedback.className = 'save-feedback err'; }
+    if (installBtn) installBtn.disabled = false;
   }
 }
 

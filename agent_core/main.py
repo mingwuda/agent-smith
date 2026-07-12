@@ -26,6 +26,33 @@ from logger import setup_logging, get_logger, set_log_context, clear_log_context
 
 logger = get_logger(__name__)
 
+
+def _apply_pending_update_at_boot():
+    """若上次安装因文件被占用未能切换，在进程导入子模块之前完成目录切换。
+
+    install_update 会把新文件构建到 ``agent_core/.pending``，并尽量原子切换。
+    若切换时目录被占用（如 Windows 运行中的 exe），会保留 .pending 并由本次启动
+    在加载模块前完成 ``live -> .old``、``.pending -> live`` 的切换，使新版本生效。
+    """
+    try:
+        here = Path(__file__).resolve().parent
+        pending = Path(str(here) + ".pending")
+        if not pending.exists():
+            return
+        backup = Path(str(here) + ".old")
+        if backup.exists():
+            shutil.rmtree(backup, ignore_errors=True)
+        os.rename(here, backup)
+        os.rename(pending, here)
+        shutil.rmtree(backup, ignore_errors=True)
+        logger.info("[更新] 启动时完成待生效更新切换，本次运行将使用新版本")
+    except Exception:
+        logger.exception("[更新] 启动切换待生效更新失败")
+
+
+_apply_pending_update_at_boot()
+
+
 from config import AgentConfig
 from agent import DesktopAgent
 from tools import (
@@ -83,6 +110,13 @@ async def lifespan(app):
         init_agent()
     except Exception:
         logger.exception("Agent 启动时初始化失败，将在首次请求时重试")
+
+    # 后台检查更新（不阻塞启动）
+    try:
+        _check_update_on_startup()
+    except Exception:
+        logger.exception("启动时更新检查失败")
+
     yield
 
 app = FastAPI(
@@ -211,6 +245,35 @@ def init_agent():
     _start_all_wechat_bots()
 
 
+# ---------- 更新检查 ----------
+
+def _check_update_on_startup():
+    """启动时后台检查更新，不阻塞主流程。"""
+    try:
+        config = AgentConfig.load()
+        server = config.update_server or ""
+        from .updater import check_update_async
+
+        def _on_result(result):
+            if not result:
+                return
+            if result.get("error"):
+                logger.debug("[更新] 检查失败: %s", result["error"])
+                return
+            if result.get("has_update"):
+                logger.info(
+                    "[更新] 发现新版本: %s -> %s",
+                    result.get("current_version"),
+                    result.get("latest_version"),
+                )
+            else:
+                logger.debug("[更新] 已是最新版本: %s", result.get("current_version"))
+
+        check_update_async(update_server=server, callback=_on_result)
+    except Exception:
+        logger.exception("启动时更新检查异常")
+
+
 def _get_all_users_with_bot() -> list[str]:
     """获取所有可能有所属微信 Bot 的用户 ID。"""
     users = ["admin"]
@@ -329,6 +392,7 @@ from api.routes.db import router as db_router
 from api.routes.system import router as system_router
 from api.routes.wechat import router as wechat_router
 from api.routes.monitoring import router as monitoring_router
+from api.routes.update import router as update_router
 
 app.include_router(auth_router)
 app.include_router(agent_router)
@@ -339,6 +403,7 @@ app.include_router(db_router)
 app.include_router(system_router)
 app.include_router(wechat_router)
 app.include_router(monitoring_router)
+app.include_router(update_router)
 
 
 # ---------- 入口 ----------

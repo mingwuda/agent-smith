@@ -183,6 +183,7 @@
       <div class="settings-sidebar">
         <button class="settings-tab active" data-tab="model" onclick="switchSettingsTab('model')">🤖 模型</button>
         <button class="settings-tab" data-tab="database" onclick="switchSettingsTab('database');switchDBSubTab('connections');loadDBConnections()">🗄️ 数据库</button>
+        <button class="settings-tab" data-tab="update" onclick="switchSettingsTab('update');renderUpdatePanel()">🔄 更新</button>
       </div>
       <div class="settings-content">
         <!-- 模型设置 -->
@@ -237,6 +238,13 @@
             <label for="s-recursion-limit" data-i18n="recursionLimitLabel">最大推理步数</label>
             <input id="s-recursion-limit" type="number" min="10" max="200" step="1" />
             <div class="hint" data-i18n="recursionLimitHint">复杂任务或多次工具调用可适当调大；过大时循环任务会运行更久。</div>
+          </div>
+          <div class="form-group">
+            <label>
+              <input id="s-enable-loop-guard" type="checkbox" style="width:auto;height:auto;margin-right:6px;" />
+              <span data-i18n="enableLoopGuardLabel">启用防循环检测</span>
+            </label>
+            <div class="hint" data-i18n="enableLoopGuardHint">开启后，检测到工具调用陷入重复循环或子代理长时间未汇总时会自动停止任务。关闭后由你手动决定是否终止（停止按钮）。</div>
           </div>
           <div class="form-group">
             <label for="s-api-timeout">API 超时（秒）</label>
@@ -383,6 +391,25 @@
               <span id="perm-save-msg" style="font-size:12px;color:#999;"></span>
             </div>
           </div>
+        </div>
+
+        <!-- 更新设置 -->
+        <div class="settings-tab-panel" id="panel-update">
+          <div class="form-group">
+            <label for="s-update-server" data-i18n="updateServerLabel">更新源地址</label>
+            <input id="s-update-server" placeholder="留空用默认（Gitee Releases）" />
+            <div class="hint" data-i18n="updateServerHint">指向发布版本清单（version.json）所在地址，留空使用内置默认源。</div>
+          </div>
+          <div class="form-group">
+            <label data-i18n="currentVersionLabel">当前版本</label>
+            <div id="s-current-version" style="font-family:monospace;font-size:14px;color:#666;">—</div>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;margin:8px 0 4px;">
+            <button type="button" class="btn-primary" id="check-update-btn" onclick="checkForUpdate()" data-i18n="checkUpdateButton">检查更新</button>
+            <button type="button" class="btn-primary" id="install-update-btn" onclick="installUpdate()" disabled data-i18n="installUpdateButton">安装更新</button>
+          </div>
+          <div class="save-feedback" id="update-feedback"></div>
+          <div class="hint" data-i18n="updateNoteHint">增量更新仅替换后端代码文件，安装后需重启后端生效；冻结（打包）模式下建议用全量包。</div>
         </div>
 
         <div class="save-feedback" id="save-feedback"></div>

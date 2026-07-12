@@ -97,6 +97,7 @@ class AgentConfig:
     # 用量限制
     max_cost_per_day: float = 5.0
     recursion_limit: int = 60
+    enable_loop_guard: bool = True  # 防循环检测（关闭后交由用户手动终止任务）
     api_max_retries: int = 3
     api_timeout_seconds: float = 120.0
     api_host_ips: str = ""
@@ -105,6 +106,9 @@ class AgentConfig:
     tavily_api_key: str = ""
     tavily_search_url: str = "https://api.tavily.com/search"
     anysearch_api_key: str = ""
+    
+    # 更新
+    update_server: str = ""
     
     system_prompt: str = (
         "你是一个桌面 AI 智能体，可以自主完成用户交给你的任务。\n\n"
@@ -176,6 +180,7 @@ class AgentConfig:
             "AGENT_PORT": ("port", int),
             "MAX_COST_PER_DAY": ("max_cost_per_day", float),
             "AGENT_RECURSION_LIMIT": ("recursion_limit", int),
+            "AGENT_ENABLE_LOOP_GUARD": ("enable_loop_guard", _env_bool),
             "AGENT_API_MAX_RETRIES": ("api_max_retries", int),
             "AGENT_API_TIMEOUT_SECONDS": ("api_timeout_seconds", float),
             "AGENT_API_HOST_IPS": ("api_host_ips", str),
@@ -184,6 +189,7 @@ class AgentConfig:
             "TAVILY_API_KEY": ("tavily_api_key", str),
             "TAVILY_SEARCH_URL": ("tavily_search_url", str),
             "ANYSEARCH_API_KEY": ("anysearch_api_key", str),
+            "AGENT_UPDATE_SERVER": ("update_server", str),
         }
         env_overrides = set()
         for env_key, (attr_name, cast_fn) in env_map.items():
@@ -319,6 +325,7 @@ class AgentConfig:
             "port": self.port,
             "max_cost_per_day": self.max_cost_per_day,
             "recursion_limit": self.recursion_limit,
+            "enable_loop_guard": self.enable_loop_guard,
             "api_max_retries": self.api_max_retries,
             "api_timeout_seconds": self.api_timeout_seconds,
             "api_host_ips": self.api_host_ips,
@@ -329,6 +336,7 @@ class AgentConfig:
             "anysearch_api_key": self.anysearch_api_key,
             "review_provider_id": self.review_provider_id,
             "review_model": self.review_model,
+            "update_server": self.update_server,
         }
         CONFIG_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     
@@ -362,6 +370,7 @@ class AgentConfig:
             "port": self.port,
             "max_cost_per_day": self.max_cost_per_day,
             "recursion_limit": self.recursion_limit,
+            "enable_loop_guard": self.enable_loop_guard,
             "api_max_retries": self.api_max_retries,
             "api_timeout_seconds": self.api_timeout_seconds,
             "api_host_ips": self.api_host_ips,
@@ -374,4 +383,5 @@ class AgentConfig:
             "anysearch_api_key_preview": self.anysearch_api_key[:8] + "..." if len(self.anysearch_api_key) > 8 else ("已设置" if self.anysearch_api_key else "未设置"),
             "review_provider_id": self.review_provider_id,
             "review_model": self.review_model,
+            "update_server": self.update_server,
         }

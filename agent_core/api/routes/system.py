@@ -27,6 +27,7 @@ class SettingsRequest(BaseModel):
     model: str = ""
     base_url: str = ""
     recursion_limit: int = 60
+    enable_loop_guard: bool = True
     api_max_retries: int = 3
     api_timeout_seconds: float = 120.0
     api_host_ips: str = ""
@@ -37,6 +38,7 @@ class SettingsRequest(BaseModel):
     anysearch_api_key: str = ""
     review_provider_id: str = ""
     review_model: str = ""
+    update_server: str = ""
 
 
 class UserInfo(BaseModel):
@@ -111,6 +113,7 @@ def save_settings(req: SettingsRequest, request: Request):
         base_url=req.base_url,
     )
     cfg.recursion_limit = max(1, int(req.recursion_limit or 60))
+    cfg.enable_loop_guard = bool(req.enable_loop_guard)
     cfg.api_max_retries = max(0, int(req.api_max_retries or 0))
     cfg.api_timeout_seconds = max(60.0, float(req.api_timeout_seconds or 120.0))
     cfg.api_host_ips = req.api_host_ips or cfg.api_host_ips
@@ -126,6 +129,7 @@ def save_settings(req: SettingsRequest, request: Request):
     cfg.tavily_search_url = req.tavily_search_url or cfg.tavily_search_url or "https://api.tavily.com/search"
     if req.anysearch_api_key:
         cfg.anysearch_api_key = req.anysearch_api_key
+    cfg.update_server = req.update_server or cfg.update_server
     
     # 持久化到文件（现在包含 API Key）
     cfg.save()
@@ -136,6 +140,7 @@ def save_settings(req: SettingsRequest, request: Request):
     os.environ["LLM_MODEL"] = cfg.model
     os.environ["LLM_PROVIDER"] = cfg.active_provider
     os.environ["AGENT_RECURSION_LIMIT"] = str(cfg.recursion_limit)
+    os.environ["AGENT_ENABLE_LOOP_GUARD"] = "1" if cfg.enable_loop_guard else "0"
     os.environ["AGENT_API_MAX_RETRIES"] = str(cfg.api_max_retries)
     os.environ["AGENT_API_TIMEOUT_SECONDS"] = str(cfg.api_timeout_seconds)
     if cfg.api_host_ips:
@@ -161,6 +166,10 @@ def save_settings(req: SettingsRequest, request: Request):
         os.environ["LLM_BASE_URL"] = cfg.base_url
     else:
         os.environ.pop("LLM_BASE_URL", None)
+    if cfg.update_server:
+        os.environ["AGENT_UPDATE_SERVER"] = cfg.update_server
+    else:
+        os.environ.pop("AGENT_UPDATE_SERVER", None)
     
     # 重启 Agent（同时同步 monitoring 与 agent 路由的引用，
     # 确保 /health 读到新模型、聊天接口用上新的 LLM client）

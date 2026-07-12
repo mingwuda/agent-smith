@@ -197,6 +197,62 @@ def _recursion_limit_message(limit: int) -> str:
     )
 
 
+async def _synthesize_guard_summary(
+    agent: "DesktopAgent",
+    run_config: dict,
+    subagent_results: list[dict],
+    prior_final_buffer: str,
+) -> str:
+    """防循环触发后，基于已收集的工具/子代理结果生成真实汇总，而不是发送空壳占位。
+
+    返回可直接作为最终回复的文本。任何异常都回退到已有的 final_buffer。
+    """
+    # 1) 优先使用子代理返回的真实结果
+    context_parts: list[str] = []
+    for r in subagent_results or []:
+        task = r.get("task") or r.get("agent_type") or "子任务"
+        result = (r.get("result") or "").strip()
+        if result:
+            context_parts.append(f"### 子任务：{task}\n{result}")
+
+    # 2) 没有子代理结果时，尝试从图状态里取出工具返回内容
+    if not context_parts:
+        try:
+            snapshot = await agent._graph.aget_state(run_config)
+            msgs = list(getattr(snapshot, "values", {}).get("messages") or [])
+            for m in msgs:
+                if getattr(m, "type", "") == "tool" and getattr(m, "content", ""):
+                    content = str(m.content).strip()
+                    if len(content) > 20:
+                        context_parts.append(content[:3000])
+        except Exception:
+            pass
+
+    # 3) 没有可复用结果，但模型已流式输出过内容 → 直接保留
+    if not context_parts:
+        if prior_final_buffer.strip():
+            return prior_final_buffer.strip()
+        return "⚠️ 任务已被防循环机制提前结束，但没有可汇总的工具结果。"
+
+    joined = "\n\n".join(context_parts)
+    system_msg = SystemMessage(content=(
+        "你是桌面 AI 智能体的汇总模块。下面是与用户任务相关的工具/子代理返回结果。"
+        "请直接基于这些内容生成面向用户的最终回答，不要调用任何工具，"
+        "也不要使用‘我将…’‘下面为你…’这类开场白，直接进入结论。"
+    ))
+    human_msg = HumanMessage(content=(
+        f"以下是本轮已收集的结果：\n\n{joined}\n\n请直接给出最终回答（汇总结论）。"
+    ))
+    try:
+        resp = await agent.llm.ainvoke([system_msg, human_msg])
+        text = str(getattr(resp, "content", "")).strip()
+        if text:
+            return text
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[防循环] 生成汇总失败，回退到已有内容: %s", exc)
+    return prior_final_buffer.strip() or context_parts[0][:2000]
+
+
 def _connection_diagnostic(exc: Exception, config: AgentConfig) -> str:
     message = f"{type(exc).__name__}: {exc}"
     exc_name = type(exc).__name__
@@ -687,12 +743,14 @@ class DesktopAgent:
         if input_tokens <= 0 and output_tokens <= 0:
             return
         # ponytail: 上游网关偶发把 session 累计 token 当作单次 input_tokens 上报（虚高），
-        # 真实单次调用不可能在数秒内处理数百万 token。此处仅告警、不改值，避免污染用量统计。
+        # 真实单次调用不可能在数秒内处理数百万 token。这类读数直接把 input 归零，
+        # 不计入用量统计（output 通常真实，予以保留），避免面板被假数字撑高。
         if input_tokens > 500_000:
             logger.warning(
-                "[usage] 单次 input_tokens=%d 异常偏高（疑似网关累计值虚高，已照实记录但不修正）",
+                "[usage] 单次 input_tokens=%d 异常偏高（疑似网关累计值虚高，已将该次 input 归零、不计入用量统计）",
                 input_tokens,
             )
+            input_tokens = 0
         self.tracker.record_model_call(
             provider=self.config.active_provider,
             model=self.config.model,
@@ -780,9 +838,13 @@ class DesktopAgent:
     def _run_config(self, thread_key: str = "") -> dict:
         if not thread_key:
             thread_key = self._thread_key()
+        limit = max(1, int(self.config.recursion_limit or 60))
+        # 关闭防循环时放宽递归上限，交由用户手动终止任务
+        if not getattr(self.config, "enable_loop_guard", True):
+            limit = max(limit, 1000)
         return {
             "configurable": {"thread_id": thread_key},
-            "recursion_limit": max(1, int(self.config.recursion_limit or 60)),
+            "recursion_limit": limit,
         }
 
     def _rebuild_graph(self):
@@ -977,6 +1039,7 @@ class DesktopAgent:
         _post_subagent_tool_calls = 0        # 子代理完成后父模型继续调用的工具次数
         _post_subagent_seen_run_ids: set[str] = set()  # 已统计过的非子代理工具 run_id（避免重试重复计数）
         subagent_end_sent_at = 0.0           # 子代理结束事件发送时间戳
+        _subagent_results: list[dict] = []   # 子代理完成后收集的结果（防循环触发时用于生成真实汇总）
         last_model_activity_at = 0.0         # 最后一次模型活动（token/thought/tool）时间戳
         
         # 当前 todo 清单数据（随 manage_todo 工具调用更新）
@@ -1012,12 +1075,15 @@ class DesktopAgent:
                         yield _sse({"type": "ping"})
                     # 子代理结束但父模型长时间没有产生最终回复，强制终止
                     # 以 subagent_end 发送时间为基准，避免父模型内部的慢速/空轮询刷新 idle 时间
-                    if subagent_end_sent_at and not running_tools and not loop_guard_triggered:
+                    if self.config.enable_loop_guard and subagent_end_sent_at and not running_tools and not loop_guard_triggered:
                         elapsed_after_subagent = now - subagent_end_sent_at
                         if elapsed_after_subagent >= 90:
                             logger.warning("[子代理] subagent_end 已发送 %d 秒，父模型仍未完成汇总，强制终止", int(elapsed_after_subagent))
                             loop_guard_triggered = True
-                            final_buffer = "✅ 所有子代理搜索已完成。\n\n（模型在汇总阶段超时，未返回完整汇总，以下为已收集的子代理结果片段）\n"
+                            # 基于已收集的子代理结果生成真实汇总（而非空壳占位）
+                            final_buffer = await _synthesize_guard_summary(
+                                self, run_config, _subagent_results, final_buffer
+                            )
                             done_data = {"type": "done", "content": final_buffer}
                             if current_todo_list:
                                 done_data["todo_list"] = current_todo_list
@@ -1081,17 +1147,22 @@ class DesktopAgent:
                     
                     # 子代理完成后如果父模型还在调工具，最多允许 3 次不同的非子代理工具，之后强制汇总
                     # 用 run_id 去重，避免同一工具因网络重试被重复计数
-                    if _subagent_dispatched and tool_name not in {"delegate_tasks_parallel", "delegate_task"} and run_id not in _post_subagent_seen_run_ids:
+                    if self.config.enable_loop_guard and _subagent_dispatched and tool_name not in {"delegate_tasks_parallel", "delegate_task"} and run_id not in _post_subagent_seen_run_ids:
                         _post_subagent_seen_run_ids.add(run_id)
                         _post_subagent_tool_calls += 1
                         if _post_subagent_tool_calls >= 3:
                             logger.warning("[防循环] 子代理完成后父模型已调用 %d 次不同工具，强制汇总", _post_subagent_tool_calls)
                             loop_guard_triggered = True
-                            final_buffer = "✅ 所有子代理搜索已完成，开始汇总结果。\n\n（以下为归并总结）\n"
+                            # 基于已收集的子代理结果生成真实汇总（而非空壳占位）
+                            final_buffer = await _synthesize_guard_summary(
+                                self, run_config, _subagent_results, final_buffer
+                            )
                             done_data = {"type": "done", "content": final_buffer}
                             if current_todo_list:
                                 done_data["todo_list"] = current_todo_list
+                            _done_yielded = True
                             yield _sse(done_data)
+                            break
                             break
                     
                     started_at = time.time()
@@ -1294,15 +1365,17 @@ class DesktopAgent:
                                     end_idx = min(idx_in_output + 600, len(full_output))
                                     upd["result"] = full_output[idx_in_output:end_idx]
                                 updated.append(upd)
+                            _subagent_results = updated
                             yield _sse({
                                 "type": "subagent_end",
                                 "capsules": updated,
                             })
                         except Exception:
                             # 简化降级：只标记状态
+                            _subagent_results = [dict(cap, status="done") for cap in subagent_capsules]
                             yield _sse({
                                 "type": "subagent_end",
-                                "capsules": [dict(cap, status="done") for cap in subagent_capsules],
+                                "capsules": _subagent_results,
                             })
                         subagent_capsules = []
                         logger.info("[子代理] subagent_end 已发送，等待父模型生成汇总回复...")
@@ -1315,11 +1388,14 @@ class DesktopAgent:
                         last_progress_at = 0.0
 
                     loop_reason = _detect_tool_loop(tool_call_history, run_config["recursion_limit"])
-                    if loop_reason:
+                    if self.config.enable_loop_guard and loop_reason:
                         loop_guard_triggered = True
                         _done_yielded = True
-                        final_buffer = _loop_guard_message(loop_reason, tool_call_history, run_config["recursion_limit"])
-                        yield _sse({"type": "error", "content": final_buffer})
+                        # 基于已收集结果生成真实汇总（而非空壳占位提示）
+                        final_buffer = await _synthesize_guard_summary(
+                            self, run_config, _subagent_results, final_buffer
+                        )
+                        yield _sse({"type": "done", "content": final_buffer})
                         break
                 elif kind == "on_chat_model_end" and node == "agent":
                     output = event.get("data", {}).get("output")
