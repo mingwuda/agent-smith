@@ -1,8 +1,8 @@
-# AgentSmith
+# Moss Agent
 
 [中文](README.md) | [English](README.en.md)
 
-AgentSmith is a locally hosted, private desktop AI agent. It is built with FastAPI, LangGraph, and OpenAI-compatible model APIs, and provides chat-based task execution, tool calls, downloadable artifacts, Skills extensions, multi-user isolation, long-term memory, and visible execution steps.
+Moss Agent is a locally hosted, private desktop AI agent. It is built with FastAPI, LangGraph, and OpenAI-compatible model APIs, and provides chat-based task execution, tool calls, downloadable artifacts, Skills extensions, multi-user isolation, long-term memory, and visible execution steps.
 
 It works well as a personal or intranet team assistant for reading and writing workspace files, running Python, searching the web, managing Git, generating documents, analyzing images, and delegating independent tasks to subagents.
 
@@ -240,7 +240,7 @@ Other files only provide download links.
 
 ### Browser Automation
 
-AgentSmith includes a built-in Playwright browser with full page interaction support:
+Moss Agent includes a built-in Playwright browser with full page interaction support:
 
 | Tool | Purpose |
 |------|---------|
@@ -285,7 +285,7 @@ Vision LLM-based captcha recognition supporting multiple types:
 
 ## Skills
 
-AgentSmith loads `SKILL.md` from:
+Moss Agent loads `SKILL.md` from:
 
 ```text
 agent_core/samples/
@@ -333,7 +333,7 @@ Currently 13 built-in skills:
 
 ## WeChat Integration
 
-AgentSmith supports connecting to **WeChat personal accounts** through Tencent's official **iLink Bot API**, allowing you to chat with your AI Agent directly from WeChat.
+Moss Agent supports connecting to **WeChat personal accounts** through Tencent's official **iLink Bot API**, allowing you to chat with your AI Agent directly from WeChat.
 
 ### Highlights
 
@@ -393,7 +393,7 @@ Send a message to the bot on WeChat. The Agent will reply — responses are also
 
 ## Database Interaction
 
-AgentSmith includes a built-in `dbcli` database interaction system that allows the Agent to talk to databases in natural language.
+Moss Agent includes a built-in `dbcli` database interaction system that allows the Agent to talk to databases in natural language.
 
 ### Architecture
 
@@ -523,7 +523,7 @@ Example systemd unit:
 
 ```ini
 [Unit]
-Description=AgentSmith
+Description=Moss Agent
 After=network-online.target
 Wants=network-online.target
 
