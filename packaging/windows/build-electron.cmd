@@ -6,7 +6,7 @@ rem ============================================================
 rem  build-electron.cmd
 rem  One-click build of the Electron installer (nsis .exe).
 rem  Flow: build PyInstaller backend product -> electron-builder pack
-rem  Output: dist\electron\DesktopAgent-Setup-<version>.exe
+rem  Output: dist\electron\MossAgent-Setup-<version>.exe
 rem
 rem  Backend build is AUTO-DETECTED by default:
 rem    - if dist\windows\DesktopAgent-Windows\DesktopAgent.exe exists,
@@ -114,7 +114,7 @@ echo Electron installer created under:
 echo   %ROOT%\dist\electron\
 for %%F in ("%ROOT%\dist\electron\*.exe") do echo   %%~nxF  (%%~zF bytes)
 echo ============================================================
-echo Distribute the DesktopAgent-Setup-*.exe. It bundles the Electron
+echo Distribute the MossAgent-Setup-*.exe. It bundles the Electron
 echo runtime + Python backend + Chromium. End users just double-click
 echo to install and run - no browser, no port, no download needed.
 

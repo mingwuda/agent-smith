@@ -65,7 +65,7 @@ def serve_ui():
     if _html_content:
         headers = {"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache", "Expires": "0"}
         return HTMLResponse(_html_content, headers=headers)
-    return HTMLResponse("<h1>Desktop Agent API</h1><p>UI not found. Use /docs for API docs.</p>")
+    return HTMLResponse("<h1>Moss Agent API</h1><p>UI not found. Use /docs for API docs.</p>")
 
 
 @router.get("/settings")

@@ -1,5 +1,5 @@
 {
-  "name": "desktop-agent-ui",
+  "name": "moss-agent-ui",
   "version": "1.0.0",
   "description": "桌面 AI 智能体 - 浏览器端",
   "scripts": {

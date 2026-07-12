@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Build the Desktop Agent Python backend as a PyInstaller one-folder bundle for macOS.
+# Build the Moss Agent Python backend as a PyInstaller one-folder bundle for macOS.
 # Produces: dist/macos/DesktopAgent-macOS/  (contains the "DesktopAgent" binary + _internal/ with Chromium)
 #
 # MUST run on macOS - PyInstaller cannot cross-compile. On Apple Silicon it builds arm64,

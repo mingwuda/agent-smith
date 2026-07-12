@@ -484,7 +484,7 @@ def _write_version(target_dir: Path, version: str) -> None:
     """把目标版本号写回 target_dir/version.py，使下次检查不再重复提示同一更新。"""
     try:
         (target_dir / "version.py").write_text(
-            f'"""Desktop Agent 后端版本号（单一真相源）。"""\n\n__version__ = "{version}"\n',
+            f'"""Moss Agent 后端版本号（单一真相源）。"""\n\n__version__ = "{version}"\n',
             encoding="utf-8",
         )
     except OSError:

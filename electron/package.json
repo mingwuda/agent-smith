@@ -1,10 +1,10 @@
 {
-  "name": "desktop-agent-electron",
+  "name": "moss-agent-electron",
   "version": "0.1.1",
-  "description": "Electron 窗口壳：把 Desktop Agent 后端（FastAPI）包进原生窗口，用户无需打开浏览器或记忆端口",
+  "description": "Electron 窗口壳：把 Moss Agent 后端（FastAPI）包进原生窗口，用户无需打开浏览器或记忆端口",
   "main": "main.js",
   "private": true,
-  "author": "Desktop Agent Team",
+  "author": "Moss Agent Team",
   "scripts": {
     "start": "electron .",
     "pack": "electron-builder --dir",
@@ -12,7 +12,7 @@
   },
   "build": {
     "appId": "com.desktopagent.app",
-    "productName": "Desktop Agent",
+    "productName": "Moss Agent",
     "files": [
       "main.js",
       "loading.html"
@@ -51,7 +51,7 @@
       ]
     },
     "dmg": {
-      "title": "Desktop Agent ${version}"
+      "title": "Moss Agent ${version}"
     },
     "nsis": {
       "oneClick": false,
@@ -59,7 +59,7 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "artifactName": "DesktopAgent-Setup-${version}.${ext}"
+      "artifactName": "MossAgent-Setup-${version}.${ext}"
     }
   },
   "devDependencies": {

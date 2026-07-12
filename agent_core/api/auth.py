@@ -43,7 +43,7 @@ LOGIN_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Desktop Agent 登录</title>
+<title>Moss Agent 登录</title>
 <style>
 * { box-sizing:border-box; }
 html, body { filter:none !important; opacity:1 !important; }
@@ -66,7 +66,7 @@ button:disabled { opacity:.65; cursor:not-allowed; }
   <option value="en">English</option>
 </select>
 <form class="login" onsubmit="login(event)">
-  <h1>Desktop Agent</h1>
+  <h1>Moss Agent</h1>
   <p data-i18n="subtitle">请登录后继续操作</p>
   <label for="username" data-i18n="username">用户名</label>
   <input id="username" autocomplete="username" value="admin" autofocus>
@@ -87,7 +87,7 @@ const I18N = {
     network: '网络错误，请稍后重试',
   },
   en: {
-    title: 'Desktop Agent Login',
+    title: 'Moss Agent Login',
     subtitle: 'Sign in to continue',
     username: 'Username',
     password: 'Password',
@@ -170,7 +170,7 @@ LOGIN_TOKEN_ERROR_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>登录失败 - Desktop Agent</title>
+<title>登录失败 - Moss Agent</title>
 <style>
 * { box-sizing:border-box; }
 body { margin:0; min-height:100vh; display:grid; place-items:center; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:#f5f5f7; color:#1d1d1f; }

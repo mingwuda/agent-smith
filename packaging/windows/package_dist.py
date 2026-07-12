@@ -22,7 +22,7 @@ def main():
     root = Path(sys.argv[3]) if len(sys.argv) > 3 else src.parent.parent
 
     # The standalone extracted folder is no longer a distributed deliverable,
-    # so no extra files (Start Desktop Agent.bat / README) are injected.
+    # so no extra files (Start Moss Agent.bat / README) are injected.
     extras = []
 
     if not src.is_dir():

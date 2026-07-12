@@ -46,7 +46,7 @@ if [[ -z "$PYTHON" ]]; then
   exit 1
 fi
 
-echo "Starting Desktop Agent..."
+echo "Starting Moss Agent..."
 echo "   Python: $("$PYTHON" --version)"
 echo "   Path: $PYTHON"
 echo ""

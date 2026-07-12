@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 #
-# Build the distributable Desktop Agent Electron app for macOS.
+# Build the distributable Moss Agent Electron app for macOS.
 # Chains: PyInstaller backend (build.sh) -> electron-builder (dmg).
 #
-# MUST run on macOS. Produces: dist/electron/Desktop Agent-0.1.1-arm64.dmg
+# MUST run on macOS. Produces: dist/electron/Moss Agent-0.1.1-arm64.dmg
 #
 # Usage:
 #   packaging/macos/build-electron-mac.sh                      # full build (backend + app, auto-skip if product exists)

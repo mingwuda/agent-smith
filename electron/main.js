@@ -106,7 +106,7 @@ function createWindow() {
     minWidth: 900,
     minHeight: 600,
     show: false,
-    title: "Desktop Agent",
+    title: "Moss Agent",
     webPreferences: {
       contextIsolation: true, // 前端无需 node 能力，保持隔离更安全
       nodeIntegration: false,

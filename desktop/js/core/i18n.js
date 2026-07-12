@@ -149,7 +149,7 @@ const I18N = {
     confirmPassword: '确认新密码',
   },
   en: {
-    appTitle: 'Desktop Agent',
+    appTitle: 'Moss Agent',
     sessionsTitle: '💬 Sessions',
     newSession: '+ New',
     loading: 'Loading...',

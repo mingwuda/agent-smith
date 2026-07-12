@@ -144,7 +144,7 @@ if /I "%~1"=="run" (
   set "AGENT_PORT=8899"
   set "AGENT_OPEN_BROWSER=1"
   echo.
-  echo Starting Desktop Agent...
+  echo Starting Moss Agent...
   cd /d "%ROOT%\agent_core" || exit /b 1
   "%PYTHON%" main.py
 )

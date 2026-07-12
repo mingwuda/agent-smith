@@ -120,7 +120,7 @@ async def lifespan(app):
     yield
 
 app = FastAPI(
-    title="Desktop Agent",
+    title="Moss Agent",
     description="桌面 AI 智能体 API",
     version="1.0.0",
     lifespan=lifespan,
@@ -442,7 +442,7 @@ if __name__ == "__main__":
             actual_port = server.servers[0].sockets[0].getsockname()[1]
         # 打印一行固定前缀的监听地址，Electron 主进程用正则提取后即可 loadURL
         print(f"AGENT_LISTEN_URL=http://{host}:{actual_port}", flush=True)
-        logger.info("🚀 Desktop Agent 就绪: http://%s:%d", host, actual_port)
+        logger.info("🚀 Moss Agent 就绪: http://%s:%d", host, actual_port)
         await server.main_loop()
         await server.shutdown()
 

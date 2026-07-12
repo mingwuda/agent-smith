@@ -579,7 +579,7 @@ dist\windows\DesktopAgent-Windows\
 dist\windows\DesktopAgent-Windows.zip
 ```
 
-After extraction, users can double-click `Start Desktop Agent.bat`. Configuration, sessions, and workspaces are stored in the user directory by default.
+After extraction, users can double-click `Start Moss Agent.bat`. Configuration, sessions, and workspaces are stored in the user directory by default.
 
 ---
 

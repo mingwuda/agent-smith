@@ -69,7 +69,7 @@ set "AGENT_PORT=8899"
 set "AGENT_OPEN_BROWSER=1"
 
 echo.
-echo [3/3] 启动 Desktop Agent...
+echo [3/3] 启动 Moss Agent...
 echo   http://%AGENT_HOST%:%AGENT_PORT%/
 echo.
 
@@ -77,5 +77,5 @@ cd /d "%ROOT%\agent_core" || exit /b 1
 "%PYTHON%" main.py
 
 echo.
-echo Desktop Agent 已停止。
+echo Moss Agent 已停止。
 pause
