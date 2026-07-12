@@ -25,7 +25,7 @@ class SkillDefinition:
         return self._valid
     
     def to_tool_description(self) -> str:
-        """生成嵌入到 system prompt 中的技能描述块"""
+        """生成嵌入到 system prompt 中的技能描述块（完整指令，体积大）"""
         lines = [
             f"### 技能：{self.name}",
             f"描述：{self.description}",
@@ -34,6 +34,19 @@ class SkillDefinition:
             lines.append(f"触发词：{'、'.join(self.triggers)}")
         lines.append("")
         lines.append(self.instructions)
+        return "\n".join(lines)
+
+    def to_prompt_summary(self) -> str:
+        """生成 system prompt 精简目录条目（仅 name + 描述 + 触发词，约 150 字节/个）。
+
+        完整指令不再常驻 system prompt，而是在用户请求命中触发词时按需注入，
+        避免 19 个技能的完整 SKILL.md 每次 LLM 调用都被重发（原本占 ~109KB）。
+        """
+        lines = [f"- **{self.name}**"]
+        if self.description:
+            lines.append(f"  {self.description}")
+        if self.triggers:
+            lines.append(f"  触发词：{'、'.join(self.triggers)}")
         return "\n".join(lines)
 
 

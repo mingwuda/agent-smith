@@ -1,6 +1,7 @@
 """桌面 AI 智能体核心"""
 import asyncio
 import json
+import os
 import socket
 import time
 from datetime import datetime
@@ -184,6 +185,91 @@ def _extract_usage_tokens(payload) -> tuple[int, int, int]:
     output_tokens = getattr(usage, "output_tokens", 0) or getattr(usage, "completion_tokens", 0) or 0
     cached_tokens = getattr(usage, "cached_input_tokens", 0) or 0
     return int(input_tokens or 0), int(output_tokens or 0), int(cached_tokens or 0)
+
+
+def _message_text(content) -> str:
+    """把 LangChain 消息 content（str 或多模态 list）拼成纯文本，用于日志预览。"""
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for part in content:
+            if isinstance(part, dict):
+                parts.append(str(part.get("text", "")))
+            else:
+                parts.append(str(part))
+        return "\n".join(parts)
+    return str(content)
+
+
+def _normalize_messages(inp):
+    """把 LangChain on_chat_model_start 回调的 input 归一化为扁平的消息列表。
+
+    LangChain 实际传入的结构可能是多层的，例如：
+      - list[BaseMessage]
+      - list[list[BaseMessage]]            (外层包了一层)
+      - dict{'messages': list[BaseMessage]}
+      - dict{'messages': list[list[BaseMessage]]}
+    递归解开 list 包裹，直到首元素不再是 list，返回真正的消息对象列表。
+    """
+    if isinstance(inp, dict):
+        inp = inp.get("messages", inp)
+    while isinstance(inp, list) and len(inp) == 1 and isinstance(inp[0], list):
+        inp = inp[0]
+    return inp if isinstance(inp, list) else []
+
+
+def _dump_context_profile(_input, run_id: str) -> int:
+    """打印本次 LLM 调用的上下文画像，返回真实上下文 token 估算（用项目自带估算器）。
+
+    真实 token 规模**总是计算并返回**（供 LLM_END 的 real= 字段直接对比网关虚高）；
+    但详细的 [CTX] 画像日志与 [CTX_FULL] 全文 dump 仅由环境变量 AGENT_LOG_CONTEXT 开启：
+      "1" -> INFO 级画像：消息数、真实 token、各消息类型/大小、Top8 大消息预览
+      "2"/"full" -> 额外 DEBUG 级逐条 dump 每条消息全文（截断 4000 字防刷屏）
+    """
+    flag = os.getenv("AGENT_LOG_CONTEXT", "0").strip().lower()
+    verbose = flag not in ("", "0", "false", "no", "off")
+    full = flag in ("2", "full")
+    _input = _normalize_messages(_input)
+    if not isinstance(_input, list) or not _input:
+        return 0
+    try:
+        from context_manager import estimate_messages_tokens, estimate_message_tokens
+
+        rows = []
+        for idx, m in enumerate(_input):
+            mtype = getattr(m, "type", type(m).__name__)
+            text = _message_text(getattr(m, "content", ""))
+            tok = estimate_message_tokens(m) if hasattr(m, "type") else 0
+            rows.append((idx, mtype, len(text), tok, text))
+        total_tokens = estimate_messages_tokens([m for m in _input if hasattr(m, "type")])
+
+        if not verbose:
+            return total_tokens
+
+        rows_sorted = sorted(rows, key=lambda r: r[3], reverse=True)
+        type_counts: dict = {}
+        for _, mtype, _, _, _ in rows:
+            type_counts[mtype] = type_counts.get(mtype, 0) + 1
+
+        logger.info(
+            "[CTX] run_id=%s msgs=%d real_tokens≈%d "
+            "(网关上报的 input_tokens 多为 session 累计虚高，真实规模以此为准)",
+            run_id, len(_input), total_tokens,
+        )
+        logger.info("[CTX]   类型分布: %s", " ".join(f"{k}={v}" for k, v in sorted(type_counts.items())))
+        for idx, mtype, clen, tok, text in rows_sorted[:8]:
+            preview = text[:300].replace("\n", " ").replace("\r", " ")
+            logger.info("[CTX]   #%-3d %-10s chars=%-7d tok=%-7d | %s", idx, mtype, clen, tok, preview)
+        if full:
+            for idx, mtype, clen, tok, text in rows:
+                logger.debug("[CTX_FULL] #%d %s chars=%d tok=%d\n%s", idx, mtype, clen, tok, text[:4000])
+        return total_tokens
+    except Exception as e:
+        logger.warning("[CTX] 上下文画像生成失败: %s", e)
+        return 0
 
 
 def _is_recursion_limit_error(exc: Exception) -> bool:
@@ -527,6 +613,7 @@ class DesktopAgent:
         self._thread_id = "default"
         self._graph = None
         self._hydrated_threads: set[str] = set()
+        self._ctx_token_sizes: dict[str, int] = {}  # run_id(12位) -> 真实上下文 token 估算，用于 LLM_END 对比网关虚高
 
     def set_user(self, user_id: str):
         """切换当前用户"""
@@ -1021,6 +1108,21 @@ class DesktopAgent:
         if thread_key not in self._hydrated_threads:
             input_messages = compact_history_messages(session_messages_to_langchain(history or []), self.config)
         input_messages.append(HumanMessage(content=_human_content(message, attachments)))
+        # ── 按需注入命中的技能完整指令（命中触发，避免把全部技能塞进 system prompt）──
+        # system prompt 里只放精简目录（name+描述+触发词）；当用户输入命中某技能触发词/名称时，
+        # 才把该技能的完整工作流注入到当前用户消息末尾，仅本轮生效。
+        injected_skills = self.registry.find_by_prompt(message) if message else []
+        if injected_skills:
+            inject_block = self.registry.render_injection_block(injected_skills)
+            last_human = input_messages[-1]
+            if isinstance(last_human.content, list):
+                last_human.content.append({"type": "text", "text": inject_block})
+            else:
+                last_human.content = str(last_human.content) + "\n\n" + inject_block
+            logger.info(
+                "[技能注入] tid=%s 命中 %d 个技能: %s",
+                tid, len(injected_skills), ", ".join(s.name for s in injected_skills),
+            )
         input_data = {"messages": input_messages}
         
         thinking_buffer = ""        # 累积推理文本（工具调用前的内容）
@@ -1100,15 +1202,25 @@ class DesktopAgent:
                 if kind == "on_chat_model_start" and node == "agent":
                     _input = event.get("data", {}).get("input", {})
                     run_id = event.get("run_id", "")[:12]
-                    if isinstance(_input, list):
-                        msg_count = len(_input)
+                    # LangChain 回调的 input 结构可能是多层的（list / dict / 嵌套 list），
+                    # 统一交给 _normalize_messages 展平为真正的消息列表。
+                    _msgs = _normalize_messages(_input)
+                    if _msgs:
+                        msg_count = len(_msgs)
                         # 记录最后一条 user 消息预览
-                        last_msg = _input[-1] if _input else {}
+                        last_msg = _msgs[-1] if _msgs else {}
                         last_content = str(getattr(last_msg, "content", ""))[:200]
                         logger.info(
                             "[LLM_START] run_id=%s msgs=%d last_msg=%s",
                             run_id, msg_count, last_content,
                         )
+                        # 上下文画像：真实 token 规模默认就算（供 LLM_END 的 real= 对照网关虚高）；
+                        # 详细 [CTX] 消息拆解/全文 dump 才由 AGENT_LOG_CONTEXT 控制。
+                        real_tokens = _dump_context_profile(_msgs, run_id)
+                        if real_tokens:
+                            self._ctx_token_sizes[run_id] = real_tokens
+                            if len(self._ctx_token_sizes) > 64:
+                                self._ctx_token_sizes.pop(next(iter(self._ctx_token_sizes)), None)
                     else:
                         logger.info("[LLM_START] run_id=%s input=%s", run_id, str(_input)[:200])
 
@@ -1406,9 +1518,10 @@ class DesktopAgent:
                     output_content = str(getattr(output, "content", ""))[:200] if output else ""
                     has_tool_calls = bool(getattr(output, "tool_calls", None)) if output else False
                     finish_reason = getattr(output, "response_metadata", {}).get("finish_reason", "") if output else ""
+                    real_ctx = self._ctx_token_sizes.pop(run_id, 0)
                     logger.info(
-                        "[LLM_END] run_id=%s tokens=(in=%d out=%d cached=%d) finish=%s has_tool_calls=%s content=%s",
-                        run_id, input_tok, output_tok, cached_tok,
+                        "[LLM_END] run_id=%s tokens=(in=%d out=%d cached=%d real=%d) finish=%s has_tool_calls=%s content=%s",
+                        run_id, input_tok, output_tok, cached_tok, real_ctx,
                         finish_reason, has_tool_calls, output_content,
                     )
 

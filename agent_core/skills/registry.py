@@ -48,32 +48,57 @@ class SkillRegistry:
         return list(self._skills.values())
     
     def find_by_prompt(self, prompt: str) -> list[SkillDefinition]:
-        """根据用户输入查找匹配的技能（按触发词匹配）"""
+        """根据用户输入查找匹配的技能（按触发词或技能名子串匹配，去重保序）"""
+        if not prompt:
+            return []
         prompt_lower = prompt.lower()
-        matched = []
+        matched: dict[str, SkillDefinition] = {}
         for skill in self._skills.values():
+            hit = False
             for trigger in skill.triggers:
-                if trigger.lower() in prompt_lower:
-                    matched.append(skill)
+                if trigger and trigger.lower() in prompt_lower:
+                    hit = True
                     break
-        return matched
-    
+            if not hit and skill.name and skill.name.lower() in prompt_lower:
+                hit = True
+            if hit:
+                matched[skill.name] = skill
+        return list(matched.values())
+
     def generate_prompt_block(self) -> str:
-        """生成本prompt块嵌入到 system prompt 中"""
+        """生成 system prompt 中的精简技能目录（仅 name + 描述 + 触发词）。
+
+        完整指令不再常驻 system prompt，改为在用户请求命中触发词时由
+        render_injection_block() 按需注入到当轮对话，显著降低每次 LLM 调用的 token 成本。
+        """
         if not self._skills:
             return ""
-        
+
         blocks = [
             "",
             "## 已加载的技能",
-            "以下是当前已经加载到系统中的 Skills。用户询问“有哪些技能”“已加载哪些 Skills”“你会哪些技能”时，必须优先列出这些 Skills，而不是只列底层工具。",
-            "当用户提到触发词时，优先使用对应技能；如果技能要求的专属工具不可用，需要明确说明限制。",
+            "以下是当前已加载到系统中的 Skills 目录。当你判断用户需求匹配某个技能的触发词/描述时，"
+            "该技能的完整工作流会在本轮对话中自动注入，请按注入的内容执行；如果技能要求的专属工具不可用，需要明确说明限制。",
+            "用户询问“有哪些技能”“已加载哪些 Skills”“你会哪些技能”时，必须优先列出这些 Skills 名称与描述，而不是只列底层工具。",
             "",
         ]
         for skill in self._skills.values():
-            blocks.append(skill.to_tool_description())
+            blocks.append(skill.to_prompt_summary())
             blocks.append("")
         return "\n".join(blocks)
+
+    def render_injection_block(self, skills: list[SkillDefinition]) -> str:
+        """把命中的技能完整指令渲染成注入块（追加到当轮用户消息末尾，仅本轮生效）。"""
+        if not skills:
+            return ""
+        parts = [
+            "## 已为你激活的技能（按本次请求触发，请在本轮对话中严格遵循其工作流）",
+            "",
+        ]
+        for skill in skills:
+            parts.append(skill.to_tool_description())
+            parts.append("")
+        return "\n".join(parts)
 
 
 # 全局单例
