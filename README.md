@@ -824,9 +824,11 @@ dist\windows\DesktopAgent-Windows\   # 自包含后端目录（被 electron-buil
 packaging\windows\build-electron.cmd
 ```
 
+后端构建默认**自动探测**：若 `dist\windows\DesktopAgent-Windows\DesktopAgent.exe` 已存在则跳过后端重建、直接重新打包；产物缺失时自动先构建后端。
+
 可选参数：
 
-- `--skip-backend`：跳过后端重建（后端产物已存在且未改动时），只把现有 `dist\windows\DesktopAgent-Windows` 重新打包进 Electron。
+- `--rebuild-backend`：即使后端产物已存在，也强制重新构建后端后再打包。
 
 输出：
 
@@ -836,7 +838,7 @@ dist\electron\DesktopAgent-Setup-0.1.0.exe   # NSIS 安装包
 
 安装包内置 Electron 运行时、Python 后端（含 Playwright Chromium）。用户双击安装后从桌面/开始菜单快捷方式启动，首次启动自动拉起后端并加载窗口，**全程不出现浏览器、不显示端口、无需联网下载任何东西**。
 
-> 说明：Electron 封装与原浏览器形态并存。后端 `main.py` 已支持随机端口（`AGENT_PORT=0`）并把监听地址打印为 `AGENT_LISTEN_URL=` 一行供 Electron 解析；前端代码零改动，浏览器形态（`start.sh` / 解压版 `Start Desktop Agent.bat`）依旧可用。
+> 说明：Electron 窗口壳通过 `main.py` 的随机端口能力（`AGENT_PORT=0`，监听地址打印为 `AGENT_LISTEN_URL=` 一行供解析）加载后端，前端代码零改动。浏览器开发形态（`python main.py` / `start.sh`）仍保留用于本地调试，但**非用户交付**；Windows 桌面端唯一对外交付形态为上面的 Electron 安装包，早期的解压版 `Start Desktop Agent.bat` 已停止分发。
 
 #### macOS 打包（Electron 桌面应用）
 
@@ -854,9 +856,11 @@ bash packaging/macos/build.sh
 bash packaging/macos/build-electron-mac.sh
 ```
 
+后端构建默认**自动探测**：若 `dist/macos/DesktopAgent-macOS/DesktopAgent` 已存在则跳过后端重建、直接重新打包；产物缺失时自动先构建后端。
+
 可选参数：
 
-- `--skip-backend`：跳过后端重建（后端产物已存在且未改动时），只把现有 `dist/macos/DesktopAgent-macOS` 重新打包进 Electron。
+- `--rebuild-backend`：即使后端产物已存在，也强制重新构建后端后再打包。
 - `--x64`：打包 Intel 版（x86_64）。
 - `--universal`：打包通用二进制（同时含 arm64 与 x86_64）。
 

@@ -28,7 +28,7 @@ Windows 只提供 Electron 安装包这一种桌面交付物：
    packaging\windows\build-electron.cmd
    ```
 
-   产物：`dist/electron/DesktopAgent-Setup-0.1.0.exe`。可加 `--skip-backend` 跳过后端重建，只用现有目录重新打包。
+   产物：`dist/electron/DesktopAgent-Setup-0.1.0.exe`。后端构建默认自动探测——若 `dist\windows\DesktopAgent-Windows\DesktopAgent.exe` 已存在则跳过后端重建、直接重新打包，无需额外参数；如需强制重建后端，加 `--rebuild-backend`。
 
 ## 安装包内容
 

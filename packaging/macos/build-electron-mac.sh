@@ -6,10 +6,10 @@
 # MUST run on macOS. Produces: dist/electron/Desktop Agent-0.1.0-arm64.dmg
 #
 # Usage:
-#   packaging/macos/build-electron-mac.sh                 # full build (backend + app)
-#   packaging/macos/build-electron-mac.sh --skip-backend  # reuse existing dist/macos/DesktopAgent-macOS
-#   packaging/macos/build-electron-mac.sh --x64           # build for Intel Macs
-#   packaging/macos/build-electron-mac.sh --universal     # universal (arm64 + x64)
+#   packaging/macos/build-electron-mac.sh                      # full build (backend + app, auto-skip if product exists)
+#   packaging/macos/build-electron-mac.sh --rebuild-backend    # force rebuild backend even if product exists
+#   packaging/macos/build-electron-mac.sh --x64                # build for Intel Macs
+#   packaging/macos/build-electron-mac.sh --universal          # universal (arm64 + x64)
 #
 set -euo pipefail
 
@@ -17,11 +17,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 ELECTRON_DIR="$ROOT/electron"
 
-SKIP_BACKEND=0
+FORCE_BACKEND=0
 EB_ARCH="--arm64"
 for arg in "$@"; do
   case "$arg" in
-    --skip-backend) SKIP_BACKEND=1 ;;
+    --rebuild-backend) FORCE_BACKEND=1 ;;
     --x64) EB_ARCH="--x64" ;;
     --universal) EB_ARCH="--universal" ;;
   esac
@@ -42,16 +42,17 @@ unset ELECTRON_RUN_AS_NODE 2>/dev/null || true
 
 cd "$ELECTRON_DIR"
 
-# Build backend unless skipped
-if [ "$SKIP_BACKEND" -eq 0 ]; then
+# Build backend unless product already exists (auto-detect)
+if [ "$FORCE_BACKEND" -eq 1 ]; then
+  echo "=== Building Python backend (PyInstaller, forced) ==="
+  bash "$SCRIPT_DIR/build.sh"
+elif [ -x "$ROOT/dist/macos/DesktopAgent-macOS/DesktopAgent" ]; then
+  echo "=== Found existing backend product, skipping backend build ==="
+  echo "    $ROOT/dist/macos/DesktopAgent-macOS/DesktopAgent"
+  echo "    (use --rebuild-backend to force a fresh backend build)"
+else
   echo "=== Building Python backend (PyInstaller) ==="
   bash "$SCRIPT_DIR/build.sh"
-else
-  echo "=== Skipping backend build (--skip-backend) ==="
-  if [ ! -x "$ROOT/dist/macos/DesktopAgent-macOS/DesktopAgent" ]; then
-    echo "Error: dist/macos/DesktopAgent-macOS/DesktopAgent not found. Run without --skip-backend first."
-    exit 1
-  fi
 fi
 
 # Verify electron-builder dependency

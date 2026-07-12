@@ -18,20 +18,16 @@ rem    packaging\windows\build-electron.cmd
 rem        auto: skip backend build if product exists, else build it
 rem    packaging\windows\build-electron.cmd --rebuild-backend
 rem        force a fresh backend build even if a product exists
-rem    packaging\windows\build-electron.cmd --skip-backend
-rem        force skip backend build (error out if product is missing)
 rem ============================================================
 
 set "ROOT=%~dp0..\.."
 for %%I in ("%ROOT%") do set "ROOT=%%~fI"
 set "ELECTRON_DIR=%ROOT%\electron"
 set "PACKAGE_DIR=%ROOT%\dist\windows\DesktopAgent-Windows"
-set "SKIP_BACKEND=0"
 set "FORCE_BACKEND=0"
 
 :parse_args
 if "%~1"=="" goto after_args
-if /I "%~1"=="--skip-backend" set "SKIP_BACKEND=1"
 if /I "%~1"=="--rebuild-backend" set "FORCE_BACKEND=1"
 if /I "%~1"=="--force-backend" set "FORCE_BACKEND=1"
 shift
@@ -42,7 +38,6 @@ cd /d "%ROOT%" || exit /b 1
 
 rem ---- 1) Build PyInstaller backend product (auto-detect) ----
 if "%FORCE_BACKEND%"=="1" goto do_build
-if "%SKIP_BACKEND%"=="1" goto do_skip
 if exist "%PACKAGE_DIR%\DesktopAgent.exe" goto auto_skip
 goto do_build
 
@@ -50,16 +45,6 @@ goto do_build
 echo [1/3] Found existing backend product, skipping backend build.
 echo       %PACKAGE_DIR%\DesktopAgent.exe
 echo       ^(use --rebuild-backend to force a fresh backend build^)
-goto backend_done
-
-:do_skip
-echo [1/3] Skipping backend build ^(--skip-backend^)
-if not exist "%PACKAGE_DIR%\DesktopAgent.exe" (
-  echo Error: backend product not found at:
-  echo   %PACKAGE_DIR%\DesktopAgent.exe
-  echo Run without --skip-backend to build it first.
-  exit /b 1
-)
 goto backend_done
 
 :do_build
