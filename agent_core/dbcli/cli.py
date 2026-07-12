@@ -33,7 +33,7 @@ from dbcli.config import get_db_configs, get_permission_config, save_db_configs,
 
 
 @click.group()
-@click.version_option(version="0.1.0", prog_name="dbcli")
+@click.version_option(version="0.1.1", prog_name="dbcli")
 def cli():
     """数据库交互 CLI 工具 —— 自然语言与数据库对话的中间层"""
     pass
