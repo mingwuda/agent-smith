@@ -162,39 +162,47 @@ class SkillLoader:
         # 按 ## 分段解析
         body = "\n".join(body_lines)
         sections = cls.SECTION_PATTERN.split(body)
-        
+        # SECTION_PATTERN.split 的结果结构为：[前言, 标题1, 正文1, 标题2, 正文2, ...]
+        # 即奇数下标是 ## 段标题，偶数下标是段正文（下标 0 为首个标题前的前言）。
+        # 必须据此区分「标题」与「正文」：未知标题要清空 current_section，
+        # 否则其后的正文会被错误归入上一个已知段落（典型表现为整篇 SKILL.md
+        # 被塞进 triggers，即技能目录串字问题）。标题文本本身绝不计入正文。
         current_section = ""
         for i, part in enumerate(sections):
             part = part.strip()
             if not part:
                 continue
-            if i % 2 == 0:
-                # 当前段落在上一轮中已被记录为 section 标题
-                pass
-            
-            if part in ("Description", "描述"):
-                current_section = "description"
-            elif part in ("Trigger", "触发词", "触发"):
-                current_section = "trigger"
-            elif part in ("Instructions", "指令", "说明"):
-                current_section = "instructions"
-            elif part.startswith("Environment"):
-                current_section = "env"
-            elif part.startswith("Tools"):
-                current_section = "tools"
-            else:
-                # 内容
-                if current_section == "description" and not skill.description:
-                    skill.description = part
-                elif current_section == "trigger":
-                    parts = [t.strip().strip("「」""''") for t in part.replace("、", ",").split(",")]
-                    skill.triggers.extend(p for p in parts if p)
-                elif current_section == "instructions":
-                    skill.instructions = part
-                elif current_section == "tools":
-                    skill.tools_required = [
-                        t.strip() for t in part.replace("、", ",").split(",") if t.strip()
-                    ]
+            if i % 2 == 1:
+                # 这是一个 ## 段标题
+                title = part
+                if title in ("Description", "描述"):
+                    current_section = "description"
+                elif title in ("Trigger", "触发词", "触发"):
+                    current_section = "trigger"
+                elif title in ("Instructions", "指令", "说明"):
+                    current_section = "instructions"
+                elif title.startswith("Environment"):
+                    current_section = "env"
+                elif title.startswith("Tools"):
+                    current_section = "tools"
+                else:
+                    # 未知段落标题：停止向下归属内容
+                    current_section = ""
+                continue
+            # i 为偶数：段正文（或首个标题前的前言）
+            if current_section == "description" and not skill.description:
+                skill.description = part
+            elif current_section == "trigger":
+                # 触发词可能以顿号/逗号/换行混排，统一切分并清理项目符号
+                raw = part.replace("、", ",").replace("\n", ",")
+                parts = [t.strip().lstrip("- ").strip("「」""''").strip() for t in raw.split(",")]
+                skill.triggers.extend(p for p in parts if p)
+            elif current_section == "instructions":
+                skill.instructions = part
+            elif current_section == "tools":
+                skill.tools_required = [
+                    t.strip() for t in part.replace("、", ",").split(",") if t.strip()
+                ]
         
         if not skill.instructions:
             skill.instructions = cls._body_without_title(body).strip()

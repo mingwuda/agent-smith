@@ -252,7 +252,9 @@ def _check_update_on_startup():
     try:
         config = AgentConfig.load()
         server = config.update_server or ""
-        from .updater import check_update_async
+        # 注意：main.py 以脚本/冻结 exe 方式运行，__package__ 为空，
+        # 不能用相对导入（会抛 attempted relative import）。其余模块均为扁平绝对导入，保持一致。
+        from updater import check_update_async
 
         def _on_result(result):
             if not result:
