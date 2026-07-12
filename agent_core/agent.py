@@ -19,6 +19,7 @@ from context_manager import (
     checkpoint_replacement,
     compact_messages,
     compaction_threshold_tokens,
+    estimate_message_tokens,
     estimate_messages_tokens,
     should_compact,
 )
@@ -826,18 +827,27 @@ class DesktopAgent:
         except Exception:
             return None
 
-    def _record_model_usage(self, input_tokens: int, output_tokens: int, cached_tokens: int = 0, source: str = "llm", thread_id: str = ""):
+    def _record_model_usage(self, input_tokens: int, output_tokens: int, cached_tokens: int = 0, source: str = "llm", thread_id: str = "", real_output_hint: int = 0):
         if input_tokens <= 0 and output_tokens <= 0:
             return
         # ponytail: 上游网关偶发把 session 累计 token 当作单次 input_tokens 上报（虚高），
         # 真实单次调用不可能在数秒内处理数百万 token。这类读数直接把 input 归零，
-        # 不计入用量统计（output 通常真实，予以保留），避免面板被假数字撑高。
+        # 不计入用量统计，避免面板被假数字撑高。
         if input_tokens > 500_000:
             logger.warning(
                 "[usage] 单次 input_tokens=%d 异常偏高（疑似网关累计值虚高，已将该次 input 归零、不计入用量统计）",
                 input_tokens,
             )
             input_tokens = 0
+        # output_tokens 同样会被网关虚高（如 435 字回复报 out=30525）。这里用本地基于
+        # 实际输出内容估算的 real_output_hint 做基准：当上报值远高于本地估算（3 倍且超 2000）
+        # 时，判定为网关虚高，改用本地估算值，保证用量统计中的输出 token 贴近真实。
+        if real_output_hint > 0 and output_tokens > max(real_output_hint * 3, 2000):
+            logger.warning(
+                "[usage] 单次 output_tokens=%d 异常偏高（远超本地估算 %d，疑似网关虚高，已按本地估算修正）",
+                output_tokens, real_output_hint,
+            )
+            output_tokens = real_output_hint
         self.tracker.record_model_call(
             provider=self.config.active_provider,
             model=self.config.model,
@@ -1529,7 +1539,12 @@ class DesktopAgent:
                     yield _sse({"type": "llm_response", "has_tool_calls": has_tool_calls})
 
                     if input_tok > 0 or output_tok > 0:
-                        self._record_model_usage(input_tok, output_tok, cached_tok, source="chat_model_end", thread_id=tid)
+                        real_out = estimate_message_tokens(output) if output else 0
+                        self._record_model_usage(
+                            input_tok, output_tok, cached_tok,
+                            source="chat_model_end", thread_id=tid,
+                            real_output_hint=real_out,
+                        )
                         usage_recorded = True
 
             # 流结束，发送正常完成事件（含最终回复内容）
