@@ -7,7 +7,7 @@ import secrets
 import time
 from pathlib import Path
 
-from fastapi import HTTPException, Request, Response
+from fastapi import Depends, HTTPException, Request, Response
 
 from services.workspace import _workspace_for_user
 
@@ -148,3 +148,20 @@ def _get_current_user(request: Request) -> str:
 def _require_admin(request: Request):
     if _get_current_user(request) != "admin":
         raise HTTPException(403, "只有 admin 用户可以访问设置")
+
+
+def _admin_required_check(request: Request) -> str:
+    """admin_required 的实际校验逻辑：要求当前会话为 admin，否则 403。"""
+    user = _get_current_user(request)
+    if user != "admin":
+        raise HTTPException(status_code=403, detail="需要管理员权限")
+    return user
+
+
+def admin_required():
+    """FastAPI 依赖工厂：返回 Depends(_admin_required_check)。
+
+    供路由用作默认参数，如 `def api_x(_: str = admin_required())`：
+    非 admin 会话访问时直接返回 403，无需在每个路由体内手动调用。
+    """
+    return Depends(_admin_required_check)
