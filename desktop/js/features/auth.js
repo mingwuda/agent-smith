@@ -57,6 +57,18 @@ function closeUserMenu() {
   document.getElementById('user-menu').classList.remove('show');
 }
 
+// ── 微信 Bot 扫码登录 ──
+function openWechatBot() {
+  closeUserMenu();
+  document.getElementById('wechat-bot-frame').src = '/wechat/qrcode';
+  document.getElementById('wechat-bot-overlay').classList.add('active');
+}
+function closeWechatBot() {
+  document.getElementById('wechat-bot-overlay').classList.remove('active');
+  // 清空 iframe，避免关闭后仍在后台轮询扫码状态
+  document.getElementById('wechat-bot-frame').src = 'about:blank';
+}
+
 // ── 修改密码 ──
 function openChangePassword() {
   closeUserMenu();
