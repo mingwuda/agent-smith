@@ -4,6 +4,7 @@ uvicorn>=0.23.0,<0.33.0
 pydantic>=2.0.0
 langchain>=0.3.0
 langchain-openai>=0.2.0
+socksio>=1.0.0  # SOCKS 代理支持（httpx[socks] 的可选依赖，启动 LLM 客户端时需要）
 langgraph>=0.2.0
 langgraph-checkpoint>=2.0.0
 duckduckgo_search>=8.0.0
