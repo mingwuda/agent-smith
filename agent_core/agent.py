@@ -100,45 +100,9 @@ def _loop_guard_message(reason: str, calls: list[dict], recursion_limit: int) ->
     )
 
 
-def _detect_tool_loop(calls: list[dict], recursion_limit: int) -> str:
-    if len(calls) < 4:
-        return ""
-
-    # ── 检测1：同一工具+同一参数严格重复 ≥20 次（单步循环）──
-    latest = calls[-1]
-    latest_sig = latest.get("signature", "")
-    if latest_sig and latest.get("tool") not in {"web_search", "web_fetch"}:
-        last30_sigs = [item.get("signature", "") for item in calls[-30:] if item.get("signature")]
-        count = last30_sigs.count(latest_sig)
-        if count >= 20:
-            return f"最近 30 次工具调用中，同一工具和参数严格重复了 {count} 次"
-
-    # ── 检测2：参数循环（A→B→A→B 模式）──
-    # 要求连续重复至少 3 轮才中断，避免误杀 web_search ↔ web_fetch 正常配对
-    if len(calls) >= 12:
-        recent18 = calls[-18:]
-        sigs = [c.get("signature", "") for c in recent18 if c.get("signature")]
-        if len(sigs) >= 12:
-            for window in (2, 3, 4):
-                if (
-                    len(sigs) >= window * 3
-                    and sigs[-window:] == sigs[-window*2:-window]
-                    and sigs[-window*2:-window] == sigs[-window*3:-window*2]
-                ):
-                    return (
-                        f"工具调用出现循环模式：最近 {window*3} 次的形式为 "
-                        + " → ".join(sigs[-window*3:])
-                    )
-
-    estimated_graph_steps = len(calls) * 2 + 1
-    if estimated_graph_steps >= max(6, recursion_limit - 3):
-        tail = calls[-8:]
-        tail_unique = {item.get("tool", "") for item in tail}
-        tail_signatures = {item.get("signature", "") for item in tail if item.get("signature")}
-        if len(tail_unique) <= 3 and len(tail_signatures) <= 3:
-            return f"已接近最大推理步数，且最近工具类型仍高度重复：{', '.join(sorted(tail_unique))}"
-
-    return ""
+# ponytail: 循环检测纯逻辑抽到 loop_guard.py（stdlib-only，便于单测），
+# 探索类工具（web_search/run_shell/run_python 等）在该模块内被整体排除。
+from loop_guard import _detect_tool_loop
 
 
 def _get_nested(mapping: dict, *keys: str):
