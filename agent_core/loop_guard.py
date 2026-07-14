@@ -12,7 +12,7 @@ from typing import Dict, List
 _EXPLORATORY_TOOLS = {"web_search", "web_fetch", "run_shell", "run_python"}
 
 
-def _detect_tool_loop(calls: List[Dict], recursion_limit: int) -> str:
+def _detect_tool_loop(calls: List[Dict], recursion_limit: int, current_steps: int = None) -> str:
     """检测工具调用是否陷入重复循环。
 
     calls: 工具调用历史，每项含 {"tool": str, "signature": str, ...}
@@ -49,7 +49,10 @@ def _detect_tool_loop(calls: List[Dict], recursion_limit: int) -> str:
                         + " -> ".join(sigs[-window * 3:])
                     )
 
-    estimated_graph_steps = len(calls) * 2 + 1
+    # 真实图步数优先（由调用方按事件累计：模型/工具各计一步），缺失时退化为 len(calls)*2+1 估算。
+    # 注意：步数估算仍基于"过滤后的 calls"这一约束（探索类工具按需求不计入预警，见 _EXPLORATORY_TOOLS），
+    # 但 current_steps 来自全量事件，能更贴近真实的 graph 步数。
+    estimated_graph_steps = current_steps if current_steps is not None else len(calls) * 2 + 1
     if estimated_graph_steps >= max(6, recursion_limit - 3):
         tail = calls[-8:]
         tail_unique = {item.get("tool", "") for item in tail}

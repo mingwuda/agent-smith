@@ -70,6 +70,28 @@ def test_exploratory_set_contains_requested():
     assert {"web_search", "run_shell", "run_python"} <= _EXPLORATORY_TOOLS
 
 
+# ── current_steps：步数估算用真实图步数（问题6 回归） ──
+
+def test_current_steps_drives_step_limit():
+    # 过滤后只有很少的非探索类调用，但真实图步数已接近上限 → 仍应触发（修复前用过滤后 len 估算会漏报）
+    calls = [_mk("read_file", "read_file:/p0"), _mk("read_file", "read_file:/p1"),
+             _mk("read_file", "read_file:/p0"), _mk("read_file", "read_file:/p1")]
+    reason = _detect_tool_loop(calls, 60, current_steps=58)
+    assert "已接近最大推理步数" in reason
+
+
+def test_current_steps_low_no_trigger():
+    # 真实步数还很低 → 不触发
+    calls = [_mk("read_file", "read_file:/p0") for _ in range(3)]
+    assert _detect_tool_loop(calls, 60, current_steps=5) == ""
+
+
+def test_current_steps_default_fallback():
+    # 不传 current_steps 时退化为 len(calls)*2+1，原有行为不变
+    calls = [_mk("read_file", "read_file:/p0") for _ in range(8)]
+    assert "已接近最大推理步数" in _detect_tool_loop(calls, 10)
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

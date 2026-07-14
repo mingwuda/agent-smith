@@ -1108,6 +1108,8 @@ class DesktopAgent:
         last_progress_at = 0.0
         cancelled = False
         loop_guard_triggered = False
+        truncated_final = False          # 主模型输出被 max_tokens 截断（finish_reason=length）
+        graph_steps = 0                  # 真实图步数累计（模型/工具各计一步），供防循环步数估算
         _done_yielded = False
         tool_call_history: list[dict] = []
         subagent_capsules: list[dict] = []  # 并行子代理任务胶囊数据
@@ -1152,9 +1154,12 @@ class DesktopAgent:
                     # 子代理结束但父模型长时间没有产生最终回复，强制终止
                     # 以 subagent_end 发送时间为基准，避免父模型内部的慢速/空轮询刷新 idle 时间
                     if self.config.enable_loop_guard and subagent_end_sent_at and not running_tools and not loop_guard_triggered:
-                        elapsed_after_subagent = now - subagent_end_sent_at
-                        if elapsed_after_subagent >= 90:
-                            logger.warning("[子代理] subagent_end 已发送 %d 秒，父模型仍未完成汇总，强制终止", int(elapsed_after_subagent))
+                        # ponytail: 以"最后一次模型活动"为基准计时，任何 token/thought/工具开始都会刷新，
+                        # 避免父模型慢速生成长总结（持续有输出）时被误杀；仅在 subagent_end 之后且无运行中工具的真空闲才计时。
+                        idle_since = max(subagent_end_sent_at, last_model_activity_at)
+                        idle_after_subagent = now - idle_since
+                        if idle_after_subagent >= 90:
+                            logger.warning("[子代理] 父模型已 %d 秒无活动（自 subagent_end），强制终止", int(idle_after_subagent))
                             loop_guard_triggered = True
                             # 基于已收集的子代理结果生成真实汇总（而非空壳占位）
                             final_buffer = await _synthesize_guard_summary(
@@ -1174,6 +1179,7 @@ class DesktopAgent:
                 
                 # ── LLM 调用开始（日志 + 前端状态提示）──
                 if kind == "on_chat_model_start" and node == "agent":
+                    graph_steps += 1
                     _input = event.get("data", {}).get("input", {})
                     run_id = event.get("run_id", "")[:12]
                     # LangChain 回调的 input 结构可能是多层的（list / dict / 嵌套 list），
@@ -1228,15 +1234,18 @@ class DesktopAgent:
                 # ── 工具开始 ──
                 elif kind == "on_tool_start":
                     step_count += 1
+                    graph_steps += 1
                     tool_name = event.get("name", "")
                     run_id = event.get("run_id", "")
                     
-                    # 子代理完成后如果父模型还在调工具，最多允许 3 次不同的非子代理工具，之后强制汇总
+                    # 子代理完成后如果父模型还在调工具，最多允许若干次不同的非子代理工具，之后强制汇总
                     # 用 run_id 去重，避免同一工具因网络重试被重复计数
+                    # ponytail: 阈值 6 为经验值；更稳的做法是改为"空闲超时"（参考心跳里的 90s 计时），
+                    # 但那样要跨事件维护父模型活动时钟，先保留计数上限以控制复杂度。
                     if self.config.enable_loop_guard and _subagent_dispatched and tool_name not in {"delegate_tasks_parallel", "delegate_task"} and run_id not in _post_subagent_seen_run_ids:
                         _post_subagent_seen_run_ids.add(run_id)
                         _post_subagent_tool_calls += 1
-                        if _post_subagent_tool_calls >= 3:
+                        if _post_subagent_tool_calls >= 6:
                             logger.warning("[防循环] 子代理完成后父模型已调用 %d 次不同工具，强制汇总", _post_subagent_tool_calls)
                             loop_guard_triggered = True
                             # 基于已收集的子代理结果生成真实汇总（而非空壳占位）
@@ -1248,7 +1257,6 @@ class DesktopAgent:
                                 done_data["todo_list"] = current_todo_list
                             _done_yielded = True
                             yield _sse(done_data)
-                            break
                             break
                     
                     started_at = time.time()
@@ -1473,7 +1481,7 @@ class DesktopAgent:
                         # 没有剩余工具时，也重置最后进度时间，避免 stale 进度事件
                         last_progress_at = 0.0
 
-                    loop_reason = _detect_tool_loop(tool_call_history, run_config["recursion_limit"])
+                    loop_reason = _detect_tool_loop(tool_call_history, run_config["recursion_limit"], current_steps=graph_steps)
                     if self.config.enable_loop_guard and loop_reason:
                         loop_guard_triggered = True
                         _done_yielded = True
@@ -1492,6 +1500,11 @@ class DesktopAgent:
                     output_content = str(getattr(output, "content", ""))[:200] if output else ""
                     has_tool_calls = bool(getattr(output, "tool_calls", None)) if output else False
                     finish_reason = getattr(output, "response_metadata", {}).get("finish_reason", "") if output else ""
+                    # ponytail: 主模型输出被 max_tokens 截断（finish_reason=length）且无工具调用时，
+                    # 会被当成最终回答发出半截内容；此处仅标记，流结束处追加提示（自动续写需图层面支持）。
+                    if finish_reason == "length" and not has_tool_calls:
+                        logger.warning("[LLM_END] 模型输出被截断 (finish_reason=length)，最终回答可能不完整")
+                        truncated_final = True
                     real_ctx = self._ctx_token_sizes.pop(run_id, 0)
                     logger.info(
                         "[LLM_END] run_id=%s tokens=(in=%d out=%d cached=%d real=%d) finish=%s has_tool_calls=%s content=%s",
@@ -1513,6 +1526,8 @@ class DesktopAgent:
 
             # 流结束，发送正常完成事件（含最终回复内容）
             if not _done_yielded:
+                if truncated_final:
+                    final_buffer = final_buffer + "\n\n⚠️ 以上回答可能因模型输出长度限制被截断，你可以说「继续」让我把剩余部分补完。"
                 done_data = {"type": "done", "content": final_buffer}
                 if current_todo_list:
                     done_data["todo_list"] = current_todo_list
@@ -1527,9 +1542,17 @@ class DesktopAgent:
             logger.info("[stream_run] GeneratorExit，正常结束")
         except Exception as e:
             if _is_recursion_limit_error(e):
-                logger.warning("[stream_run] 工具循环到达上限，结束任务")
-                final_buffer = _recursion_limit_message(run_config["recursion_limit"])
-                yield _sse({"type": "error", "content": final_buffer})
+                logger.warning("[stream_run] 工具循环到达上限，尽力汇总后结束任务（不再抛错误中断）")
+                notice = _recursion_limit_message(run_config["recursion_limit"])
+                try:
+                    summary = await _synthesize_guard_summary(
+                        self, run_config, _subagent_results, final_buffer
+                    )
+                except Exception:
+                    summary = final_buffer
+                final_buffer = f"{summary}\n\n---\n{notice}"
+                _done_yielded = True
+                yield _sse({"type": "done", "content": final_buffer})
             else:
                 logger.error("[stream_run] 异常: %s", e, exc_info=True)
                 final_buffer = _connection_diagnostic(e, self.config)
