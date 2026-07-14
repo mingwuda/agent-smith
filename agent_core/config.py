@@ -110,6 +110,9 @@ class AgentConfig:
     # 更新
     update_server: str = ""
     
+    # MCP Server 配置
+    mcp_servers: list[dict[str, Any]] = field(default_factory=list)
+    
     system_prompt: str = (
         "你是一个桌面 AI 智能体，可以自主完成用户交给你的任务。\n\n"
         "## 核心能力\n"
@@ -337,6 +340,7 @@ class AgentConfig:
             "review_provider_id": self.review_provider_id,
             "review_model": self.review_model,
             "update_server": self.update_server,
+            "mcp_servers": self.mcp_servers,
         }
         CONFIG_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     

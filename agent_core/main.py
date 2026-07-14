@@ -117,6 +117,15 @@ async def lifespan(app):
     except Exception:
         logger.exception("启动时更新检查失败")
 
+    # 后台加载 MCP 工具（不阻塞启动）
+    try:
+        config = getattr(app.state, "agent_config", None)
+        if config and config.mcp_servers:
+            asyncio.create_task(_load_mcp_tools_background(config.mcp_servers))
+            logger.info("[MCP] 已启动后台加载任务")
+    except Exception:
+        logger.exception("启动 MCP 后台加载任务失败")
+
     yield
 
 app = FastAPI(
@@ -173,12 +182,52 @@ async def add_no_cache_static(request: Request, call_next):
     return response
 
 
+# ---------- MCP 工具初始化 ----------
+
+def _init_mcp_tools_sync(server_configs: list[dict]) -> list:
+    """同步入口：直接调用同步封装的 MCP 工具创建函数。"""
+    if not server_configs:
+        return []
+    from tools.mcp_tools import create_mcp_tools
+    return create_mcp_tools(server_configs)
+
+
+async def _load_mcp_tools_background(server_configs: list[dict]):
+    """后台加载 MCP 工具，不阻塞 Agent 启动。"""
+    if not server_configs:
+        return
+    try:
+        # 给后台 loop 一点时间启动
+        await asyncio.sleep(0.5)
+        # 把同步阻塞调用移出事件循环线程，避免冻结 HTTP 服务
+        loop = asyncio.get_running_loop()
+        mcp_tools = await loop.run_in_executor(None, _init_mcp_tools_sync, server_configs)
+        if not mcp_tools:
+            return
+        # 更新 agent 的工具列表，若 agent 未就绪则最多重试 3 次
+        for attempt in range(3):
+            agent_obj = getattr(app.state, "agent", None)
+            if agent_obj is not None:
+                current_tools = list(agent_obj.tools)
+                current_tools.extend(mcp_tools)
+                agent_obj.set_tools(current_tools)
+                logger.info("  MCP 工具: 已加载 %d 个", len(mcp_tools))
+                return
+            logger.warning("[MCP] agent 未就绪，等待重试 (%d/3)", attempt + 1)
+            await asyncio.sleep(1)
+        logger.error("[MCP] agent 始终未就绪，MCP 工具加载失败")
+    except Exception:
+        logger.exception("MCP 工具后台加载失败")
+
+
 # ---------- Agent 生命周期 ----------
 
 def init_agent():
     global agent
     
     config = AgentConfig.load()
+    # 保存配置到 app.state，供后台 MCP 加载等异步任务使用
+    app.state.agent_config = config
     
     # 初始化工作区
     file_tools.set_workspace(Path(config.workspace))
@@ -192,7 +241,7 @@ def init_agent():
         anysearch_api_key=config.anysearch_api_key,
     )
     
-    # 注册所有工具
+    # 注册所有工具（MCP 工具延后到后台加载，避免阻塞启动）
     all_tools = []
     all_tools.extend(file_tools.TOOLS)
     all_tools.extend(code_tools.TOOLS)
@@ -205,7 +254,8 @@ def init_agent():
     all_tools.extend(shell_tools.TOOLS)
     all_tools.extend(browser_tools.TOOLS)
     all_tools.extend(todo_tools.TOOLS)
-    subagents.manager.configure(config, all_tools, review_llm=getattr(agent, "review_llm", None))
+
+    subagents.manager.configure(config, all_tools, review_llm=None)
     
     # 先加载 Skills，再构建 Agent graph
     app_base = _app_base_dir()
@@ -220,6 +270,7 @@ def init_agent():
     # 初始化 Agent
     agent = DesktopAgent(config)
     agent.set_tools(all_tools)
+    app.state.agent = agent
     
     logger.info("✅ Agent 初始化完成")
     logger.info("  模型: %s", config.model)
@@ -443,8 +494,16 @@ if __name__ == "__main__":
         # 打印一行固定前缀的监听地址，Electron 主进程用正则提取后即可 loadURL
         print(f"AGENT_LISTEN_URL=http://{host}:{actual_port}", flush=True)
         logger.info("🚀 Moss Agent 就绪: http://%s:%d", host, actual_port)
-        await server.main_loop()
-        await server.shutdown()
+        try:
+            await server.main_loop()
+        finally:
+            # 关停时清理 MCP 连接，避免孤儿进程泄漏
+            try:
+                from tools.mcp_tools import close_all_connections
+                close_all_connections(timeout=10)
+            except Exception:
+                logger.exception("[MCP] 关停清理失败")
+            await server.shutdown()
 
     try:
         asyncio.run(_serve())
