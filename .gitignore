@@ -11,6 +11,8 @@ build/
 .venv-windows-build/
 .venv-windows-verify/
 .venv-macos-build/
+# Python 升级时的旧 venv 备份，体积大，不入仓
+.venv_py39_bak
 .pip-cache/
 .playwright-browsers/
 venv/

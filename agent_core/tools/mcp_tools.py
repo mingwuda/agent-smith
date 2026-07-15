@@ -295,10 +295,16 @@ class MCPServerConnection:
                 "clientInfo": {"name": "desktop-agent", "version": "1.0.0"},
             })
 
-            # 读取 server 返回的协议版本并记录，后续请求以该版本为准
+            # 读取 server 返回的协议版本并记录
             self._server_protocol_version = init_response.get("protocolVersion", "2024-11-05")
             server_caps = init_response.get("capabilities", {})
             logger.info("[MCP:%s] 握手成功，protocolVersion=%s, capabilities=%s", self.name, self._server_protocol_version, server_caps)
+            # ponytail: 当前仅记录 server 协议版本，尚未实现多版本兼容分支。
+            # 后续请求仍使用 client 提议的 "2024-11-05"。
+            # 若遇到仅支持旧协议的 server 握手失败，升级路径：
+            #   1. 在此处根据 self._server_protocol_version 分支
+            #   2. 为不同版本实现 tools/list、tools/call 的格式适配
+            #   3. 补充对应版本的集成测试
 
             # ★ 发送 notifications/initialized（协议要求）
             await self._session.send_notification("notifications/initialized", {})

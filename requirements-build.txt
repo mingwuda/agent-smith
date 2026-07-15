@@ -4,3 +4,7 @@ pyinstaller>=6.0
 pyinstaller-hooks-contrib>=2024.0
 pefile==2023.2.7
 pywin32-ctypes>=0.2.0
+
+# 测试依赖（开发/CI 环境需要，构建产物不需要）
+pytest>=8.0.0
+pytest-asyncio>=0.23.0
