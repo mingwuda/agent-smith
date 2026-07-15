@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import AsyncGenerator, Optional
 from urllib.parse import urlparse
 
+from langchain_anthropic import ChatAnthropic
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.prebuilt import create_react_agent
@@ -617,6 +618,15 @@ class DesktopAgent:
             host = urlparse(self.config.base_url).hostname
             if host:
                 configure_host_resolution(host, self.config.api_host_ips)
+        if self.config.active_provider == "anthropic":
+            return ChatAnthropic(
+                model=kwargs["model"],
+                api_key=self.config.api_key,
+                base_url=self.config.base_url or None,
+                temperature=kwargs["temperature"],
+                max_retries=kwargs["max_retries"],
+                timeout=kwargs["timeout"],
+            )
         return ChatOpenAI(**kwargs)
 
     def _build_review_llm(self):
@@ -630,6 +640,15 @@ class DesktopAgent:
         base_url = prov.get("base_url", "") or ""
         if not model:
             return None
+        if pid == "anthropic":
+            return ChatAnthropic(
+                model=model,
+                api_key=api_key,
+                base_url=base_url or None,
+                temperature=0,
+                max_retries=self.config.api_max_retries,
+                timeout=self.config.api_timeout_seconds,
+            )
         return ChatOpenAI(
             model=model,
             api_key=api_key or "sk-no-key-required",

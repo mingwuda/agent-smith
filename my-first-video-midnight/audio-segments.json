@@ -1,0 +1,74 @@
+[
+  {
+    "chapter": "intro",
+    "step": 1,
+    "text": "大家好，今天介绍一个可以跑在自己电脑上的 AI 助手项目：AgentSmith。",
+    "audio": "intro/1.mp3"
+  },
+  {
+    "chapter": "intro",
+    "step": 2,
+    "text": "这不是一个简单的聊天机器人，而是一个完整的桌面智能体系统。它能把你的电脑变成一个能读写文件、运行代码、搜索网页、管理 Git 的 AI 工作台。",
+    "audio": "intro/2.mp3"
+  },
+  {
+    "chapter": "intro",
+    "step": 3,
+    "text": "后端用 FastAPI 提供接口，核心推理引擎是 LangGraph，模型调用兼容 OpenAI 接口标准。这意味着你可以接 DeepSeek、通义千问、MiMo 等任何 OpenAI 兼容模型，不用被单一厂商绑定。",
+    "audio": "intro/3.mp3"
+  },
+  {
+    "chapter": "intro",
+    "step": 4,
+    "text": "前端是一个简洁的 Web 界面，支持多行输入、图片粘贴、流式输出。你发消息的时候，能看到 AI 的思考过程、工具调用步骤和最终结果，整个执行过程完全可视化。",
+    "audio": "intro/4.mp3"
+  },
+  {
+    "chapter": "intro",
+    "step": 5,
+    "text": "它不仅能聊天，还能直接操作你的文件系统：读写文件、运行 Python 脚本、搜索网页、查看 Git 状态。",
+    "audio": "intro/5.mp3"
+  },
+  {
+    "chapter": "intro",
+    "step": 6,
+    "text": "它支持 Skills 技能扩展，你可以给它加载新能力，比如生成 PPT、画图、查数据库。",
+    "audio": "intro/6.mp3"
+  },
+  {
+    "chapter": "intro",
+    "step": 7,
+    "text": "它还内置了长期记忆，能记住你的偏好和项目上下文。多用户隔离意味着团队里每个人都有自己的工作区和会话历史。",
+    "audio": "intro/7.mp3"
+  },
+  {
+    "chapter": "intro",
+    "step": 8,
+    "text": "还有两个特色功能。一是图片输入，你可以直接把截图粘贴进去，它会调用视觉模型分析内容。",
+    "audio": "intro/8.mp3"
+  },
+  {
+    "chapter": "intro",
+    "step": 9,
+    "text": "二是多模态模型切换，如果你当前模型不支持图片，系统会自动切换到支持视觉的模型，不用你手动改配置。",
+    "audio": "intro/9.mp3"
+  },
+  {
+    "chapter": "intro",
+    "step": 10,
+    "text": "总结一下，AgentSmith 适合三类场景：个人知识助理、团队内网助手、开发者工具链。",
+    "audio": "intro/10.mp3"
+  },
+  {
+    "chapter": "intro",
+    "step": 11,
+    "text": "另外，AgentSmith 还支持微信 Bot 接入。它基于腾讯官方 iLink Bot API，无需公网 IP，扫码一次即可持久登录。每个用户的 token 按用户隔离存储，消息会同步到 Web 会话列表，还支持 /new、/list、/switch 等会话管理指令。",
+    "audio": "intro/11.mp3"
+  },
+  {
+    "chapter": "intro",
+    "step": 12,
+    "text": "项目已经开源，基于 Python 和 Node.js 构建，你可以直接克隆下来跑。如果你想深入了解某个模块，比如 Skills 系统、多用户隔离、或者前端界面，我可以继续讲解。",
+    "audio": "intro/12.mp3"
+  }
+]

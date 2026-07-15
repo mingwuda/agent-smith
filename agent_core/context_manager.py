@@ -27,6 +27,10 @@ MODEL_CONTEXT_WINDOWS = {
     "qwen-turbo": 128000,
     "mimo-v2.5-pro": 1000000,
     "mimo": 1000000,
+    "claude-sonnet-4-20250514": 200000,
+    "claude-opus-4-20250514": 200000,
+    "claude-haiku-4-20250414": 200000,
+    "claude-3-5-sonnet-20241022": 200000,
 }
 
 

@@ -1,0 +1,66 @@
+/* ─────────────────────────────────────────────────────────────────────
+ * Theme · midnight-press
+ *   Cinematic editorial dark. Warm espresso instead of pure black, single
+ *   hot orange accent, Instrument-Serif italic English vs Noto-Serif-SC
+ *   Chinese. Magazine-cover gravitas at night.
+ *
+ *   character knobs:
+ *     • hero numbers   — italic editorial serif
+ *     • rule           — 1px solid warm hairline
+ *     • card radius    — sharp (no radius on stage; small radius on cards)
+ *     • surface        — warm vignette only, no grain
+ *     • motion         — slow + cinematic (1100ms reveals)
+ * ───────────────────────────────────────────────────────────────────── */
+:root {
+  /* ─── palette ─── */
+  --shell:        #1a1714;
+  --surface:      #2a2520;
+  --surface-2:    #352f29;
+  --surface-3:    #403a34;
+  --text:         #ffffff;
+  --text-2:       #f0ece4;
+  --text-mute:    #b5afa6;
+  --text-faint:   #8a847c;
+  --rule:         #4a443e;
+  --accent:       #ff4a2b;
+  --accent-soft:  rgba(255, 74, 43, 0.18);
+  --accent-glow:  rgba(255, 74, 43, 0.5);
+
+  /* ─── richer backgrounds ─── */
+  --surface-gradient:
+    radial-gradient(ellipse at 20% 10%, rgba(255, 74, 43, 0.08) 0%, transparent 55%),
+    radial-gradient(ellipse at 80% 90%, rgba(255, 140, 60, 0.06) 0%, transparent 55%),
+    linear-gradient(180deg, #1a1714 0%, #14110e 100%);
+  --surface-pattern: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23ffffff' fill-opacity='0.03'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
+  --surface-pattern-size: 60px 60px;
+  --surface-pattern-blend: overlay;
+  --surface-pattern-opacity: 1;
+
+  /* ─── fonts ─── */
+  --font-display-cn: "Noto Serif SC", "Source Han Serif SC", serif;
+  --font-display-en: "Instrument Serif", "GT Sectra", "Playfair Display", Georgia, serif;
+  --font-body:       "Manrope", "Inter", "Noto Sans SC", -apple-system, sans-serif;
+  --font-mono:       "JetBrains Mono", "SF Mono", ui-monospace, monospace;
+  --font-features:   "ss01", "cv11", "tnum";
+
+  /* ─── motion: slow & cinematic ─── */
+  --dur-base:       700ms;
+  --dur-slow:       1100ms;
+  --dur-cinematic:  1600ms;
+
+  /* ─── design identity ─── */
+  --r-card:        var(--r-sm);     /* refined, almost flat */
+  --r-stage:       0;
+  --rule-w:        1px;
+  --rule-style:    solid;
+  --hero-num-font:    var(--font-display-en);
+  --hero-num-style:   italic;
+  --hero-num-weight:  400;
+  --hero-num-track:   -0.025em;
+  --stage-pad-x:   140px;
+  --stage-pad-y:   100px;
+
+  /* ─── decoration: warm vignette, no grain ─── */
+  --surface-vignette:
+    radial-gradient(circle at 50% 60%, transparent 0%, rgba(0, 0, 0, 0.45) 100%);
+}

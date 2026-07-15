@@ -20,3 +20,4 @@ qrcode[pil]>=7.4,<8.0
 playwright>=1.40.0
 Pillow>=10.0.0
 mcp>=1.27,<2  # 官方 MCP SDK(stdio/SSE/HTTP 传输,支持协议版本协商)
+langchain-anthropic>=0.3.0

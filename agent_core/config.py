@@ -58,6 +58,19 @@ DEFAULT_PROVIDERS: dict[str, dict[str, Any]] = {
         "base_url": "http://localhost:11434/v1",
         "models": ["llama3", "qwen2", "qwen2.5", "gemma2", "mistral", "phi3", "deepseek-r1"],
     },
+    "anthropic": {
+        "name": "Anthropic",
+        "is_custom": False,
+        "api_key": "",
+        "model": "claude-sonnet-4-20250514",
+        "base_url": "https://api.anthropic.com/v1",
+        "models": [
+            "claude-sonnet-4-20250514",
+            "claude-opus-4-20250514",
+            "claude-haiku-4-20250414",
+            "claude-3-5-sonnet-20241022",
+        ],
+    },
     "custom": {
         "name": "自定义",
         "is_custom": True,
@@ -193,6 +206,8 @@ class AgentConfig:
             "TAVILY_SEARCH_URL": ("tavily_search_url", str),
             "ANYSEARCH_API_KEY": ("anysearch_api_key", str),
             "AGENT_UPDATE_SERVER": ("update_server", str),
+            "ANTHROPIC_API_KEY": ("api_key", str),  # 兼容
+            "ANTHROPIC_BASE_URL": ("base_url", str),  # 兼容
         }
         env_overrides = set()
         for env_key, (attr_name, cast_fn) in env_map.items():
