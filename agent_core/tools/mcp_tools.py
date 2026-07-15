@@ -375,6 +375,10 @@ class MCPServerConnection:
 _connections: Dict[str, MCPServerConnection] = {}
 _conn_lock = threading.Lock()
 
+# 全局 MCP 状态（供前端 /mcp/status 展示）：name -> {name, status, tool_count, error, source}
+_mcp_status: Dict[str, dict] = {}
+_mcp_status_lock = threading.Lock()
+
 
 def _get_connection(name: str, config: Dict[str, Any]) -> MCPServerConnection:
     with _conn_lock:
@@ -481,6 +485,7 @@ def create_mcp_tools(server_configs: List[Dict[str, Any]]) -> List[StructuredToo
 
     for cfg in server_configs:
         name = cfg.get("name", "")
+        source = cfg.get("source", "global")
         if not name:
             logger.warning("[MCP] 跳过未命名的 server 配置: %s", cfg)
             continue
@@ -488,8 +493,10 @@ def create_mcp_tools(server_configs: List[Dict[str, Any]]) -> List[StructuredToo
         transport = (cfg.get("transport") or "stdio").lower()
         if transport != "stdio":
             logger.warning("[MCP] server '%s' 使用 '%s' transport，当前仅支持 stdio，已跳过", name, transport)
+            _set_status(name, "skipped", 0, f"不支持的 transport: {transport}", source)
             continue
 
+        _set_status(name, "connecting", 0, "", source)
         try:
             connection = _get_connection(name, cfg)
             tool_defs = connection.list_tools(timeout=60)
@@ -503,9 +510,11 @@ def create_mcp_tools(server_configs: List[Dict[str, Any]]) -> List[StructuredToo
                     logger.warning("[MCP] 包装工具失败: %s.%s, error: %s", name, tool_def.get("name"), exc)
 
             logger.info("[MCP] server '%s' 已加载 %d 个工具", name, len(tool_defs))
+            _set_status(name, "connected", len(tool_defs), "", source)
 
         except Exception as exc:
             logger.error("[MCP] 加载 server '%s' 失败: %s", name, exc)
+            _set_status(name, "failed", 0, str(exc), source)
 
     return tools
 
@@ -519,3 +528,93 @@ def load_tools(server_configs: List[Dict[str, Any]]) -> List[StructuredTool]:
     global TOOLS
     TOOLS = create_mcp_tools(server_configs)
     return TOOLS
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 7. 会话级配置合并、状态追踪与重载
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _set_status(name: str, status: str, tool_count: int, error: str, source: str = "global"):
+    """更新单个 server 的全局状态（线程安全）。"""
+    with _mcp_status_lock:
+        _mcp_status[name] = {
+            "name": name,
+            "status": status,
+            "tool_count": tool_count,
+            "error": (error or "")[:500],
+            "source": source,
+        }
+
+
+def build_effective_config(workspace: str) -> List[Dict[str, Any]]:
+    """合并全局 config.mcp_servers 与项目目录 .mcp.json，返回 server 配置列表。
+
+    项目级 .mcp.json（{workspace}/.mcp.json，键 mcpServers/mcp_servers）中的同名
+    server 覆盖全局配置；每条配置附带 source 标记便于前端展示来源。
+    """
+    # 1. 全局配置（来自 ~/.desktop_agent/config.json 的 mcp_servers）
+    global_servers: List[Dict[str, Any]] = []
+    try:
+        from main import app  # 延迟导入，避免循环依赖
+        cfg = getattr(app.state, "agent_config", None)
+        if cfg is not None:
+            global_servers = [dict(s) for s in (getattr(cfg, "mcp_servers", []) or [])]
+    except Exception:
+        pass
+    for s in global_servers:
+        s.setdefault("source", "global")
+
+    # 2. 项目级 .mcp.json
+    project_servers: List[Dict[str, Any]] = []
+    try:
+        p = Path(workspace).expanduser().resolve() / ".mcp.json"
+        if p.is_file():
+            data = json.loads(p.read_text(encoding="utf-8"))
+            raw = data.get("mcpServers") or data.get("mcp_servers") or []
+            for s in raw:
+                if isinstance(s, dict) and s.get("name"):
+                    sc = dict(s)
+                    sc.setdefault("source", "project")
+                    project_servers.append(sc)
+    except Exception as exc:
+        logger.warning("[MCP] 读取项目 .mcp.json 失败: %s", exc)
+
+    # 3. 合并：项目级覆盖同名全局
+    merged: Dict[str, Dict[str, Any]] = {}
+    for s in global_servers:
+        if s.get("name"):
+            merged[s["name"]] = s
+    for s in project_servers:
+        if s.get("name"):
+            merged[s["name"]] = s
+    return list(merged.values())
+
+
+def reload_mcp_sync(server_configs: List[Dict[str, Any]]) -> List[StructuredTool]:
+    """按给定配置重载 MCP 工具（同步，应在后台线程调用，不阻塞请求线程）。
+
+    返回新计算的 MCP 工具列表，调用方负责 set_tools(base_tools + 返回列表)。
+    不在集合内的旧连接会被关闭，避免孤儿进程泄漏。
+    """
+    wanted = {c.get("name") for c in server_configs if c.get("name")}
+
+    # 关闭不再需要的旧连接
+    with _conn_lock:
+        for old_name in list(_connections.keys()):
+            if old_name not in wanted:
+                try:
+                    _connections[old_name].close(timeout=5)
+                except Exception:
+                    pass
+                del _connections[old_name]
+                with _mcp_status_lock:
+                    _mcp_status.pop(old_name, None)
+
+    # 重建工具（内部建连 + list_tools，并写入 _mcp_status）
+    return create_mcp_tools(server_configs)
+
+
+def get_mcp_status() -> List[Dict[str, Any]]:
+    """返回当前 MCP 连接状态列表（供 /mcp/status 接口）。"""
+    with _mcp_status_lock:
+        return [dict(v) for v in _mcp_status.values()]

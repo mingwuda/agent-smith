@@ -208,7 +208,7 @@ async def _load_mcp_tools_background(server_configs: list[dict]):
         for attempt in range(3):
             agent_obj = getattr(app.state, "agent", None)
             if agent_obj is not None:
-                current_tools = list(agent_obj.tools)
+                current_tools = list(getattr(app.state, "base_tools", []))
                 current_tools.extend(mcp_tools)
                 agent_obj.set_tools(current_tools)
                 logger.info("  MCP 工具: 已加载 %d 个", len(mcp_tools))
@@ -271,6 +271,8 @@ def init_agent():
     agent = DesktopAgent(config)
     agent.set_tools(all_tools)
     app.state.agent = agent
+    # 捕获基准工具集（不含 MCP），供会话级 MCP 重载时作为 set_tools 的基准
+    app.state.base_tools = list(all_tools)
     
     logger.info("✅ Agent 初始化完成")
     logger.info("  模型: %s", config.model)
@@ -446,6 +448,7 @@ from api.routes.system import router as system_router
 from api.routes.wechat import router as wechat_router
 from api.routes.monitoring import router as monitoring_router
 from api.routes.update import router as update_router
+from api.routes.mcp import router as mcp_router
 
 app.include_router(auth_router)
 app.include_router(agent_router)
@@ -457,6 +460,7 @@ app.include_router(system_router)
 app.include_router(wechat_router)
 app.include_router(monitoring_router)
 app.include_router(update_router)
+app.include_router(mcp_router)
 
 
 # ---------- 入口 ----------

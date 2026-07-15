@@ -4,6 +4,7 @@ import json
 import re
 from pathlib import Path
 from typing import Any, Optional
+import threading
 
 from fastapi import Request
 
@@ -13,6 +14,9 @@ from api.deps import _get_current_user, _workspace_for_user
 from tools import file_tools, browser_tools, shell_tools, git_tools, database_tool
 from skills.registry import get_registry
 from memory.local_memory import get_memory
+from logger import get_logger
+
+logger = get_logger(__name__)
 
 
 # ── 从 main.py 导出的函数 ──
@@ -135,6 +139,55 @@ def _apply_session_workspace(uid: str, session_id: str):
                 pass
     except Exception:
         pass
+    # 触发会话级 MCP 重载（后台线程执行，不阻塞当前请求）
+    try:
+        _apply_session_mcp(uid, session_id)
+    except Exception:
+        pass
+
+
+# ── 会话级 MCP 重载（按工作目录 .mcp.json 合并全局配置） ──
+
+_last_mcp_workspace: Optional[str] = None
+_last_mcp_lock = threading.Lock()
+
+
+def _apply_session_mcp(uid: str, session_id: str):
+    """根据会话工作目录的 .mcp.json（合并全局配置）后台重载 MCP 工具。
+
+    同一 workspace 仅在首次/切换时触发一次重载，避免连续消息反复重建连接。
+    重载在 daemon 后台线程执行，不阻塞 HTTP 请求线程。
+    """
+    ws = session_store.get_session_workspace(uid, session_id)
+    ws_key = ws or "__global__"
+    with _last_mcp_lock:
+        if _last_mcp_workspace == ws_key:
+            return  # 同一 workspace 已加载，跳过重复 reload
+        _last_mcp_workspace = ws_key
+
+    try:
+        ws_path = str(Path(ws).expanduser().resolve()) if ws else ""
+    except Exception:
+        ws_path = ""
+    threading.Thread(target=_reload_mcp_in_thread, args=(ws_path,), daemon=True).start()
+
+
+def _reload_mcp_in_thread(workspace: str):
+    """后台线程：计算合并配置 → 重载 MCP 连接 → 替换 agent 工具列表。"""
+    try:
+        from tools.mcp_tools import build_effective_config, reload_mcp_sync
+        configs = build_effective_config(workspace)
+        new_tools = reload_mcp_sync(configs)
+        # 延迟导入 main，避免循环依赖
+        from main import app
+        agent = getattr(app.state, "agent", None)
+        base = getattr(app.state, "base_tools", None)
+        if agent is not None and base is not None:
+            agent.set_tools(list(base) + new_tools)
+            logger.info("[MCP] 会话级重载完成：%d 个 MCP 工具（workspace=%s）", len(new_tools), workspace or "全局")
+    except Exception:
+        import traceback
+        traceback.print_exc()
 
 
 async def _async_reflect(uid: str, user_message: str, steps: list[dict], result: str):

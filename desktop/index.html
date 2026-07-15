@@ -76,6 +76,18 @@
       <span id="workspace-display" style="display:none;font-size:11px;color:#8e8e93;margin-left:10px;cursor:pointer;" onclick="promptSetWorkspace()" title="点击修改工作目录">📁</span>
     </div>
     <div class="right">
+      <div id="mcp-badge" onclick="toggleMcpDropdown(event)" title="MCP 连接">
+        <span id="mcp-badge-icon">🔌</span>
+        <span id="mcp-badge-count" class="mcp-badge-count">0</span>
+      </div>
+      <div id="mcp-dropdown" class="mcp-dropdown">
+        <div class="mcp-dropdown-header">
+          <span data-i18n="mcpTitle">MCP 连接</span>
+          <span id="mcp-refresh" onclick="fetchMcpStatus(true)" title="刷新">⟳</span>
+        </div>
+        <div id="mcp-list"></div>
+        <div id="mcp-empty" class="mcp-empty" data-i18n="mcpNoServer">未配置 MCP Server</div>
+      </div>
       <button class="header-btn" id="settings-btn" style="display:none;" data-i18n="settingsButton">⚙️ 设置</button>
       <div id="user-avatar" onclick="toggleUserMenu(event)">
         <span id="avatar-text"></span>
@@ -487,7 +499,8 @@
 <script src="/static/js/features/settings.js"></script>
 <script src="/static/js/features/database.js"></script>
 <script src="/static/js/features/permissions.js"></script>
-<script src="/static/js/features/auth.js"></script>
-<script src="/static/js/main.js"></script>
+    <script src="/static/js/features/auth.js"></script>
+    <script src="/static/js/features/mcp.js"></script>
+    <script src="/static/js/main.js"></script>
 </body>
 </html>

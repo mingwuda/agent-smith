@@ -74,6 +74,48 @@
   .user-menu-item { display:flex; align-items:center; gap:10px; padding:8px 14px; font-size:13px; color:#555; cursor:pointer; transition:background .1s; }
   .user-menu-item:hover { background:#f5f5f7; }
   .user-menu-item .umi-icon { font-size:15px; width:20px; text-align:center; }
+
+  /* ── MCP 角标与下拉框 ── */
+  #mcp-badge {
+    display: flex; align-items: center; gap: 2px;
+    padding: 4px 8px; border-radius: 8px; cursor: pointer;
+    font-size: 13px; color: #555; user-select: none; position: relative;
+  }
+  #mcp-badge:hover { background: #f0f0f5; }
+  .mcp-badge-count {
+    min-width: 16px; height: 16px; line-height: 16px; text-align: center;
+    border-radius: 8px; background: #e5e5ea; color: #555; font-size: 11px; padding: 0 4px;
+  }
+  #mcp-badge.has-connected .mcp-badge-count { background: #34c759; color: #fff; }
+  #mcp-badge.has-error .mcp-badge-count { background: #ff3b30; color: #fff; }
+
+  .mcp-dropdown {
+    position: absolute; top: 100%; right: 0; min-width: 260px; max-height: 360px; overflow-y: auto;
+    background: #fff; border: 1px solid #e0e0e3; border-radius: 10px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.12); padding: 6px 0; z-index: 1000;
+    display: none; margin-top: 4px;
+  }
+  .mcp-dropdown.show { display: block; }
+  .mcp-dropdown-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 14px; font-size: 13px; font-weight: 600; color: #333;
+    border-bottom: 1px solid #f0f0f5;
+  }
+  #mcp-refresh { cursor: pointer; color: #007aff; font-size: 14px; }
+  #mcp-refresh:hover { opacity: .7; }
+  .mcp-item {
+    display: flex; align-items: center; gap: 8px; padding: 8px 14px 4px; font-size: 13px; color: #444;
+  }
+  .mcp-item .mcp-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .mcp-dot.connected { background: #34c759; }
+  .mcp-dot.connecting { background: #ffcc00; }
+  .mcp-dot.failed { background: #ff3b30; }
+  .mcp-dot.skipped { background: #c7c7cc; }
+  .mcp-item .mcp-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mcp-item .mcp-meta { color: #999; font-size: 11px; }
+  .mcp-item .mcp-src { font-size: 10px; color: #bbb; margin-left: 4px; }
+  .mcp-item .mcp-err { color: #ff3b30; font-size: 11px; padding: 2px 14px 8px; word-break: break-all; }
+  .mcp-empty { padding: 12px 14px; font-size: 12px; color: #999; text-align: center; }
   .user-menu-divider { height:1px; background:#eee; margin:4px 0; }
   /* 用户头像下拉菜单样式在前 */
 
