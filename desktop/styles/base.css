@@ -163,7 +163,8 @@
   /* 工具调用/思考步骤 */
   .steps-container { clear:both; margin:8px 0; max-width:85%; }
   .steps-container + .msg.bot { margin-top:12px; }
-  .step-toggle { display:none; }
+  .step-toggle { display:flex; align-items:center; gap:8px; padding:8px 12px; cursor:pointer; user-select:none; }
+  .step-toggle:hover { background:#f0f5ff; }
   .step-toggle .arrow { transition:transform .2s; font-size:10px; }
   .step-toggle.open .arrow { transform:rotate(90deg); }
   .step-toggle .tool-icon { font-size:14px; }

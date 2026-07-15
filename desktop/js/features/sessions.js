@@ -118,12 +118,14 @@ async function loadSessionMessages(sessionId, source) {
 
 // 恢复带步骤卡片的助手消息（从历史加载时使用）
 function addBotMessageWithSteps(content, steps, todoList) {
-  // 防止前一条消息的 _lastToolImageHtml 泄露到当前消息
+  const container = document.getElementById('messages');
+  // 防止前一条消息的 _lastToolImageHtml 泄漏到当前消息
   _lastToolImageHtml = null;
-  // 先渲染 assistant 的文本回复（之前被忽略，导致历史消息只显示工具过程）
-  if (content) {
-    addMessage(content, 'bot');
+  // 防止上一会话的 todo 面板泄漏到当前历史消息中（全局单例，跨会话不清理会串）
+  if (_currentTodoPanel && _currentTodoPanel.parentNode) {
+    _currentTodoPanel.remove();
   }
+  _currentTodoPanel = null;
   // 重置状态，模拟新一轮流式输出的初始条件
   currentBotMsgEl = null;
   currentStepsEl = null;
@@ -133,15 +135,33 @@ function addBotMessageWithSteps(content, steps, todoList) {
   generatingBadgeEl = null;
   _isReplaying = true;  // 不会发起 WebSocket 等实时连接
 
+  // 先重放 steps（生成 🤔 思考块 / 🔧 工具卡片），顺序与实时流式一致：
+  // [用户消息] → [步骤容器：思考块/工具卡片] → [最终答案]
   steps.forEach(data => {
     handleStreamEvent(data);
   });
 
   _isReplaying = false;
 
-  // 如果有 todo 清单，渲染面板
+  // 重放结束后，把最终答案 content 渲染到步骤容器之后
+  if (content) {
+    const ans = document.createElement('div');
+    ans.className = 'msg bot';
+    ans.innerHTML = renderMarkdown(content);
+    currentBotMsgEl = ans;
+    if (currentStepsEl && currentStepsEl.parentNode === container) {
+      currentStepsEl.after(ans);
+    } else {
+      container.appendChild(ans);
+    }
+  }
+
+  // 渲染 todo 清单（与实时 done 事件一致：面板置于答案之前）
   if (todoList) {
     renderTodoPanel(todoList, false);
+  }
+  if (currentBotMsgEl && _currentTodoPanel) {
+    container.insertBefore(_currentTodoPanel, currentBotMsgEl);
   }
 
   // 清理回放步骤后残留的"执行中/分析中"状态
@@ -163,7 +183,7 @@ function addBotMessageWithSteps(content, steps, todoList) {
   });
   removeGeneratingBadge();
 
-  // 注意：content 已在开头渲染，这里不再重复渲染
+  // content 已在上面的"步骤容器之后"渲染，这里不再重复渲染
   currentBotMsgEl = null;
   currentStepsEl = null;
 }

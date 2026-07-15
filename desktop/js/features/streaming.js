@@ -134,6 +134,10 @@ async function send() {
   totalSteps = 0;
   hasToolCalls = false;
   generatingBadgeEl = null;
+  // 物理移除上一轮/上一会话的 todo 面板，避免跨会话泄漏
+  if (_currentTodoPanel && _currentTodoPanel.parentNode) {
+    _currentTodoPanel.remove();
+  }
   _currentTodoPanel = null;  // 新任务重新创建 todo 面板
   _lastToolImageHtml = null;  // ponytail: 清空上一轮残留的工具截图，避免串入本轮最终输出
   startStreamIdleWatch();
@@ -491,14 +495,25 @@ function handleStreamEvent(data) {
       showGeneratingBadge('🔄 正在汇总...');
       break;
 
-    case 'thought':
+    case 'thought': {
       hideTyping();
       removeThinkingHint();
       removeGeneratingBadge();
       hasToolCalls = true;
       ensureStepsContainer();
-      updateProgress();
       const thoughtText = data.thought || '';
+      // 本轮乐观逐字流出的正文其实是推理（随后触发了工具/思考）。
+      // 优先"挪用"答案气泡里已经渲染好的那段（与 data.thought 同源），直接搬进 thought 块，
+      // 避免"删除重画"导致的思考内容丢失/不显示；若没有临时答案气泡，才普通渲染 data.thought。
+      let thoughtHtml;
+      if (currentBotMsgEl && currentBotMsgEl.innerHTML.trim()) {
+        thoughtHtml = currentBotMsgEl.innerHTML;
+        currentBotMsgEl.remove();
+        currentBotMsgEl = null;
+        currentFinalContent = '';
+      } else {
+        thoughtHtml = renderMarkdown(thoughtText);
+      }
       const thoughtDiv = document.createElement('div');
       thoughtDiv.style.marginBottom = '4px';
       thoughtDiv.dataset.step = data.step || '0';
@@ -510,18 +525,23 @@ function handleStreamEvent(data) {
           <span class="step-status">第 ${data.step || '?'} 步</span>
         </div>
         <div class="step-details open">
-          <div class="thought">${renderMarkdown(thoughtText)}</div>
+          <div class="thought">${thoughtHtml}</div>
         </div>`;
       currentStepsEl.appendChild(thoughtDiv);
       showThinkingHint(t('keepAnalyzing'));
       smartScroll(container);
       break;
+    }
 
     case 'tool_start':
       hideTyping();
       removeThinkingHint();
       removeGeneratingBadge();
       hasToolCalls = true;
+      // 兜底：本轮乐观流出的临时答案实为推理（工具轮无正文思考时不会走 thought 分支），
+      // 工具轮不应把它保留在答案气泡里。
+      if (currentBotMsgEl) { currentBotMsgEl.remove(); currentBotMsgEl = null; }
+      currentFinalContent = '';
       totalSteps = data.step || totalSteps + 1;
       const curStep = data.step || (totalSteps - 1);
       _toolTimers[curStep] = Date.now();
@@ -845,6 +865,9 @@ function handleStreamEvent(data) {
       break;
     
     case 'token':
+      // 重放历史时跳过重放 token：最终答案由 addBotMessageWithSteps 用 content 统一渲染，
+      // 避免这里创建游离的答案气泡（且会抢在工具卡片之前）。
+      if (_isReplaying) break;
       hideTyping();
       removeThinkingHint();
       removeGeneratingBadge();
@@ -903,7 +926,7 @@ function handleStreamEvent(data) {
         if (fill) fill.style.width = '100%';
         if (text) text.textContent = t('completeText');
       }
-      if (data.content && !currentBotMsgEl) {
+      if (data.content && !currentBotMsgEl && !_isReplaying) {
         currentBotMsgEl = document.createElement('div');
         currentBotMsgEl.className = 'msg bot';
         if (currentStepsEl) {
@@ -923,6 +946,16 @@ function handleStreamEvent(data) {
       }
       // 重置工具图片缓存
       _lastToolImageHtml = null;
+
+      // ── 兜底：确保最终答案气泡始终在步骤容器之后 ──
+      // 无论之前 token/thought/tool_start 事件的时序如何，done 时强制校正顺序，
+      // 避免"最终答案跑到工具卡片上面"的问题。
+      if (currentBotMsgEl && currentStepsEl && currentBotMsgEl.previousElementSibling !== currentStepsEl) {
+        // 只要答案气泡不是紧挨在步骤容器之后，就强制校正到其后，
+        // 覆盖"答案紧邻步骤容器之前"等所有错序情况（避免最终答案跑到工具卡片上面）。
+        currentStepsEl.after(currentBotMsgEl);
+      }
+
       // Done 事件携带最终 todo 清单时，渲染/更新面板（不触发闪烁）
       if (data.todo_list) {
         renderTodoPanel(data.todo_list, false);

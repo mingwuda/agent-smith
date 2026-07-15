@@ -1208,28 +1208,30 @@ class DesktopAgent:
                     yield _sse({"type": "llm_thinking"})
                     last_model_activity_at = time.time()
 
-                # ── LLM 流式 token ──
+                # ── LLM 流式正文 ──
+                # 边流边发 + 轮末归位：
+                #   工具块尚未出现时，正文乐观地作为 token 逐字流式发出（恢复"打字机"体验），同时累积到 thinking_buffer；
+                #   若本轮随后出现工具调用（on_tool_start），说明这段正文其实是推理 → 作为 thought 块整块补发，
+                #     前端据此清除误进"答案气泡"的临时内容；
+                #   若本轮无工具调用（on_chat_model_end），这段正文即最终答案，已逐字流出，无需重复。
+                # 一旦已确定进入工具轮（has_tool_chunks），正文不再逐字流出（避免无谓的清除闪烁），仅累积后由 thought 块展示。
                 if kind == "on_chat_model_stream" and node == "agent":
                     chunk = event["data"]["chunk"]
                     has_content = bool(chunk.content)
                     has_tool_chunks = bool(getattr(chunk, "tool_call_chunks", None))
-                    
+
                     if has_tool_chunks:
-                        # AI 正在发出工具调用 → 此前的内容就是推理过程
+                        # 已确定本轮为工具轮 → 正文归为推理，不逐字流出，仅累积（轮末作 thought 展示）
                         in_tool_call = True
                         if has_content:
                             thinking_buffer += chunk.content
-                    elif has_content and not in_tool_call:
-                        # 没有工具调用 → 可能是推理（后续可能有工具调用）或最终回复
+                            last_model_activity_at = time.time()
+                    elif has_content:
+                        # 尚不知是否会有工具调用 → 乐观逐字流式发出，同时累积；
+                        # 若本轮实为工具轮，前端会在 thought/tool_start 时清除这段临时答案。
                         thinking_buffer += chunk.content
-                        # 暂时作为 token 流式输出，但最终如果发现是推理会转为 thought
-                        final_buffer += chunk.content
                         yield _sse({"type": "token", "content": chunk.content})
                         last_model_activity_at = time.time()
-                    elif has_content and in_tool_call:
-                        # 工具调用后还在输出文本 → 这是下一轮思考或最终回复
-                        # 这里不会走到，因为 tool start/end 会重置状态
-                        pass
                 
                 # ── 工具开始 ──
                 elif kind == "on_tool_start":
@@ -1268,16 +1270,11 @@ class DesktopAgent:
                     }
                     last_progress_at = started_at
                     
-                    # 取出推理文本
+                    # 取出本轮缓冲的推理文本，作为 thought 块整块发出。
+                    # 推理内容已不再进入 final_buffer，无需再做回退删除（claw-back）。
                     thought = thinking_buffer.strip()
                     thinking_buffer = ""  # 重置
-                    
-                    # 从 previous tokens 中移除推理文本（它们不是最终回复）
                     if thought:
-                        # 从 final_buffer 中去掉这部分
-                        if final_buffer.endswith(thought):
-                            final_buffer = final_buffer[:-len(thought)]
-                        # 发送 thought 事件
                         yield _sse({
                             "type": "thought",
                             "thought": thought,
@@ -1514,6 +1511,23 @@ class DesktopAgent:
 
                     # 前端提示"AI 已响应"
                     yield _sse({"type": "llm_response", "has_tool_calls": has_tool_calls})
+
+                    # ── 本轮无工具调用 → 缓冲区里的正文即最终答案 ──
+                    # 有工具调用时不在这里处理：那段正文是推理，交由随后的 on_tool_start 作为 thought 块发出。
+                    # 正文已在 on_chat_model_stream 逐字流式发出，这里只补进 final_buffer 供 done 校正，不重复 yield；
+                    # 若网关未逐块下发正文（thinking_buffer 为空），回退到 output.content 整块补发，避免最终答案丢失。
+                    if not has_tool_calls:
+                        final_text = thinking_buffer
+                        thinking_buffer = ""
+                        if final_text:
+                            # 已逐字流出，仅补进 final_buffer（done 事件据此校正为权威内容）
+                            final_buffer += final_text
+                        elif output is not None:
+                            fallback_text = _message_text(getattr(output, "content", "")) or ""
+                            if fallback_text:
+                                final_buffer += fallback_text
+                                yield _sse({"type": "token", "content": fallback_text})
+                                last_model_activity_at = time.time()
 
                     if input_tok > 0 or output_tok > 0:
                         real_out = estimate_message_tokens(output) if output else 0
