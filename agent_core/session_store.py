@@ -278,17 +278,36 @@ def set_session_workspace(user_id: str, session_id: str, workspace: str) -> bool
 
 
 def get_session_workspace(user_id: str, session_id: str) -> str:
-    """获取会话的工作目录"""
+    """获取会话的工作目录。若会话未单独设置，则回退到所属项目的 directory_path。"""
     with _connect(user_id) as conn:
         row = conn.execute(
-            "SELECT workspace FROM sessions WHERE id = ?", (session_id,)
+            "SELECT workspace, project_id FROM sessions WHERE id = ?", (session_id,)
         ).fetchone()
-        if row:
+        if not row:
+            return ""
+        try:
+            ws = (row["workspace"] or "").strip()
+            if ws:
+                return ws
+            # 回退：会话未设工作目录，尝试取所属项目的 directory_path
             try:
-                return row["workspace"] or ""
+                pid = (row["project_id"] or "").strip()
             except (IndexError, KeyError):
-                return ""
-        return ""
+                pid = ""
+            if pid:
+                proj = conn.execute(
+                    "SELECT directory_path FROM projects WHERE id = ?", (pid,)
+                ).fetchone()
+                if proj:
+                    try:
+                        dp = proj["directory_path"]
+                        if dp and dp.strip():
+                            return dp.strip()
+                    except (IndexError, KeyError):
+                        pass
+            return ""
+        except (IndexError, KeyError):
+            return ""
 
 
 # ═══════════════════════════════════════════════
