@@ -82,6 +82,8 @@ async function loadSessionMessages(sessionId, source) {
       // 重建输入历史
       _msgHistory = [];
       _msgHistoryIndex = -1;
+      // 用于估算每轮 bot 响应的耗时（前一条 user 消息时间 → 当前 bot 消息时间）
+      var lastUserTs = 0;
       if (data.messages && data.messages.length > 0) {
       data.messages.forEach(msg => {
         const role = msg.role === 'user' ? 'user' : 'bot';
@@ -94,6 +96,8 @@ async function loadSessionMessages(sessionId, source) {
           if ((!msg.images || msg.images.length === 0) && histText) {
             _msgHistory.push(histText);
           }
+          // 记录用户消息时间戳，用于估算下一轮 bot 耗时
+          if (msg.timestamp) { try { lastUserTs = new Date(msg.timestamp).getTime(); } catch(e){} }
         }
 
         if (role === 'user' && parsed && parsed.files.length) {
@@ -102,7 +106,12 @@ async function loadSessionMessages(sessionId, source) {
         } else if (role === 'user' && msg.images && msg.images.length) {
           addUserMessage(content, msg.images.map(u => ({data_url: u})));
         } else if (role === 'bot' && msg.steps && msg.steps.length) {
-          addBotMessageWithSteps(content, msg.steps, msg.todo_list);
+          // 估算本轮 bot 响应耗时：bot 时间 - 前一条 user 消息时间
+          var botElapsed = 0;
+          if (msg.timestamp && lastUserTs > 0) {
+            try { botElapsed = new Date(msg.timestamp).getTime() - lastUserTs; } catch(e){}
+          }
+          addBotMessageWithSteps(content, msg.steps, msg.todo_list, botElapsed);
         } else {
           addMessage(content, role);
         }
@@ -122,7 +131,7 @@ async function loadSessionMessages(sessionId, source) {
 }
 
 // 恢复带步骤卡片的助手消息（从历史加载时使用）
-function addBotMessageWithSteps(content, steps, todoList) {
+function addBotMessageWithSteps(content, steps, todoList, elapsedMs) {
   const container = document.getElementById('messages');
   // 防止前一条消息的 _lastToolImageHtml 泄漏到当前消息
   _lastToolImageHtml = null;
@@ -147,14 +156,15 @@ function addBotMessageWithSteps(content, steps, todoList) {
 
   if (hasSteps || content) {
     responseCard = document.createElement('div');
-    responseCard.className = 'agent-response finished';
-    // 历史消息：耗时显示固定值（后端未记录真实耗时，用占位符）
+    responseCard.className = 'agent-response finished collapsed';
+    // 历史消息：耗时使用传入的估算值（有值显示，无值显示 —）
+    var timeVal = (elapsedMs && elapsedMs > 0) ? formatElapsed(elapsedMs) : '\u2014';
     var headerEl = document.createElement('div');
     headerEl.className = 'agent-header';
     headerEl.innerHTML =
-      '<div class="agent-avatar">🤖</div>' +
-      '<span class="agent-toggle-arrow">▶</span>' +
-      '<span class="agent-time"><span class="agent-time-label">' + (t('workElapsed') || '工作耗时') + ': </span> <span class="agent-time-val">—</span></span>';
+      '<div class="agent-avatar">\uD83E\uDD16</div>' +
+      '<span class="agent-toggle-arrow">\u25B6</span>' +
+      '<span class="agent-time"><span class="agent-time-label">' + (t('workElapsed') || '工作耗时') + ': </span> <span class="agent-time-val">' + timeVal + '</span></span>';
     headerEl.onclick = function() {
       responseCard.classList.toggle('collapsed');
     };

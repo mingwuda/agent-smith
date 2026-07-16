@@ -1078,6 +1078,13 @@ function handleStreamEvent(data) {
         if (text) text.textContent = t('completeText');
       }
 
+      // 冻结最终耗时到 header（防止定时器被清后值丢失）
+      var finalElapsed = _agentStartTime ? (Date.now() - _agentStartTime) : 0;
+      if (finalElapsed > 0 && responseCard) {
+        var fvalEl = responseCard.querySelector('.agent-time-val');
+        if (fvalEl) fvalEl.textContent = formatElapsed(finalElapsed);
+      }
+
       // ── 渲染最终输出到 agent-final-output 区域 ──
       var responseCard = getResponseCard();
       // 标记卡片已完成（CSS 据此隐藏执行状态行；JS 也做 display:none 双保险）
