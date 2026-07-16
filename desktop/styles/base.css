@@ -676,20 +676,46 @@
 
   /* ===== 右侧文件预览面板（浅色，覆盖主区右侧） ===== */
   .file-preview-panel {
-    position: fixed; top: 0; right: 0; bottom: 0; width: 420px; z-index: 1500;
-    background: #fff; border-left: 1px solid #e0e0e3; box-shadow: -8px 0 24px rgba(0,0,0,.08);
+    position: fixed; top: 0; right: 0; bottom: 0; width: 460px; z-index: 1500;
+    background: #1c1c1e; border-left: 1px solid #2c2c2e; box-shadow: -8px 0 24px rgba(0,0,0,.4);
     display: none; flex-direction: column;
   }
   .file-preview-panel.open { display: flex; }
-  .fpp-header { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; border-bottom: 1px solid #e0e0e3; flex: 0 0 auto; background: #fafafa; }
-  .fpp-title { font-size: 13px; font-weight: 600; color: #1d1d1f; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+  .fpp-header { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; border-bottom: 1px solid #2c2c2e; flex: 0 0 auto; background: #161618; }
+  .fpp-title { font-size: 13px; font-weight: 600; color: #f5f5f7; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
   .fpp-actions { display: flex; gap: 4px; flex: 0 0 auto; }
-  .fpp-btn { width: 28px; height: 28px; border: none; background: transparent; color: #636366; cursor: pointer; border-radius: 6px; font-size: 14px; }
-  .fpp-btn:hover { background: #e8e8ed; color: #1d1d1f; }
-  .fpp-meta { padding: 6px 14px; font-size: 11px; color: #8e8e93; border-bottom: 1px solid #f0f0f3; font-family: "SF Mono", Menlo, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .fpp-btn { width: 28px; height: 28px; border: none; background: transparent; color: #8e8e93; cursor: pointer; border-radius: 6px; font-size: 14px; }
+  .fpp-btn:hover { background: #2c2c2e; color: #f5f5f7; }
+  .fpp-meta { padding: 6px 14px; font-size: 11px; color: #8e8e93; border-bottom: 1px solid #2c2c2e; font-family: "SF Mono", Menlo, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .fpp-body { flex: 1; overflow: auto; }
-  .fpp-code { margin: 0; padding: 14px 16px; font-family: "SF Mono", Menlo, monospace; font-size: 12.5px; line-height: 1.6; color: #1d1d1f; white-space: pre; tab-size: 2; }
-  .fpp-code code { font-family: inherit; }
+  .fpp-code { margin: 0; padding: 14px 16px; font-family: "SF Mono", Menlo, monospace; font-size: 12.5px; line-height: 1.6; background: #161618; white-space: pre; tab-size: 2; overflow: auto; }
+  .fpp-code code { font-family: inherit; background: transparent; }
+  /* token 配色交给 highlight.js(github-dark) 主题；这里只统一背景，不设 color 以免覆盖高亮 */
+  .fpp-code code.hljs { background: transparent; }
+
+  /* Markdown 富文本预览（暗色） */
+  .fpp-md { padding: 16px 20px; color: #c7c7cc; line-height: 1.65; font-size: 14px; word-wrap: break-word; }
+  .fpp-md > *:first-child { margin-top: 0; }
+  .fpp-md h1, .fpp-md h2, .fpp-md h3, .fpp-md h4 { color: #f5f5f7; line-height: 1.3; margin: 1.2em 0 .6em; font-weight: 600; }
+  .fpp-md h1 { font-size: 1.6em; border-bottom: 1px solid #2c2c2e; padding-bottom: .3em; }
+  .fpp-md h2 { font-size: 1.35em; border-bottom: 1px solid #2c2c2e; padding-bottom: .3em; }
+  .fpp-md h3 { font-size: 1.15em; }
+  .fpp-md p { margin: .8em 0; }
+  .fpp-md a { color: #4aa3ff; text-decoration: none; }
+  .fpp-md a:hover { text-decoration: underline; }
+  .fpp-md code { background: #2c2c2e; padding: 2px 5px; border-radius: 4px; font-size: .88em; font-family: "SF Mono", Menlo, monospace; color: #e6b450; }
+  .fpp-md pre { background: #161618; border: 1px solid #2c2c2e; border-radius: 8px; padding: 0; margin: .8em 0; overflow: auto; }
+  .fpp-md pre code { background: transparent; padding: 1em; display: block; font-size: .85em; }
+  .fpp-md pre code.hljs { background: transparent; }
+  .fpp-md blockquote { border-left: 3px solid #3a3a3c; margin: .8em 0; padding: .3em 1em; color: #8e8e93; background: #1f1f21; border-radius: 0 6px 6px 0; }
+  .fpp-md table { border-collapse: collapse; width: 100%; margin: .8em 0; font-size: .9em; }
+  .fpp-md th, .fpp-md td { border: 1px solid #2c2c2e; padding: 7px 10px; text-align: left; }
+  .fpp-md th { background: #232325; color: #f5f5f7; font-weight: 600; }
+  .fpp-md ul, .fpp-md ol { padding-left: 1.6em; margin: .8em 0; }
+  .fpp-md li { margin: .3em 0; }
+  .fpp-md img { max-width: 100%; border-radius: 6px; }
+  .fpp-md hr { border: none; border-top: 1px solid #2c2c2e; margin: 1.2em 0; }
+  .fpp-md .katex-error { color: #ff6b6b; font-size: .85em; }
 
   /* 文件预览打开时聊天区右移留出空间 */
   body.file-preview-open #header,

@@ -1,14 +1,63 @@
 /* file-preview.js — 右侧文件预览面板（点击项目文件后展示内容） */
 
+// 支持 Markdown 渲染的扩展名
+const MD_EXTS = ['md', 'markdown', 'mdx'];
+// 支持语法高亮的代码扩展名
+const CODE_EXTS = [
+  'js', 'jsx', 'ts', 'tsx', 'py', 'java', 'go', 'rs', 'c', 'cpp', 'h', 'hpp',
+  'cs', 'php', 'rb', 'sh', 'bash', 'zsh', 'json', 'yaml', 'yml', 'toml',
+  'css', 'scss', 'html', 'xml', 'sql', 'swift', 'kt', 'kts', 'scala', 'r',
+  'lua', 'vim', 'dockerfile', 'makefile', 'ini', 'conf', 'gitignore', 'txt'
+];
+
+// 部分扩展名映射到 highlight.js 的语言名
+function hljsLang(ext) {
+  const map = { sh: 'bash', zsh: 'bash', yml: 'yaml', scss: 'css',
+    dockerfile: 'dockerfile', makefile: 'makefile', gitignore: 'bash', conf: 'ini' };
+  return map[ext] || ext;
+}
+
 function openFilePreview(name, content, meta) {
   const panel = document.getElementById('file-preview-panel');
   if (!panel) return;
   const title = document.getElementById('fpp-title');
   const metaEl = document.getElementById('fpp-meta');
-  const code = document.getElementById('fpp-code');
+  const codeEl = document.getElementById('fpp-code');
+  const mdEl = document.getElementById('fpp-md');
+  if (!codeEl || !mdEl) return;
+
   if (title) title.textContent = name || (t('filePreview') || '文件预览');
   if (metaEl) metaEl.textContent = meta || '';
-  if (code) code.textContent = content || '';
+
+  const ext = (name || '').split('.').pop().toLowerCase();
+  const isMd = MD_EXTS.includes(ext);
+  const isCode = CODE_EXTS.includes(ext);
+  const codePre = codeEl.closest('pre') || codeEl.parentElement;
+  const hljsReady = typeof hljs !== 'undefined';
+
+  if (isMd && typeof renderMarkdown === 'function') {
+    // ----- Markdown：渲染为富文本 HTML -----
+    codePre.style.display = 'none';
+    mdEl.style.display = '';
+    mdEl.innerHTML = renderMarkdown(content || '');
+    if (hljsReady) {
+      mdEl.querySelectorAll('pre code').forEach(function (b) { hljs.highlightElement(b); });
+    }
+  } else if (isCode && hljsReady) {
+    // ----- 代码文件：语法高亮 -----
+    mdEl.style.display = 'none';
+    codePre.style.display = '';
+    codeEl.textContent = content || '';
+    codeEl.className = 'language-' + hljsLang(ext);
+    try { hljs.highlightElement(codeEl); } catch (e) { /* 忽略 */ }
+  } else {
+    // ----- 其他：纯文本 -----
+    mdEl.style.display = 'none';
+    codePre.style.display = '';
+    codeEl.textContent = content || '';
+    codeEl.className = '';
+  }
+
   panel.classList.add('open');
   document.body.classList.add('file-preview-open');
   const body = panel.querySelector('.fpp-body');
@@ -22,9 +71,15 @@ function closeFilePreview() {
 }
 
 function copyFileContent() {
-  const code = document.getElementById('fpp-code');
-  if (!code) return;
-  const text = code.textContent || '';
+  const mdEl = document.getElementById('fpp-md');
+  const codeEl = document.getElementById('fpp-code');
+  let text = '';
+  if (mdEl && mdEl.style.display !== 'none') {
+    text = mdEl.textContent || '';
+  } else if (codeEl) {
+    text = codeEl.textContent || '';
+  }
+  if (!text) return;
   if (navigator.clipboard && navigator.clipboard.writeText) {
     navigator.clipboard.writeText(text).then(function () {
       if (typeof showToast === 'function') showToast(t('copied') || '已复制');
