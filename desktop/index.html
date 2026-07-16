@@ -22,14 +22,34 @@
 
 <!-- 侧边栏 -->
 <div id="sidebar">
-  <div id="session-header">
-    <h2 data-i18n="sessionsTitle">💬 会话</h2>
-    <button id="new-session-btn" data-i18n="newSession">＋ 新建</button>
+  <!-- 工作区头部 -->
+  <div id="workspace-header" class="workspace-header">
+    <div class="wh-left">
+      <span class="wh-toggle" onclick="toggleWorkspaceView()" title="折叠/展开">☐</span>
+      <span class="wh-title" data-i18n="workspaceTitle">工作区</span>
+    </div>
+    <div class="wh-actions">
+      <button class="wh-btn" onclick="toggleWorkspaceView()" title="列表/网格切换">☷</button>
+      <button class="wh-btn" onclick="showNewProjectModal()" data-i18n-title="newProject" title="新建项目">＋</button>
+    </div>
   </div>
-  <div id="session-list">
+
+  <!-- 项目列表（可滚动） -->
+  <div id="project-list" class="section project-list-section">
     <div style="padding:16px;color:#8e8e93;font-size:13px;font-style:italic;" data-i18n="loading">加载中...</div>
   </div>
-  
+
+  <!-- 文件浏览器模式（默认隐藏，点击「查看文件」后显示） -->
+  <div id="file-browser-panel" class="file-browser-panel" style="display:none;">
+    <div class="fb-header">
+      <button class="fb-back" onclick="exitFileBrowser()">←</button>
+      <span class="fb-path" id="fb-current-path"></span>
+      <button class="fb-refresh" onclick="refreshFileBrowser()" title="刷新">⟳</button>
+    </div>
+    <div id="file-tree" class="file-tree"></div>
+  </div>
+
+  <!-- 监控手风琴 -->
   <div class="sidebar-accordion" id="monitoring-accordion">
     <button class="accordion-toggle" type="button" aria-expanded="false" aria-controls="monitoring-body" onclick="toggleSidebarAccordion('monitoring-accordion')">
       <span data-i18n="monitoringTitle">📊 监控</span>
@@ -51,6 +71,7 @@
     </div>
   </div>
 
+  <!-- 技能手风琴 -->
   <div class="sidebar-accordion" id="skills-accordion">
     <button class="accordion-toggle" type="button" aria-expanded="false" aria-controls="skills-body" onclick="toggleSidebarAccordion('skills-accordion')">
       <span data-i18n="skillsTitle">🧩 技能</span>
@@ -65,8 +86,25 @@
 </div>
 <div id="skill-tooltip"></div>
 
+<!-- 右侧文件预览面板（点击项目文件后展示） -->
+<div id="file-preview-panel" class="file-preview-panel">
+  <div class="fpp-header">
+    <span class="fpp-title" id="fpp-title" data-i18n="filePreview">文件预览</span>
+    <div class="fpp-actions">
+      <button class="fpp-btn" onclick="copyFileContent()" title="复制" data-i18n-title="copyButton">📋</button>
+      <button class="fpp-btn" onclick="closeFilePreview()" title="关闭" data-i18n-title="closeButton">✕</button>
+    </div>
+  </div>
+  <div class="fpp-meta" id="fpp-meta"></div>
+  <div class="fpp-body" id="fpp-body">
+    <pre class="fpp-code"><code id="fpp-code"></code></pre>
+  </div>
+</div>
+
 <!-- 主区域 -->
 <div id="main">
+  <!-- 聊天区（默认全宽） -->
+  <div id="chat-area" class="chat-area">
   <div id="header">
     <div class="left">
       <button id="sidebar-toggle">☰</button>
@@ -119,6 +157,7 @@
         </div>
       </div>
     </div>
+  </div>
   </div>
   
   <div id="messages"></div>
@@ -495,8 +534,10 @@
 <script src="/static/js/features/stats.js"></script>
 <script src="/static/js/features/messaging.js"></script>
 <script src="/static/js/features/streaming.js"></script>
-<script src="/static/js/features/sessions.js"></script>
-<script src="/static/js/features/settings.js"></script>
+  <script src="/static/js/features/sessions.js"></script>
+  <script src="/static/js/features/file-preview.js"></script>
+  <script src="/static/js/features/workspace.js"></script>
+  <script src="/static/js/features/settings.js"></script>
 <script src="/static/js/features/database.js"></script>
 <script src="/static/js/features/permissions.js"></script>
     <script src="/static/js/features/auth.js"></script>

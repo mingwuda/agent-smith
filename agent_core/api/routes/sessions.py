@@ -23,6 +23,7 @@ class SessionInfo(BaseModel):
     updated_at: str
     message_count: int
     source: str = "web"  # "web" 或 "wechat"
+    project_id: str = ""  # 归属的项目 ID（空字符串表示未归属）
 
 
 class SessionListResponse(BaseModel):
@@ -117,11 +118,15 @@ def get_session(session_id: str, request: Request, source: str = "auto"):
     )
 
 
+class CreateSessionRequest(BaseModel):
+    project_id: str = ""
+
+
 @router.post("/sessions", response_model=CreateSessionResponse)
-def create_session(request: Request):
-    """创建新会话"""
+def create_session(req: CreateSessionRequest, request: Request):
+    """创建新会话（可指定归属项目）"""
     uid = _get_current_user(request)
-    session = session_store.create_session(uid)
+    session = session_store.create_session(uid, project_id=req.project_id or None)
     return CreateSessionResponse(id=session["id"], title=session["title"])
 
 

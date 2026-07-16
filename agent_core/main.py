@@ -449,6 +449,8 @@ from api.routes.wechat import router as wechat_router
 from api.routes.monitoring import router as monitoring_router
 from api.routes.update import router as update_router
 from api.routes.mcp import router as mcp_router
+from api.routes.projects import router as projects_router
+from api.routes.files import router as files_router
 
 app.include_router(auth_router)
 app.include_router(agent_router)
@@ -461,6 +463,8 @@ app.include_router(wechat_router)
 app.include_router(monitoring_router)
 app.include_router(update_router)
 app.include_router(mcp_router)
+app.include_router(projects_router)
+app.include_router(files_router)
 
 
 # ---------- 入口 ----------

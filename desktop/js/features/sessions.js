@@ -50,7 +50,12 @@ async function loadSessions() {
       currentSessionSource = (sessionsCache[0] && sessionsCache[0].source) || '';
       threadId = currentSessionId || threadId;
     }
-    renderSessionList(sessionsCache, currentSessionId);
+    // 渲染：优先使用工作区/项目视图（workspace.js 提供），否则降级为旧列表
+    if (typeof renderWorkspace === 'function') {
+      await renderWorkspace();
+    } else {
+      renderSessionList(sessionsCache, currentSessionId);
+    }
   } catch {}
 }
 
@@ -220,13 +225,15 @@ function addBotMessageWithSteps(content, steps, todoList) {
 }
 
 async function switchSession(sessionId, source, forceLoad = false) {
+  // 切换会话时退出文件浏览器视图（若有）
+  if (typeof exitFileBrowser === 'function') exitFileBrowser();
   if (sessionId === currentSessionId && source === currentSessionSource && !forceLoad) return;
   currentSessionId = sessionId;
   currentSessionSource = source || 'web';
   threadId = sessionId;
 
-  // 更新激活样式
-  document.querySelectorAll('.session-item').forEach(el => {
+  // 更新激活样式（同时兼容旧 .session-item 与新 .psession-item）
+  document.querySelectorAll('.session-item, .psession-item').forEach(el => {
     el.classList.toggle('active', el.dataset.key === _sessionKey({id: sessionId, source: currentSessionSource}));
   });
 

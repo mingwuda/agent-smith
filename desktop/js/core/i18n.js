@@ -175,6 +175,29 @@ const I18N = {
     currentPassword: '当前密码',
     newPassword: '新密码',
     confirmPassword: '确认新密码',
+    // ===== 工作区 / 项目 / 文件浏览器 =====
+    workspaceTitle: '工作区',
+    noProjects: '暂无项目，点击右上角 ＋ 新建',
+    noDirSet: '未设置目录',
+    viewFiles: '查看文件',
+    editProject: '编辑',
+    deleteProject: '删除',
+    noSessionsInProject: '该项目下暂无会话',
+    newSessionInProject: '新建会话',
+    unassignedSessions: '其他会话',
+    projectNamePrompt: '项目名称：',
+    projectDirPrompt: '项目目录路径（留空则使用默认工作区）：',
+    createProjectFailed: '创建项目失败',
+    deleteProjectConfirm: '确定删除该项目？其下的会话不会被删除，仅解除归属。',
+    renameProjectPrompt: '项目名称：',
+    setProjectDirPrompt: '项目目录：',
+    folderEmpty: '空文件夹',
+    fileNotPreviewable: '该文件类型不可预览',
+    readFileFailed: '读取文件失败',
+    filePreview: '文件预览',
+    defaultWorkspace: '默认工作区',
+    loadFailed: '加载失败',
+    copied: '已复制',
   },
   en: {
     appTitle: 'Moss Agent',
@@ -347,6 +370,29 @@ const I18N = {
     currentPassword: 'Current Password',
     newPassword: 'New Password',
     confirmPassword: 'Confirm Password',
+    // ===== Workspace / Projects / File browser =====
+    workspaceTitle: 'Workspace',
+    noProjects: 'No projects yet — click ＋ to create',
+    noDirSet: 'No directory set',
+    viewFiles: 'View files',
+    editProject: 'Edit',
+    deleteProject: 'Delete',
+    noSessionsInProject: 'No sessions in this project',
+    newSessionInProject: 'New session',
+    unassignedSessions: 'Other sessions',
+    projectNamePrompt: 'Project name:',
+    projectDirPrompt: 'Project directory (leave empty for default workspace):',
+    createProjectFailed: 'Failed to create project',
+    deleteProjectConfirm: 'Delete this project? Its sessions will not be deleted, only unassigned.',
+    renameProjectPrompt: 'Project name:',
+    setProjectDirPrompt: 'Project directory:',
+    folderEmpty: 'Empty folder',
+    fileNotPreviewable: 'This file type cannot be previewed',
+    readFileFailed: 'Failed to read file',
+    filePreview: 'File Preview',
+    defaultWorkspace: 'Default workspace',
+    loadFailed: 'Failed to load',
+    copied: 'Copied',
   },
 };
 
@@ -380,7 +426,11 @@ function switchLanguage() {
   localStorage.setItem('desktop-agent-language', currentLanguage);
   applyI18n();
   updateLangLabel();
-  renderSessionList(sessionsCache, currentSessionId);
+  if (typeof renderWorkspace === 'function') {
+    renderWorkspace();
+  } else {
+    renderSessionList(sessionsCache, currentSessionId);
+  }
   refreshSkills();
   checkHealth();
 }

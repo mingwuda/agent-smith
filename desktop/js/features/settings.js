@@ -2,9 +2,11 @@
    依赖: state.js, util.js, i18n.js, messaging.js(addMessage), stats.js(checkHealth, refreshStats) */
 
 // ---------- 设置按钮 ----------
-document.getElementById('settings-btn').onclick = openSettings;
-// 新建会话按钮
-document.getElementById('new-session-btn').onclick = newSession;
+// 注意：settingsBtn 已在 state.js 的顶层 DOM 引用中声明，这里直接复用全局变量
+if (settingsBtn) settingsBtn.onclick = openSettings;
+// 新建会话按钮（全局新建入口已从侧边栏移除，仅当元素存在时绑定）
+const newSessionBtn = document.getElementById('new-session-btn');
+if (newSessionBtn) newSessionBtn.onclick = newSession;
 
 // ---------- Provider 工具函数 ----------
 

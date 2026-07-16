@@ -90,6 +90,7 @@ def _connect(user_id: str = "default"):
 
 
 def _init_db(conn: sqlite3.Connection):
+    # ── 会话表 ──
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS sessions (
@@ -105,6 +106,26 @@ def _init_db(conn: sqlite3.Connection):
         conn.execute("ALTER TABLE sessions ADD COLUMN workspace TEXT DEFAULT ''")
     except sqlite3.OperationalError:
         pass  # 列已存在
+    # 兼容性迁移：添加 project_id 外键（关联项目）
+    try:
+        conn.execute("ALTER TABLE sessions ADD COLUMN project_id TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
+
+    # ── 项目表 ──
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS projects (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            directory_path TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+
+    # ── 消息表 ──
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS messages (
@@ -134,22 +155,26 @@ def _row_to_session(row: sqlite3.Row, include_messages: bool = False, messages: 
         session["workspace"] = row["workspace"] or ""
     except (IndexError, KeyError):
         session["workspace"] = ""
+    try:
+        session["project_id"] = row["project_id"] or ""
+    except (IndexError, KeyError):
+        session["project_id"] = ""
     if include_messages:
         session["messages"] = messages or []
     return session
 
 
-def create_session(user_id: str = "default", title: Optional[str] = None, session_id: Optional[str] = None) -> dict:
+def create_session(user_id: str = "default", title: Optional[str] = None, session_id: Optional[str] = None, project_id: Optional[str] = None) -> dict:
     """创建一个新会话"""
     session_id = session_id or str(uuid.uuid4())[:8]
     now = _timestamp()
     with _connect(user_id) as conn:
         conn.execute(
             """
-            INSERT OR IGNORE INTO sessions (id, title, created_at, updated_at)
-            VALUES (?, ?, ?, ?)
+            INSERT OR IGNORE INTO sessions (id, title, created_at, updated_at, project_id)
+            VALUES (?, ?, ?, ?, ?)
             """,
-            (session_id, title or f"会话 {now[:16].replace('T', ' ')}", now, now),
+            (session_id, title or f"会话 {now[:16].replace('T', ' ')}", now, now, project_id or ''),
         )
     return get_session(user_id, session_id) or {
         "id": session_id,
@@ -186,7 +211,8 @@ def list_sessions(user_id: str = "default") -> list[dict]:
     with _connect(user_id) as conn:
         rows = conn.execute(
             """
-            SELECT s.id, s.title, s.created_at, s.updated_at, COUNT(m.id) AS message_count
+            SELECT s.id, s.title, s.created_at, s.updated_at, COUNT(m.id) AS message_count,
+                   s.workspace, COALESCE(s.project_id,'') AS project_id
             FROM sessions s
             LEFT JOIN messages m ON m.session_id = s.id
             GROUP BY s.id
@@ -201,7 +227,8 @@ def get_session(user_id: str, session_id: str) -> Optional[dict]:
     with _connect(user_id) as conn:
         row = conn.execute(
             """
-            SELECT s.id, s.title, s.created_at, s.updated_at, COUNT(m.id) AS message_count
+            SELECT s.id, s.title, s.created_at, s.updated_at, COUNT(m.id) AS message_count,
+                   s.workspace, COALESCE(s.project_id,'') AS project_id
             FROM sessions s LEFT JOIN messages m ON m.session_id = s.id
             WHERE s.id = ? GROUP BY s.id
             """,
@@ -262,3 +289,147 @@ def get_session_workspace(user_id: str, session_id: str) -> str:
             except (IndexError, KeyError):
                 return ""
         return ""
+
+
+# ═══════════════════════════════════════════════
+#  项目管理（Workspace 侧边栏）
+# ═══════════════════════════════════════════════
+
+def create_project(user_id: str, name: str, directory_path: str = "") -> dict:
+    """创建项目"""
+    project_id = "proj_" + str(uuid.uuid4())[:8]
+    now = _timestamp()
+    with _connect(user_id) as conn:
+        conn.execute(
+            "INSERT INTO projects (id, name, directory_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+            (project_id, name, directory_path, now, now),
+        )
+    return get_project(user_id, project_id) or {
+        "id": project_id, "name": name, "directory_path": directory_path,
+        "created_at": now, "updated_at": now,
+    }
+
+
+def list_projects(user_id: str = "default") -> list[dict]:
+    """列出所有项目（含每个项目的会话数）"""
+    with _connect(user_id) as conn:
+        rows = conn.execute(
+            """
+            SELECT p.id, p.name, p.directory_path, p.created_at, p.updated_at,
+                   COUNT(s.id) AS session_count
+            FROM projects p
+            LEFT JOIN sessions s ON s.project_id = p.id
+            GROUP BY p.id
+            ORDER BY p.updated_at DESC
+            """
+        ).fetchall()
+        projects = []
+        for r in rows:
+            projects.append({
+                "id": r["id"],
+                "name": r["name"],
+                "directory_path": r["directory_path"] or "",
+                "created_at": r["created_at"],
+                "updated_at": r["updated_at"],
+                "session_count": r["session_count"] or 0,
+            })
+        return projects
+
+
+def get_project(user_id: str, project_id: str) -> Optional[dict]:
+    """获取单个项目详情"""
+    with _connect(user_id) as conn:
+        row = conn.execute(
+            """
+            SELECT p.id, p.name, p.directory_path, p.created_at, p.updated_at,
+                   COUNT(s.id) AS session_count
+            FROM projects p LEFT JOIN sessions s ON s.project_id = p.id
+            WHERE p.id = ? GROUP BY p.id
+            """,
+            (project_id,),
+        ).fetchone()
+        if not row:
+            return None
+        return {
+            "id": row["id"], "name": row["name"],
+            "directory_path": row["directory_path"] or "",
+            "created_at": row["created_at"], "updated_at": row["updated_at"],
+            "session_count": row["session_count"] or 0,
+        }
+
+
+def update_project(user_id: str, project_id: str, name: Optional[str] = None,
+                  directory_path: Optional[str] = None) -> bool:
+    """更新项目名称或目录路径"""
+    now = _timestamp()
+    sets = []
+    vals = []
+    if name is not None:
+        sets.append("name = ?")
+        vals.append(name)
+    if directory_path is not None:
+        sets.append("directory_path = ?")
+        vals.append(directory_path)
+    # updated_at 始终更新，且必须放在所有可选字段之后，保证 SET 子句与参数顺序一致
+    sets.append("updated_at = ?")
+    vals.append(now)
+    vals.append(project_id)
+    sql = f"UPDATE projects SET {', '.join(sets)} WHERE id = ?"
+    with _connect(user_id) as conn:
+        cur = conn.execute(sql, vals)
+        return cur.rowcount > 0
+
+
+def delete_project(user_id: str, project_id: str) -> bool:
+    """删除项目（其下属会话的 project_id 被置空，会话本身不删）"""
+    with _connect(user_id) as conn:
+        # 先将关联会话的 project_id 置空
+        conn.execute(
+            "UPDATE sessions SET project_id = '' WHERE project_id = ?",
+            (project_id,),
+        )
+        cur = conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+        return cur.rowcount > 0
+
+
+def set_session_project(user_id: str, session_id: str, project_id: str) -> bool:
+    """将会话归属到某个项目"""
+    now = _timestamp()
+    with _connect(user_id) as conn:
+        cur = conn.execute(
+            "UPDATE sessions SET project_id = ?, updated_at = ? WHERE id = ?",
+            (project_id, now, session_id),
+        )
+        return cur.rowcount > 0
+
+
+def list_sessions_by_project(user_id: str, project_id: str) -> list[dict]:
+    """列出某个项目下的所有会话"""
+    with _connect(user_id) as conn:
+        rows = conn.execute(
+            """
+            SELECT s.id, s.title, s.created_at, s.updated_at, COUNT(m.id) AS message_count,
+                   s.workspace, s.project_id
+            FROM sessions s
+            LEFT JOIN messages m ON m.session_id = s.id
+            WHERE s.project_id = ?
+            GROUP BY s.id ORDER BY s.updated_at DESC
+            """,
+            (project_id,),
+        ).fetchall()
+        return [_row_to_session(r) for r in rows]
+
+
+def list_sessions_unassigned(user_id: str = "default") -> list[dict]:
+    """列出未归属任何项目的会话"""
+    with _connect(user_id) as conn:
+        rows = conn.execute(
+            """
+            SELECT s.id, s.title, s.created_at, s.updated_at, COUNT(m.id) AS message_count,
+                   s.workspace, COALESCE(s.project_id,'')
+            FROM sessions s LEFT JOIN messages m ON m.session_id = s.id
+            WHERE COALESCE(s.project_id,'') = '' OR s.project_id IS NULL
+            GROUP BY s.id ORDER BY s.updated_at DESC
+            """
+        ).fetchall()
+        return [_row_to_session(r) for r in rows]

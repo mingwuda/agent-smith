@@ -60,11 +60,18 @@ class UpdateUserRoleRequest(BaseModel):
 
 @router.get("/")
 def serve_ui():
-    """提供桌面 UI"""
-    from main import _html_content
-    if _html_content:
+    """提供桌面 UI（每次从磁盘读取 index.html，便于开发时热更新，无需重启后端）"""
+    from main import UI_DIR, _html_content
+    ui_index = UI_DIR / "index.html"
+    content = _html_content
+    if ui_index.exists():
+        try:
+            content = ui_index.read_text(encoding="utf-8")
+        except OSError:
+            pass
+    if content:
         headers = {"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache", "Expires": "0"}
-        return HTMLResponse(_html_content, headers=headers)
+        return HTMLResponse(content, headers=headers)
     return HTMLResponse("<h1>Moss Agent API</h1><p>UI not found. Use /docs for API docs.</p>")
 
 

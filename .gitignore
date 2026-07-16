@@ -38,3 +38,7 @@ defender_check.txt
 procs.txt
 *.db
 *.sqlite3
+
+# 本地生成的工作区视频/项目产物（避免再次污染仓库）
+my-first-video/
+my-first-video-midnight/
