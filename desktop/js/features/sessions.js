@@ -265,7 +265,11 @@ async function switchSession(sessionId, source, forceLoad = false) {
 
 async function newSession() {
   try {
-    const res = await fetch('/sessions', { method: 'POST' });
+    const res = await fetch('/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project_id: '' }),
+    });
     if (!res.ok) return;
     const data = await res.json();
     currentSessionId = data.id;

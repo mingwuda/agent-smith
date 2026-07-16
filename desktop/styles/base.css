@@ -648,6 +648,11 @@
   .psession-item .psi-del:hover { color: #ff453a; }
   .project-new-session { display: flex; align-items: center; gap: 6px; padding: 6px 10px 8px 22px; cursor: pointer; font-size: 12px; color: #8e8e93; }
   .project-new-session:hover { color: #007aff; }
+  .project-new-session-inline {
+    cursor: pointer; font-size: 16px; color: #8e8e93;
+    padding: 2px 6px; border-radius: 6px; flex-shrink: 0; user-select: none;
+  }
+  .project-new-session-inline:hover { background: #2c2c2e; color: #007aff; }
 
   /* 文件浏览器模式 */
   .file-browser-panel { flex: 1; display: none; flex-direction: column; min-height: 0; background: #161618; }

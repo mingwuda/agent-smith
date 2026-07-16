@@ -89,6 +89,8 @@ async function renderWorkspace() {
     html += '    <span class="proj-icon">💬</span>';
     html += '    <div class="proj-main"><div class="proj-name">' +
       escapeHtml((t('unassignedSessions') || '其他会话') + ' (' + unassigned.length + ')') + '</div></div>';
+    html += '    <span class="project-new-session-inline" onclick="newSession()" title="' +
+      escapeHtml(t('newSessionInProject') || '新建会话') + '">＋</span>';
     html += '  </div>';
     html += '  <div class="project-sessions">';
     unassigned.forEach(s => {
