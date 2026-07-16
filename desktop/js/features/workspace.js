@@ -70,6 +70,7 @@ async function renderWorkspace() {
             'onclick="switchSession(\'' + s.id + '\',\'' + (s.source || 'web') + '\')">';
           html += '  <span class="psi-icon">' + ((s.source === 'wechat') ? '📱' : '💬') + '</span>';
           html += '  <span class="psi-title">' + escapeHtml(s.title || t('unnamed') || '未命名') + '</span>';
+          html += '  <span class="psi-meta">' + escapeHtml(t('messagesCount', { count: s.message_count || 0 })) + '</span>';
           html += '  <span class="psi-del" onclick="event.stopPropagation(); deleteSession(\'' + s.id + '\')">✕</span>';
           html += '</div>';
         });
@@ -99,6 +100,7 @@ async function renderWorkspace() {
         'onclick="switchSession(\'' + s.id + '\',\'' + (s.source || 'web') + '\')">';
       html += '  <span class="psi-icon">' + ((s.source === 'wechat') ? '📱' : '💬') + '</span>';
       html += '  <span class="psi-title">' + escapeHtml(s.title || t('unnamed') || '未命名') + '</span>';
+      html += '  <span class="psi-meta">' + escapeHtml(t('messagesCount', { count: s.message_count || 0 })) + '</span>';
       html += '  <span class="psi-del" onclick="event.stopPropagation(); deleteSession(\'' + s.id + '\')">✕</span>';
       html += '</div>';
     });

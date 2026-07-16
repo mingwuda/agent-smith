@@ -643,6 +643,7 @@
   .psession-item.active { background: #007aff22; color: #fff; }
   .psession-item .psi-icon { font-size: 11px; opacity: .7; flex: 0 0 auto; }
   .psession-item .psi-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .psession-item .psi-meta { flex: 0 0 auto; font-size: 11px; color: #8e8e93; white-space: nowrap; margin-left: 6px; }
   .psession-item .psi-del { opacity: 0; color: #8e8e93; cursor: pointer; font-size: 11px; padding: 0 2px; }
   .psession-item:hover .psi-del { opacity: 1; }
   .psession-item .psi-del:hover { color: #ff453a; }
