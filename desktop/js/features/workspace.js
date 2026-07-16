@@ -68,7 +68,7 @@ async function renderWorkspace() {
           const isActive = s.id === currentSessionId && s.source === currentSessionSource;
           html += '<div class="psession-item ' + (isActive ? 'active' : '') + '" data-key="' + _sessionKey(s) + '" ' +
             'onclick="switchSession(\'' + s.id + '\',\'' + (s.source || 'web') + '\')">';
-          html += '  <span class="psi-icon">💬</span>';
+          html += '  <span class="psi-icon">' + ((s.source === 'wechat') ? '📱' : '💬') + '</span>';
           html += '  <span class="psi-title">' + escapeHtml(s.title || t('unnamed') || '未命名') + '</span>';
           html += '  <span class="psi-del" onclick="event.stopPropagation(); deleteSession(\'' + s.id + '\')">✕</span>';
           html += '</div>';
@@ -97,7 +97,7 @@ async function renderWorkspace() {
       const isActive = s.id === currentSessionId && s.source === currentSessionSource;
       html += '<div class="psession-item ' + (isActive ? 'active' : '') + '" data-key="' + _sessionKey(s) + '" ' +
         'onclick="switchSession(\'' + s.id + '\',\'' + (s.source || 'web') + '\')">';
-      html += '  <span class="psi-icon">💬</span>';
+      html += '  <span class="psi-icon">' + ((s.source === 'wechat') ? '📱' : '💬') + '</span>';
       html += '  <span class="psi-title">' + escapeHtml(s.title || t('unnamed') || '未命名') + '</span>';
       html += '  <span class="psi-del" onclick="event.stopPropagation(); deleteSession(\'' + s.id + '\')">✕</span>';
       html += '</div>';
