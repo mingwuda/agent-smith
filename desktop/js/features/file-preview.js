@@ -44,8 +44,19 @@ function openFilePreview(name, content, meta) {
   const title = document.getElementById('fpp-title');
   const metaEl = document.getElementById('fpp-meta');
   const codeEl = document.getElementById('fpp-code');
+  const codeWrap = document.getElementById('fpp-code-wrap');
+  const gutter = document.getElementById('fpp-gutter');
   const mdEl = document.getElementById('fpp-md');
   if (!codeEl || !mdEl) return;
+
+  // 按内容行数生成连续行号(零依赖行号列), 行号与代码逐行对齐
+  function fillGutter(text) {
+    if (!gutter) return;
+    const n = (text || '').split('\n').length;
+    let s = '';
+    for (let i = 1; i <= n; i++) s += i + (i < n ? '\n' : '');
+    gutter.textContent = s;
+  }
 
   if (icon) icon.textContent = fileIcon(name);
   if (title) title.textContent = name || (t('filePreview') || '文件预览');
@@ -54,21 +65,20 @@ function openFilePreview(name, content, meta) {
   const ext = (name || '').split('.').pop().toLowerCase();
   const isMd = MD_EXTS.includes(ext);
   const isCode = CODE_EXTS.includes(ext);
-  const codePre = codeEl.closest('pre') || codeEl.parentElement;
   const hljsReady = typeof hljs !== 'undefined';
 
   if (isMd && typeof renderMarkdown === 'function') {
     // ----- Markdown：渲染为富文本 HTML -----
-    codePre.style.display = 'none';
+    if (codeWrap) codeWrap.style.display = 'none';
     mdEl.style.display = '';
     mdEl.innerHTML = renderMarkdown(content || '');
     if (hljsReady) {
       mdEl.querySelectorAll('pre code').forEach(function (b) { hljs.highlightElement(b); });
     }
   } else if (isCode && hljsReady) {
-    // ----- 代码文件：语法高亮 -----
+    // ----- 代码文件：语法高亮 + 行号 -----
     mdEl.style.display = 'none';
-    codePre.style.display = '';
+    if (codeWrap) codeWrap.style.display = '';
     codeEl.textContent = content || '';
     codeEl.className = 'language-' + hljsLang(ext);
     // 复用同一 <code> 元素时, 清除上一次高亮留下的 data-highlighted 标记,
@@ -76,12 +86,14 @@ function openFilePreview(name, content, meta) {
     codeEl.removeAttribute('data-highlighted');
     codeEl.classList.remove('hljs');
     try { hljs.highlightElement(codeEl); } catch (e) { /* 忽略 */ }
+    fillGutter(content);
   } else {
-    // ----- 其他：纯文本 -----
+    // ----- 其他：纯文本 + 行号 -----
     mdEl.style.display = 'none';
-    codePre.style.display = '';
+    if (codeWrap) codeWrap.style.display = '';
     codeEl.textContent = content || '';
     codeEl.className = '';
+    fillGutter(content);
   }
 
   panel.classList.add('open');
