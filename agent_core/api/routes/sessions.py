@@ -47,6 +47,11 @@ class CreateSessionResponse(BaseModel):
     title: str
 
 
+def _strip_wechat_prefix(title: str) -> str:
+    """去掉微信会话标题里的 [微信] 前缀（图标已能区分来源，前缀冗余）"""
+    return title.removeprefix("[微信]")
+
+
 class SetWorkspaceRequest(BaseModel):
     workspace: str
 
@@ -75,6 +80,8 @@ def list_sessions(request: Request):
         SessionInfo(**s, source="web") for s in web_sessions
     ]
     for s in wechat_sessions:
+        s = dict(s)
+        s["title"] = _strip_wechat_prefix(s.get("title", ""))
         sessions.append(SessionInfo(**s, source="wechat"))
     sessions.sort(key=lambda s: s.updated_at, reverse=True)
     current_id = sessions[0].id if sessions else "default"
@@ -110,9 +117,12 @@ def get_session(session_id: str, request: Request, source: str = "auto"):
 
     if not session:
         raise HTTPException(404, "会话不存在")
+    raw_title = session.get("title", "未命名")
+    if is_wechat:
+        raw_title = _strip_wechat_prefix(raw_title)
     return SessionMessagesResponse(
         id=session["id"],
-        title=session.get("title", "未命名"),
+        title=raw_title,
         messages=session.get("messages", []),
         source="wechat" if is_wechat else "web",
     )

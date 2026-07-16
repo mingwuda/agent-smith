@@ -722,7 +722,7 @@ class WeChatBot:
             logger.debug("[微信Bot:%s] 触发 /new 命令", self.user_id)
             new_sid = uuid.uuid4().hex[:8]
             session_store.create_session(
-                wechat_uid, title=f"[微信] 新会话", session_id=new_sid,
+                wechat_uid, title="新会话", session_id=new_sid,
             )
             self._wechat_sessions[from_user] = new_sid
             # 会话列表已变化，序号映射失效
@@ -818,7 +818,7 @@ class WeChatBot:
             if session is None:
                 session = session_store.create_session(
                     wechat_uid,
-                    title=f"[微信] {text[:20]}",
+                    title=text[:20],
                     session_id=session_id,
                 )
 
@@ -879,7 +879,7 @@ class WeChatBot:
             sess = session_store.get_session(wechat_uid, session_id)
             if sess and sess.get("message_count", 0) <= 2:
                 short = text[:30] + ("..." if len(text) > 30 else "")
-                session_store.rename_session(wechat_uid, session_id, f"[微信] {short}")
+                session_store.rename_session(wechat_uid, session_id, short)
 
         # 发送回复（含图片检测 + 图片/文本分开发送）
         if reply:
