@@ -17,15 +17,37 @@ function hljsLang(ext) {
   return map[ext] || ext;
 }
 
+function fileIcon(name) {
+  const ext = (name || '').split('.').pop().toLowerCase();
+  if (name && !name.includes('.')) return '📄';
+  const map = {
+    md: '📝', markdown: '📝', mdx: '📝',
+    js: '📜', jsx: '⚛️', ts: '📘', tsx: '⚛️',
+    py: '🐍', java: '☕', go: '🐹', rs: '⚙️',
+    c: '🔧', cpp: '🔧', h: '🔧', hpp: '🔧',
+    cs: '🔷', php: '🐘', rb: '💎', swift: '🦉',
+    kt: '🅺', kts: '🅺', scala: '🔴', r: '📊',
+    lua: '🌙', vim: '📄',
+    sh: '⌨️', bash: '⌨️', zsh: '⌨️',
+    json: '📋', yaml: '⚙️', yml: '⚙️', toml: '⚙️',
+    css: '🎨', scss: '🎨', html: '🌐', xml: '🌐',
+    sql: '🗃️', dockerfile: '🐳', makefile: '🔨',
+    ini: '⚙️', conf: '⚙️', gitignore: '🔒', txt: '📄',
+  };
+  return map[ext] || '📄';
+}
+
 function openFilePreview(name, content, meta) {
   const panel = document.getElementById('file-preview-panel');
   if (!panel) return;
+  const icon = document.getElementById('fpp-icon');
   const title = document.getElementById('fpp-title');
   const metaEl = document.getElementById('fpp-meta');
   const codeEl = document.getElementById('fpp-code');
   const mdEl = document.getElementById('fpp-md');
   if (!codeEl || !mdEl) return;
 
+  if (icon) icon.textContent = fileIcon(name);
   if (title) title.textContent = name || (t('filePreview') || '文件预览');
   if (metaEl) metaEl.textContent = meta || '';
 
@@ -49,6 +71,10 @@ function openFilePreview(name, content, meta) {
     codePre.style.display = '';
     codeEl.textContent = content || '';
     codeEl.className = 'language-' + hljsLang(ext);
+    // 复用同一 <code> 元素时, 清除上一次高亮留下的 data-highlighted 标记,
+    // 否则 highlight.js 检测到"已高亮"会直接 return, 导致第二次起不再高亮
+    codeEl.removeAttribute('data-highlighted');
+    codeEl.classList.remove('hljs');
     try { hljs.highlightElement(codeEl); } catch (e) { /* 忽略 */ }
   } else {
     // ----- 其他：纯文本 -----
