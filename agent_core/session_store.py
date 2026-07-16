@@ -278,7 +278,12 @@ def set_session_workspace(user_id: str, session_id: str, workspace: str) -> bool
 
 
 def get_session_workspace(user_id: str, session_id: str) -> str:
-    """获取会话的工作目录。若会话未单独设置，则回退到所属项目的 directory_path。"""
+    """获取会话的工作目录。优先级：会话自身 workspace > 所属项目 directory_path。
+
+    兼容性：项目可能建在 default 命名空间，而当前会话在其它命名空间（如 admin），
+    因此本用户库查不到项目时，回退到 default 库查询。
+    """
+    pid = ""
     with _connect(user_id) as conn:
         row = conn.execute(
             "SELECT workspace, project_id FROM sessions WHERE id = ?", (session_id,)
@@ -295,19 +300,36 @@ def get_session_workspace(user_id: str, session_id: str) -> str:
             except (IndexError, KeyError):
                 pid = ""
             if pid:
-                proj = conn.execute(
-                    "SELECT directory_path FROM projects WHERE id = ?", (pid,)
-                ).fetchone()
-                if proj:
-                    try:
-                        dp = proj["directory_path"]
-                        if dp and dp.strip():
-                            return dp.strip()
-                    except (IndexError, KeyError):
-                        pass
-            return ""
+                dp = _project_dir_of(conn, pid)
+                if dp:
+                    return dp
         except (IndexError, KeyError):
-            return ""
+            pass
+    # 跨命名空间回退：项目可能建在 default 库
+    if pid and user_id and user_id != "default":
+        try:
+            with _connect("default") as dconn:
+                dp = _project_dir_of(dconn, pid)
+                if dp:
+                    return dp
+        except Exception:
+            pass
+    return ""
+
+
+def _project_dir_of(conn, project_id: str) -> str:
+    """在当前连接的 projects 表中查项目目录，取到则返回 stripped 路径，否则空串。"""
+    try:
+        proj = conn.execute(
+            "SELECT directory_path FROM projects WHERE id = ?", (project_id,)
+        ).fetchone()
+        if proj:
+            dp = proj["directory_path"]
+            if dp and dp.strip():
+                return dp.strip()
+    except (IndexError, KeyError, sqlite3.OperationalError):
+        pass
+    return ""
 
 
 # ═══════════════════════════════════════════════
