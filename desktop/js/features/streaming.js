@@ -6,6 +6,23 @@
 var _currentPythonOutEl = null; // 当前 run_python 的实时日志容器
 var _lastToolImageHtml = null; // 最近一次工具结果的图片 Markdown
 
+// Agent 三段式输出卡片状态
+var _agentStartTime = 0;       // 本轮开始时间戳（用于计算耗时）
+var _timerInterval = null;     // 耗时更新定时器
+var _currentActiveLine = null; // 当前执行中动作行 DOM
+var _currentProgressLine = null; // 当前进度指示行 DOM
+
+// ---------- 耗时格式化 ----------
+
+function formatElapsed(ms) {
+  if (ms < 1000) return ms + 'ms';
+  var s = Math.floor(ms / 1000);
+  if (s < 60) return s + 's';
+  var m = Math.floor(s / 60);
+  var sec = s % 60;
+  return m + 'm ' + (sec < 10 ? '0' : '') + sec + 's';
+}
+
 // ---------- Typing / Loading 指示器 ----------
 
 function showTyping() {
@@ -127,13 +144,71 @@ async function send() {
   streamingActive = true;
   showTyping();
   
-  // 初始化步骤容器和 bot 消息
+  // 初始化步骤容器和 bot 消息（三段式卡片）
   currentStepsEl = null;
   currentBotMsgEl = null;
   currentFinalContent = '';
   totalSteps = 0;
   hasToolCalls = false;
   generatingBadgeEl = null;
+  _agentStartTime = Date.now();
+  _currentActiveLine = null;
+  _currentProgressLine = null;
+
+  // 用于挂载本轮卡片的消息容器
+  const container = document.getElementById('messages');
+
+  // 创建新的 .agent-response 卡片作为本轮输出容器
+  var responseCard = document.createElement('div');
+  responseCard.className = 'agent-response';
+  responseCard.dataset.roundId = 'r-' + Date.now();
+
+  // 第一行：头像 + 耗时
+  var headerEl = document.createElement('div');
+  headerEl.className = 'agent-header';
+  headerEl.innerHTML =
+    '<div class="agent-avatar">🤖</div>' +
+    '<span class="agent-toggle-arrow">▶</span>' +
+    '<span class="agent-time"><span class="agent-time-label">工作耗时:</span> <span class="agent-time-val">0s</span></span>';
+  headerEl.onclick = function() {
+    responseCard.classList.toggle('collapsed');
+  };
+  responseCard.appendChild(headerEl);
+
+  // 展开区：思考+工具调用
+  var bodyEl = document.createElement('div');
+  bodyEl.className = 'agent-body';
+  responseCard.appendChild(bodyEl);
+
+  // 第二行：当前动作（初始隐藏）
+  var activeLineEl = document.createElement('div');
+  activeLineEl.className = 'agent-active-line';
+  activeLineEl.style.display = 'none';
+  responseCard.appendChild(activeLineEl);
+  _currentActiveLine = activeLineEl;
+
+  // 第三行：进度指示（初始隐藏）
+  var progressLineEl = document.createElement('div');
+  progressLineEl.className = 'agent-progress-line';
+  progressLineEl.style.display = 'none';
+  progressLineEl.innerHTML = '<span class="agent-progress-spinner"></span><span>' + escapeHtml(t('agentPlanning') || 'Agent 正在规划与执行...') + '</span>';
+  responseCard.appendChild(progressLineEl);
+  _currentProgressLine = progressLineEl;
+
+  container.appendChild(responseCard);
+
+  // 将 currentStepsEl 指向 bodyEl（向后兼容现有逻辑）
+  currentStepsEl = bodyEl;
+
+  // 启动耗时计时器
+  if (_timerInterval) clearInterval(_timerInterval);
+  _timerInterval = setInterval(function() {
+    var elapsed = Date.now() - _agentStartTime;
+    var valEl = responseCard.querySelector('.agent-time-val');
+    if (valEl) {
+      valEl.textContent = formatElapsed(elapsed);
+    }
+  }, 500);
   // 物理移除上一轮/上一会话的 todo 面板，避免跨会话泄漏
   if (_currentTodoPanel && _currentTodoPanel.parentNode) {
     _currentTodoPanel.remove();
@@ -223,12 +298,17 @@ async function send() {
     stopStreamIdleWatch();
     closePythonProgress();
     hideTyping();
+    // 清理耗时定时器
+    if (_timerInterval) { clearInterval(_timerInterval); _timerInterval = null; }
     document.querySelectorAll('.thinking-step').forEach(el => el.remove());
     removeGeneratingBadge();
     // 兜底：清理页面上所有残留的"执行中"步骤状态
     document.querySelectorAll('.tool-status-dot.running').forEach(d => {
       d.className = 'tool-status-dot done';
     });
+    // 隐藏执行中状态行和进度行（done 事件已处理最终输出）
+    if (_currentActiveLine) { _currentActiveLine.style.display = 'none'; }
+    if (_currentProgressLine) { _currentProgressLine.style.display = 'none'; }
     streamingActive = false;
     isLoading = false;
     currentAbortController = null;
@@ -245,7 +325,9 @@ function handleStreamEvent(data) {
   const container = document.getElementById('messages');
 
   function ensureStepsContainer() {
+    // currentStepsEl 在 send() 中已初始化为 .agent-body，直接复用
     if (currentStepsEl) return currentStepsEl;
+    // 降级：如果还没创建（如历史回放场景），用旧逻辑
     currentStepsEl = document.createElement('div');
     currentStepsEl.className = 'steps-container';
     if (currentBotMsgEl) {
@@ -254,6 +336,13 @@ function handleStreamEvent(data) {
       container.appendChild(currentStepsEl);
     }
     return currentStepsEl;
+  }
+
+  // 获取当前 responseCard（向上查找）
+  function getResponseCard() {
+    var el = currentStepsEl;
+    while (el && !el.classList.contains('agent-response')) el = el.parentElement;
+    return el;
   }
   
   // 工具函数：创建进度条（如果有步骤容器且有步骤数）
@@ -281,6 +370,38 @@ function handleStreamEvent(data) {
       const hints = currentStepsEl.querySelectorAll('.thinking-step');
       hints.forEach(el => el.remove());
     }
+  }
+
+  // 工具函数：更新第二行「当前动作」
+  function updateActiveLine(icon, text, detailHtml, status) {
+    var card = getResponseCard();
+    if (!card || !_currentActiveLine) return;
+    _currentActiveLine.style.display = 'flex';
+    var statusClass = status || 'running';
+    // 防御：text 为空时使用兜底文案，避免显示空白行
+    var displayText = text && String(text).trim() ? text : (t('executingTask') || '正在执行');
+    _currentActiveLine.innerHTML =
+      '<span class="active-action-icon">' + (icon || '🔧') + '</span>' +
+      '<span class="active-action-text">' + escapeHtml(displayText) + '</span>' +
+      '<span class="active-action-toggle">▶</span>' +
+      '<span class="active-status-dot ' + statusClass + '">' + (statusClass === 'running' ? '' : '') + '</span>' +
+      '<div class="active-action-detail">' + (detailHtml || '') + '</div>';
+    // 点击切换详情展开
+    _currentActiveLine.onclick = function() { this.classList.toggle('expanded'); };
+    smartScroll(container);
+  }
+
+  // 工具函数：显示第三行进度指示
+  function showProgressLine(text) {
+    if (!_currentProgressLine) return;
+    _currentProgressLine.style.display = 'flex';
+    var label = text || t('agentPlanning') || 'Agent 正在规划与执行...';
+    _currentProgressLine.innerHTML = '<span class="agent-progress-spinner"></span><span>' + escapeHtml(label) + '</span>';
+    smartScroll(container);
+  }
+
+  function hideProgressLine() {
+    if (_currentProgressLine) _currentProgressLine.style.display = 'none';
   }
 
   // 子代理胶囊渲染（按 cap.id diff 复用/创建/删除）
@@ -499,12 +620,11 @@ function handleStreamEvent(data) {
       hideTyping();
       removeThinkingHint();
       removeGeneratingBadge();
+      hideProgressLine();
       hasToolCalls = true;
       ensureStepsContainer();
       const thoughtText = data.thought || '';
-      // 本轮乐观逐字流出的正文其实是推理（随后触发了工具/思考）。
-      // 优先"挪用"答案气泡里已经渲染好的那段（与 data.thought 同源），直接搬进 thought 块，
-      // 避免"删除重画"导致的思考内容丢失/不显示；若没有临时答案气泡，才普通渲染 data.thought。
+      // 优先"挪用"答案气泡里已经渲染好的那段
       let thoughtHtml;
       if (currentBotMsgEl && currentBotMsgEl.innerHTML.trim()) {
         thoughtHtml = currentBotMsgEl.innerHTML;
@@ -514,19 +634,10 @@ function handleStreamEvent(data) {
       } else {
         thoughtHtml = renderMarkdown(thoughtText);
       }
+      // 渲染为 .thought-block（在 agent-body 内）
       const thoughtDiv = document.createElement('div');
-      thoughtDiv.style.marginBottom = '4px';
-      thoughtDiv.dataset.step = data.step || '0';
-      thoughtDiv.innerHTML = `
-        <div class="step-toggle open" onclick="toggleStep(this)">
-          <span class="arrow">▶</span>
-          <span class="tool-icon">🤔</span>
-          <span class="tool-name">${escapeHtml(t('thought'))}</span>
-          <span class="step-status">第 ${data.step || '?'} 步</span>
-        </div>
-        <div class="step-details open">
-          <div class="thought">${thoughtHtml}</div>
-        </div>`;
+      thoughtDiv.className = 'thought-block';
+      thoughtDiv.innerHTML = thoughtHtml;
       currentStepsEl.appendChild(thoughtDiv);
       showThinkingHint(t('keepAnalyzing'));
       smartScroll(container);
@@ -537,21 +648,24 @@ function handleStreamEvent(data) {
       hideTyping();
       removeThinkingHint();
       removeGeneratingBadge();
+      hideProgressLine();
       hasToolCalls = true;
-      // 兜底：本轮乐观流出的临时答案实为推理（工具轮无正文思考时不会走 thought 分支），
-      // 工具轮不应把它保留在答案气泡里。
+      // 兜底：本轮乐观流出的临时答案实为推理
       if (currentBotMsgEl) { currentBotMsgEl.remove(); currentBotMsgEl = null; }
       currentFinalContent = '';
       totalSteps = data.step || totalSteps + 1;
       const curStep = data.step || (totalSteps - 1);
       _toolTimers[curStep] = Date.now();
       ensureStepsContainer();
-      updateProgress();
 
       const toolIcon = getToolIcon(data.tool);
       const toolName = data.tool || 'unknown';
 
-      // 渲染参数：run_python 的代码单独显示，其他工具显示 JSON 但还原转义换行
+      // ── 更新第二行：当前动作 ──
+      var activeLabel = getToolLabel(data.tool, data.args);
+      updateActiveLine(toolIcon, activeLabel, '', 'running');
+
+      // 渲染参数
       let argsHtml = '';
       if (data.tool === 'run_python' && data.args && typeof data.args.code === 'string') {
         const code = unescapeDisplay(data.args.code);
@@ -637,6 +751,32 @@ function handleStreamEvent(data) {
       const elapsed = startedAt ? Date.now() - startedAt : 0;
       const durText = elapsed > 1000 ? `${(elapsed/1000).toFixed(1)}s` : `${elapsed}ms`;
       delete _toolTimers[trStep];
+
+      // 更新第二行状态与文字
+      var isError = data.error === true;
+      if (_currentActiveLine && _currentActiveLine.style.display !== 'none') {
+        var dot = _currentActiveLine.querySelector('.active-status-dot');
+        if (dot) {
+          dot.className = 'active-status-dot ' + (isError ? 'error' : 'done');
+          dot.innerHTML = '';
+        }
+        // 刷新文字为完成状态，避免显示空白或过时内容
+        var textEl = _currentActiveLine.querySelector('.active-action-text');
+        if (textEl) {
+          var toolNameForLabel = data.tool || 'tool';
+          var doneLabel = isError
+            ? (t('taskFailed') || '执行失败')
+            : (t('taskCompleted') || '已完成');
+          textEl.textContent = getToolLabel(toolNameForLabel, data.args) + ' — ' + doneLabel + ' (' + durText + ')';
+        }
+        // 展开详情显示结果摘要
+        var detailEl = _currentActiveLine.querySelector('.active-action-detail');
+        if (detailEl) {
+          var resultPreview = String(data.result || '');
+          if (resultPreview.length > 300) resultPreview = resultPreview.slice(0, 297) + '...';
+          detailEl.innerHTML = '<pre style="background:#f5f5f7;padding:6px 8px;border-radius:4px;font-size:11.5px;white-space:pre-wrap;word-break:break-all;max-height:200px;overflow-y:auto;color:#444;">' + escapeHtml(resultPreview) + '</pre>';
+        }
+      }
 
       // 更新卡片状态
       const card = currentStepsEl.querySelector(`.tool-card[data-step="${trStep}"]`);
@@ -838,25 +978,25 @@ function handleStreamEvent(data) {
       removeThinkingHint();
       hasToolCalls = true;
       ensureStepsContainer();
-      updateProgress();
       if (data.step !== undefined && _toolTimers[data.step]) {
         const elapsed = Date.now() - _toolTimers[data.step];
         const durEl = document.getElementById('tool-dur-' + data.step);
         if (durEl) durEl.textContent = elapsed > 1000 ? `${(elapsed/1000).toFixed(0)}s` : `${elapsed}ms`;
       }
-      showGeneratingBadge(data.message || t('stillProcessing'));
+      // 使用第三行进度指示
+      showProgressLine(data.message || t('stillProcessing'));
       smartScroll(container);
       break;
 
     case 'llm_thinking':
       hideTyping();
       removeGeneratingBadge();
-      showGeneratingBadge(t('callingAI'));
+      showProgressLine(t('callingAI'));
       break;
 
     case 'llm_response':
       if (!data.has_tool_calls) {
-        removeGeneratingBadge();
+        hideProgressLine();
       }
       break;
 
@@ -865,12 +1005,13 @@ function handleStreamEvent(data) {
       break;
     
     case 'token':
-      // 重放历史时跳过重放 token：最终答案由 addBotMessageWithSteps 用 content 统一渲染，
-      // 避免这里创建游离的答案气泡（且会抢在工具卡片之前）。
+      // 重放历史时跳过
       if (_isReplaying) break;
       hideTyping();
       removeThinkingHint();
       removeGeneratingBadge();
+      hideProgressLine();
+      // 逐字流式渲染最终答案（复用 currentBotMsgEl 机制，done 时会迁移到 agent-final-output）
       if (!currentBotMsgEl) {
         currentBotMsgEl = document.createElement('div');
         currentBotMsgEl.className = 'msg bot streaming-final';
@@ -882,7 +1023,7 @@ function handleStreamEvent(data) {
       }
       currentFinalContent += data.content;
       currentBotMsgEl.innerHTML = renderMarkdown(currentFinalContent);
-      if (hasToolCalls) showGeneratingBadge(t('continueProcessing'));
+      if (hasToolCalls) showProgressLine(t('continueProcessing'));
       smartScroll(container);
       break;
 
@@ -890,10 +1031,16 @@ function handleStreamEvent(data) {
       hideTyping();
       removeThinkingHint();
       removeGeneratingBadge();
+      hideProgressLine();
       document.querySelectorAll('.tool-status-dot.running').forEach(d => {
         d.className = 'tool-status-dot error';
       });
-      _lastToolImageHtml = null;  // ponytail: error 收尾也会残留截图缓存，必须清空
+      // 更新第二行为错误状态
+      if (_currentActiveLine && _currentActiveLine.style.display !== 'none') {
+        var dot = _currentActiveLine.querySelector('.active-status-dot');
+        if (dot) { dot.className = 'active-status-dot error'; dot.innerHTML = ''; }
+      }
+      _lastToolImageHtml = null;
       addMessage('❌ ' + data.content, 'system');
       break;
 
@@ -901,6 +1048,7 @@ function handleStreamEvent(data) {
       hideTyping();
       removeThinkingHint();
       removeGeneratingBadge();
+      hideProgressLine();
       hasToolCalls = true;
       if (data.todo_list) {
         renderTodoPanel(data.todo_list, true);
@@ -911,6 +1059,8 @@ function handleStreamEvent(data) {
       hideTyping();
       removeThinkingHint();
       removeGeneratingBadge();
+      hideProgressLine();
+
       // 折叠所有工具卡片，标记 running 为 done
       document.querySelectorAll('.tool-card .tool-status-dot.running').forEach(dot => {
         dot.className = 'tool-status-dot done';
@@ -918,6 +1068,7 @@ function handleStreamEvent(data) {
       document.querySelectorAll('.tool-card.open').forEach(card => {
         card.classList.remove('open');
       });
+
       // 更新进度为 100%
       const prog = currentStepsEl ? currentStepsEl.querySelector('.step-progress') : null;
       if (prog) {
@@ -926,34 +1077,49 @@ function handleStreamEvent(data) {
         if (fill) fill.style.width = '100%';
         if (text) text.textContent = t('completeText');
       }
-      if (data.content && !currentBotMsgEl && !_isReplaying) {
-        currentBotMsgEl = document.createElement('div');
-        currentBotMsgEl.className = 'msg bot';
-        if (currentStepsEl) {
-          currentStepsEl.after(currentBotMsgEl);
-        } else {
-          container.appendChild(currentBotMsgEl);
-        }
+
+      // ── 渲染最终输出到 agent-final-output 区域 ──
+      var responseCard = getResponseCard();
+      // 标记卡片已完成（CSS 据此隐藏执行状态行；JS 也做 display:none 双保险）
+      if (responseCard) responseCard.classList.add('finished');
+      var finalContent = data.content || currentFinalContent || t('taskEndedNoFinal');
+
+      // 在最终消息前注入截图（如果有工具图片且最终回复没含图片）
+      var finalHtml = renderMarkdown(finalContent);
+      if (_lastToolImageHtml && finalContent.indexOf('![') === -1) {
+        finalHtml = '<div style="margin-bottom:12px;">' + _lastToolImageHtml + '</div>' + finalHtml;
       }
-      if (currentBotMsgEl && data.content) {
-        // 在最终消息前注入截图（如果有工具图片且最终回复没含图片）
-        var finalHtml = renderMarkdown(data.content);
-        if (_lastToolImageHtml && data.content.indexOf('![') === -1) {
-          finalHtml = '<div style="margin-bottom:12px;">' + _lastToolImageHtml + '</div>' + finalHtml;
-        }
+
+      // 创建或复用最终输出区域
+      var finalOutputEl;
+      if (currentBotMsgEl) {
+        // 复用已有的临时答案气泡，改为正式样式
         currentBotMsgEl.innerHTML = finalHtml;
-        currentFinalContent = data.content;
+        currentBotMsgEl.className = 'agent-final-output';
+        currentBotMsgEl.classList.remove('streaming-final');
+        finalOutputEl = currentBotMsgEl;
+      } else if (!_isReplaying) {
+        finalOutputEl = document.createElement('div');
+        finalOutputEl.className = 'agent-final-output';
+        finalOutputEl.innerHTML = finalHtml;
+        if (responseCard) {
+          responseCard.appendChild(finalOutputEl);
+        } else {
+          container.appendChild(finalOutputEl);
+        }
       }
+      currentFinalContent = finalContent;
+
+      // 隐藏第二行和第三行（执行中状态）
+      if (_currentActiveLine) _currentActiveLine.style.display = 'none';
+      if (_currentProgressLine) _currentProgressLine.style.display = 'none';
+
       // 重置工具图片缓存
       _lastToolImageHtml = null;
 
-      // ── 兜底：确保最终答案气泡始终在步骤容器之后 ──
-      // 无论之前 token/thought/tool_start 事件的时序如何，done 时强制校正顺序，
-      // 避免"最终答案跑到工具卡片上面"的问题。
-      if (currentBotMsgEl && currentStepsEl && currentBotMsgEl.previousElementSibling !== currentStepsEl) {
-        // 只要答案气泡不是紧挨在步骤容器之后，就强制校正到其后，
-        // 覆盖"答案紧邻步骤容器之前"等所有错序情况（避免最终答案跑到工具卡片上面）。
-        currentStepsEl.after(currentBotMsgEl);
+      // ── 兜底：确保最终答案在正确位置 ──
+      if (finalOutputEl && responseCard && finalOutputEl.parentElement !== responseCard) {
+        responseCard.appendChild(finalOutputEl);
       }
 
       // Done 事件携带最终 todo 清单时，渲染/更新面板（不触发闪烁）
@@ -1064,19 +1230,51 @@ function toggleTodoItem(event, todoId) {
 
 function getToolIcon(toolName) {
   const icons = {
-    'read_file': '📖',
-    'write_file': '✏️',
-    'append_to_file': '📝',
-    'list_files': '📂',
-    'delete_file': '🗑️',
-    'search_files': '🔍',
-    'get_workspace_path': '📁',
-    'run_python': '🐍',
-    'get_system_info': '💻',
-    'web_search': '🌐',
-    'web_fetch': '📄',
+    'read_file': '📄', 'write_file': '✏️', 'append_to_file': '📝',
+    'list_files': '📂', 'delete_file': '🗑️', 'search_files': '🔍',
+    'get_workspace_path': '📁', 'run_python': '🐍', 'get_system_info': '💻',
+    'web_search': '🌐', 'web_fetch': '📄', 'bash': '💻', 'shell': '💻',
   };
   return icons[toolName] || '🔧';
+}
+
+// 生成工具调用摘要文本（用于第二行当前动作）
+function getToolLabel(toolName, args) {
+  const labels = {
+    'read_file': t('readingFile') || '读取文件内容',
+    'write_file': t('writingFile') || '写入文件',
+    'append_to_file': t('appendingFile') || '追加写入',
+    'list_files': t('listingFiles') || '列出目录',
+    'delete_file': t('deletingFile') || '删除文件',
+    'search_files': t('searchingFiles') || '搜索内容',
+    'get_workspace_path': t('gettingPath') || '获取工作路径',
+    'run_python': t('runningPython') || '运行 Python',
+    'get_system_info': t('gettingSystemInfo') || '获取系统信息',
+    'web_search': t('searchingWeb') || '网络搜索',
+    'web_fetch': t('fetchingWeb') || '抓取网页',
+    'bash': t('runningShell') || '运行 Shell 命令',
+    'shell': t('runningShell') || '运行 Shell 命令',
+  };
+  var label = labels[toolName] || (t('callingTool') || '调用工具: ') + toolName;
+  // 追加关键参数（截断避免过长）
+  if (args) {
+    if (typeof args.file_path === 'string' && args.file_path.length < 80) {
+      label += ': ' + escapeHtml(args.file_path);
+    } else if (typeof args.code === 'string') {
+      var code = args.code.trim();
+      if (code.length > 60) code = code.slice(0, 57) + '...';
+      label += ': ' + escapeHtml(code.split('\n')[0]);
+    } else if (typeof args.command === 'string') {
+      var cmd = args.command;
+      if (cmd.length > 70) cmd = cmd.slice(0, 67) + '...';
+      label += ': ' + escapeHtml(cmd);
+    } else if (typeof args.query === 'string') {
+      var q = args.query;
+      if (q.length > 50) q = q.slice(0, 47) + '...';
+      label += ': ' + escapeHtml(q);
+    }
+  }
+  return label;
 }
 
 function toggleStep(el) {

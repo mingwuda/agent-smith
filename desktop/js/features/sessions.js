@@ -135,33 +135,72 @@ function addBotMessageWithSteps(content, steps, todoList) {
   generatingBadgeEl = null;
   _isReplaying = true;  // 不会发起 WebSocket 等实时连接
 
+  // ── 创建 .agent-response 卡片外壳（与实时输出结构一致）──
+  var hasSteps = steps && steps.length > 0;
+  var responseCard = null;
+  var bodyEl = null;
+
+  if (hasSteps || content) {
+    responseCard = document.createElement('div');
+    responseCard.className = 'agent-response finished';
+    // 历史消息：耗时显示固定值（后端未记录真实耗时，用占位符）
+    var headerEl = document.createElement('div');
+    headerEl.className = 'agent-header';
+    headerEl.innerHTML =
+      '<div class="agent-avatar">🤖</div>' +
+      '<span class="agent-toggle-arrow">▶</span>' +
+      '<span class="agent-time"><span class="agent-time-label">' + (t('workElapsed') || '工作耗时') + ': </span> <span class="agent-time-val">—</span></span>';
+    headerEl.onclick = function() {
+      responseCard.classList.toggle('collapsed');
+    };
+    responseCard.appendChild(headerEl);
+
+    if (hasSteps) {
+      bodyEl = document.createElement('div');
+      bodyEl.className = 'agent-body';
+      responseCard.appendChild(bodyEl);
+      // 关键：将 currentStepsEl 指向 bodyEl，使 ensureStepsContainer() 复用它而非创建旧 steps-container
+      currentStepsEl = bodyEl;
+    }
+
+    container.appendChild(responseCard);
+  }
+
   // 先重放 steps（生成 🤔 思考块 / 🔧 工具卡片），顺序与实时流式一致：
   // [用户消息] → [步骤容器：思考块/工具卡片] → [最终答案]
-  steps.forEach(data => {
-    handleStreamEvent(data);
-  });
+  if (hasSteps) {
+    steps.forEach(data => {
+      handleStreamEvent(data);
+    });
+  }
 
   _isReplaying = false;
 
-  // 重放结束后，把最终答案 content 渲染到步骤容器之后
+  // 重放结束后，把最终答案 content 渲染为 agent-final-output（在卡片内）
   if (content) {
     const ans = document.createElement('div');
-    ans.className = 'msg bot';
+    ans.className = 'agent-final-output';
     ans.innerHTML = renderMarkdown(content);
     currentBotMsgEl = ans;
-    if (currentStepsEl && currentStepsEl.parentNode === container) {
-      currentStepsEl.after(ans);
+    if (responseCard) {
+      responseCard.appendChild(ans);
     } else {
+      // 无步骤也无卡片外壳时降级为旧格式
+      ans.className = 'msg bot';
       container.appendChild(ans);
     }
   }
 
-  // 渲染 todo 清单（与实时 done 事件一致：面板置于答案之前）
+  // 渲染 todo 清单（置于答案之前）
   if (todoList) {
     renderTodoPanel(todoList, false);
   }
   if (currentBotMsgEl && _currentTodoPanel) {
-    container.insertBefore(_currentTodoPanel, currentBotMsgEl);
+    if (responseCard) {
+      responseCard.insertBefore(_currentTodoPanel, currentBotMsgEl);
+    } else {
+      container.insertBefore(_currentTodoPanel, currentBotMsgEl);
+    }
   }
 
   // 清理回放步骤后残留的"执行中/分析中"状态
@@ -169,21 +208,13 @@ function addBotMessageWithSteps(content, steps, todoList) {
     d.className = 'tool-status-dot done';
   });
   document.querySelectorAll('.thinking-step').forEach(el => el.remove());
-  // 更新进度条为 100%
-  const prog = currentStepsEl ? currentStepsEl.querySelector('.step-progress') : null;
-  if (prog) {
-    const fill = prog.querySelector('.fill');
-    const text = prog.querySelector('.progress-text');
-    if (fill) fill.style.width = '100%';
-    if (text) text.textContent = t('completeText');
-  }
-  // 折叠所有工具卡片
+  // 折叠所有工具卡片（默认收起，用户可展开查看详情）
   document.querySelectorAll('.tool-card.open').forEach(card => {
     card.classList.remove('open');
   });
   removeGeneratingBadge();
 
-  // content 已在上面的"步骤容器之后"渲染，这里不再重复渲染
+  // 清空引用
   currentBotMsgEl = null;
   currentStepsEl = null;
 }
