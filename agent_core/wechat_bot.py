@@ -345,6 +345,24 @@ class WeChatBot:
         except Exception:
             pass  # typing 失败不影响主流程
 
+    @staticmethod
+    def _is_sendmessage_success(resp_text: str) -> bool:
+        text = resp_text.strip()
+        if text == "{}" or text == '{"ret":0}':
+            return True
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            return False
+        if isinstance(data, dict):
+            if data.get("ret") == 0:
+                return True
+            # iLink 成功响应可能只返回 message_id，不返回 ret=0
+            # ponytail: 若未来出现 {"message_id": ..., "ret": -1} 这种矛盾包，需再收紧为 ret != -1 才视为成功
+            if "message_id" in data:
+                return True
+        return False
+
     async def send_message(
         self, to_user_id: str, context_token: str, text: str
     ) -> dict:
@@ -373,15 +391,15 @@ class WeChatBot:
                 content=raw_bytes,
                 headers=headers,
             )
-            # {} 是 sendmessage 的成功响应（无返回值）
             resp_text = resp.text.strip()
-            if resp_text == "{}" or resp_text == '{"ret":0}':
+            if self._is_sendmessage_success(resp_text):
                 return {"ret": 0}
             try:
-                return json.loads(resp_text)
+                payload = json.loads(resp_text)
             except json.JSONDecodeError:
-                logger.warning("[微信Bot] sendmessage 非 JSON: status=%s body=%s", resp.status_code, resp_text[:200])
-                return {"ret": -1}
+                payload = {"raw": resp_text[:200]}
+            logger.warning("[微信Bot] sendmessage 文本消息失败: status=%s body=%s", resp.status_code, resp_text[:200])
+            return {"ret": -1, "detail": payload}
 
     async def send_image(
         self, to_user_id: str, context_token: str, image_path: str
@@ -526,14 +544,15 @@ class WeChatBot:
                     headers=headers,
                 )
                 resp_text = resp.text.strip()
-                if resp_text == "{}" or resp_text == '{"ret":0}':
+                if self._is_sendmessage_success(resp_text):
                     logger.info("[微信Bot] 图片消息发送成功: %s -> %s", image_path[:60], to_user_id[:16])
                     return {"ret": 0}
                 try:
-                    return json.loads(resp_text)
+                    payload = json.loads(resp_text)
                 except json.JSONDecodeError:
-                    logger.warning("[微信Bot] sendmessage 非 JSON: %s", resp_text[:200])
-                    return {"ret": -1}
+                    payload = {"raw": resp_text[:200]}
+                logger.warning("[微信Bot] sendmessage 图片消息失败: status=%s body=%s", resp.status_code, resp_text[:200])
+                return {"ret": -1, "detail": payload}
         except Exception as e:
             logger.warning("[微信Bot] 发送图片消息失败: %s", e)
             return {"ret": -1, "error": str(e)}
@@ -681,17 +700,23 @@ class WeChatBot:
         # ── 纯图片消息（无文本）：暂存，等待后续文本合并 ──
         if not text:
             if image_data:
+                img_msg_id = image_data.get("msg_id", "")
+                # 如果这张图片已经处理过，不重复暂存（防御 iLink 重投）
+                if img_msg_id and img_msg_id in self._seen_msg_ids:
+                    logger.debug("[微信Bot] 跳过重复图片: %s", img_msg_id[:20])
+                    return
                 self._pending_images[from_user] = {"data": image_data, "time": time.time()}
                 self._mark_activity()
                 logger.info("[微信Bot:%s] 收到用户 %s 的图片，已暂存等待后续文字提问", self.user_id, from_user[:16])
             return
 
-        # ── 消息去重 ──
-        msg_id = f"{from_user}|{context_token}|{text}"
-        if msg_id in self._seen_msg_ids:
+        # ── 消息去重（用微信 message_id，iLink 重投时该值不变）──
+        message_id = msg.get("message_id", "")
+        if message_id and message_id in self._seen_msg_ids:
             logger.debug("[微信Bot] 跳过重复消息: %s", text[:60])
             return
-        self._seen_msg_ids.add(msg_id)
+        if message_id:
+            self._seen_msg_ids.add(message_id)
         self._mark_activity()
 
         logger.info("[微信Bot:%s] 收到: %s  (context_token=%s...)", self.user_id, text[:120], (context_token or "")[:16])
