@@ -20,6 +20,11 @@ Moss Agent 是一个本地/私有部署的桌面 AI 智能体。它基于 FastAP
 | 文件工具 | 读写/追加/删除/列出/搜索工作区文件，大文件只返回摘要和路径，避免撑爆上下文 |
 | 文件制品 | AI 生成工作区文件后自动追加下载链接；Markdown 文件支持弹窗预览 |
 | 文件 Diff 可视化 | Agent 修改文件后，前端实时展示绿/红高亮的行级变更对比，支持折叠展开 |
+| 文件预览体系 | Markdown 渲染、highlight.js 语法高亮、零依赖行号、Diff 双列行号可视化、新增文件合成 diff |
+| Git 工作流闭环 | LLM 自动生成提交信息 → 一键 commit → 一键 push，高危命令需用户确认 |
+| Agent 输出卡片 | 工作耗时 + 思考/工具过程 + 当前动作 + 进度指示，历史消息回放统一结构 |
+| 项目工作区 | 引入「项目」概念，会话归属项目，文件浏览器直接浏览项目目录 |
+| MCP 动态重载 | 切换会话按 workspace 合并配置、后台线程重载、右上角实时展示连接状态 |
 | Todo 清单 | Agent 自动将复杂任务拆解为 Todo 清单，逐项跟踪完成进度，支持批量完成和状态同步 |
 | Python 执行 | 运行 Python 代码并返回输出；超大输出只返回摘要、开头和结尾；**支持实时流式输出**，避免用户空等 |
 | 网页能力 | `web_search` 搜索网页（Bing → 搜狗 → DuckDuckGo 逐级 fallback），`web_fetch` 抓取正文 |
@@ -130,10 +135,10 @@ python generate_login_url.py --host 127.0.0.1 --port 8899 --expires 300 --user a
 
 | 字段 | 说明 |
 | --- | --- |
-| 模型厂商 | OpenAI、DeepSeek、通义千问或自定义 Provider |
+| 模型厂商 | OpenAI、DeepSeek、通义千问、Anthropic 或自定义 Provider |
 | API Key | 模型服务密钥 |
-| 模型名称 | 例如 `gpt-4o`、`deepseek-chat`、`qwen-plus`、`mimo-v2.5-pro` |
-| API 地址 | OpenAI 兼容地址，留空则使用 OpenAI 默认地址 |
+| 模型名称 | 例如 `gpt-4o`、`deepseek-chat`、`qwen-plus`、`mimo-v2.5-pro`、`claude-sonnet-4-20250514` |
+| API 地址 | OpenAI 兼容地址，留空则使用厂商默认地址 |
 | 最大推理步数 | LangGraph 单次任务最大循环步数，默认 `60` |
 | 请求重试次数 | 模型连接错误重试次数，默认 `3` |
 | 请求超时 | 模型读取超时，默认 `30` 秒 |
@@ -153,6 +158,8 @@ python generate_login_url.py --host 127.0.0.1 --port 8899 --expires 300 --user a
 | `LLM_MODEL` | 模型名称 | `gpt-4o` | **✅ 必需** — 需改为你实际可用的模型名 |
 | `LLM_PROVIDER` | 当前 Provider | `openai` | 可选 — 使用其他厂商时修改 |
 | `LLM_BASE_URL` / `OPENAI_BASE_URL` | API 地址 | 空 | 可选 — 非 OpenAI 官方时填写 |
+| `ANTHROPIC_API_KEY` | Anthropic API Key | 空 | 可选 — 使用 Claude 模型时填写 |
+| `ANTHROPIC_BASE_URL` | Anthropic API 地址 | 空 | 可选 — 非官方地址时填写 |
 | `AGENT_HOST` | 监听地址 | `127.0.0.1` | 可选 — 公网部署需改为 `0.0.0.0` |
 | `AGENT_PORT` / `DESKTOP_AGENT_PORT` | 监听端口 | `8899` | 可选 |
 | `AGENT_USERS` | 多用户列表 `user1:pass1;user2:pass2` | 空 | 可选 — 不设置则默认创建 `admin/admin123` |
@@ -760,14 +767,14 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/opt/desktop-agent
+WorkingDirectory=/opt/moss-agent
 Environment=AGENT_HOST=0.0.0.0
 Environment=AGENT_PORT=8080
 Environment=AGENT_OPEN_BROWSER=0
 Environment=DESKTOP_AGENT_AUTH_USER=admin
 Environment=DESKTOP_AGENT_AUTH_PASSWORD=change-me
 Environment=DESKTOP_AGENT_AUTH_SECRET=replace-with-random-secret
-ExecStart=/opt/desktop-agent/.venv/bin/python /opt/desktop-agent/agent_core/main.py
+ExecStart=/opt/moss-agent/.venv/bin/python /opt/moss-agent/agent_core/main.py
 Restart=always
 RestartSec=3
 
@@ -895,15 +902,15 @@ set DESKTOP_AGENT_PIP_TRUSTED_HOST=your-internal-pypi-host
 ## 项目结构
 
 ```text
-desktop-agent/
+moss-agent/
 ├── agent_core/
-    │   ├── main.py                 # FastAPI 入口、middleware、Agent 生命周期
-    │   ├── agent.py                # DesktopAgent、LangGraph、流式事件、上下文处理
-    │   ├── config.py               # Provider、模型、环境变量和配置持久化
-    │   ├── context_manager.py      # 上下文估算、阈值和压缩
-    │   ├── subagents.py            # coder/reviewer/debugger 子代理 + 并行支持
-    │   ├── session_store.py        # SQLite 会话存储（按用户隔离）
-    │   ├── user_manager.py         # 多用户数据目录管理
+│   ├── main.py                 # FastAPI 入口、middleware、Agent 生命周期
+│   ├── agent.py                # DesktopAgent、LangGraph、流式事件、上下文处理
+│   ├── config.py               # Provider、模型、环境变量和配置持久化
+│   ├── context_manager.py      # 上下文估算、阈值和压缩
+│   ├── subagents.py            # coder/reviewer/debugger 子代理 + 并行支持
+│   ├── session_store.py        # SQLite 会话存储（按用户隔离）
+│   ├── user_manager.py         # 多用户数据目录管理
 │   ├── api/                    # API 路由模块
 │   │   ├── deps.py             # 认证依赖（get_current_user、require_admin）
 │   │   ├── auth.py             # 登录/登出/修改密码路由
@@ -912,6 +919,7 @@ desktop-agent/
 │   │       ├── sessions.py     # 会话 CRUD（Web + 微信独立命名空间）
 │   │       ├── skills.py       # Skills 列表与热加载
 │   │       ├── artifacts.py    # 文件制品下载与预览
+│   │       ├── files.py        # 文件浏览、读取、Diff、提交、推送
 │   │       ├── db.py           # 数据库连接管理
 │   │       ├── system.py       # 设置与用户管理
 │   │       ├── wechat.py       # 微信 Bot 管理端点
@@ -966,12 +974,12 @@ desktop-agent/
 | 层面 | 技术 |
 | --- | --- |
 | Agent | LangGraph ReAct Agent |
-| LLM 接口 | LangChain OpenAI，兼容 OpenAI 风格接口 |
+| LLM 接口 | LangChain OpenAI / Anthropic，兼容 OpenAI 风格接口 |
 | 后端 | FastAPI + Uvicorn |
-| 前端 | 原生 HTML/CSS/JS + marked.js |
+| 前端 | 原生 HTML/CSS/JS + marked.js + highlight.js |
 | 状态 | LangGraph MemorySaver + SQLite |
 | 认证 | HttpOnly Cookie + HMAC 签名 |
-| 运行时 | Python 3.9+（推荐 3.10+） |
+| 运行时 | Python 3.13+ |
 
 ---
 
