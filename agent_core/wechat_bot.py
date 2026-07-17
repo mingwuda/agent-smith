@@ -346,22 +346,26 @@ class WeChatBot:
             pass  # typing 失败不影响主流程
 
     @staticmethod
-    def _is_sendmessage_success(resp_text: str) -> bool:
+    def _parse_sendmessage_response(resp_text: str) -> dict:
+        """解析 sendmessage 响应，统一返回 {"ret": ..., "message_id": ..., "detail": ...}。"""
         text = resp_text.strip()
-        if text == "{}" or text == '{"ret":0}':
-            return True
+        if text == "{}":
+            return {"ret": 0}
+        if text == '{"ret":0}':
+            return {"ret": 0, "message_id": ""}
         try:
             data = json.loads(text)
         except json.JSONDecodeError:
-            return False
-        if isinstance(data, dict):
-            if data.get("ret") == 0:
-                return True
-            # iLink 成功响应可能只返回 message_id，不返回 ret=0
-            # ponytail: 若未来出现 {"message_id": ..., "ret": -1} 这种矛盾包，需再收紧为 ret != -1 才视为成功
-            if "message_id" in data:
-                return True
-        return False
+            return {"ret": -1, "detail": {"raw": text[:200]}}
+        if not isinstance(data, dict):
+            return {"ret": -1, "detail": data}
+        if data.get("ret") == 0:
+            return {"ret": 0, "message_id": str(data.get("message_id", ""))}
+        # iLink 成功响应可能只返回 message_id，不返回 ret=0
+        # ponytail: 若未来出现 {"message_id": ..., "ret": -1} 这种矛盾包，需再收紧为 ret != -1 才视为成功
+        if "message_id" in data:
+            return {"ret": 0, "message_id": str(data["message_id"])}
+        return {"ret": data.get("ret", -1), "message_id": str(data.get("message_id", "")), "detail": data}
 
     async def send_message(
         self, to_user_id: str, context_token: str, text: str
@@ -392,14 +396,12 @@ class WeChatBot:
                 headers=headers,
             )
             resp_text = resp.text.strip()
-            if self._is_sendmessage_success(resp_text):
-                return {"ret": 0}
-            try:
-                payload = json.loads(resp_text)
-            except json.JSONDecodeError:
-                payload = {"raw": resp_text[:200]}
-            logger.warning("[微信Bot] sendmessage 文本消息失败: status=%s body=%s", resp.status_code, resp_text[:200])
-            return {"ret": -1, "detail": payload}
+            send_resp = self._parse_sendmessage_response(resp_text)
+            if send_resp.get("ret", -1) == 0:
+                logger.info("[微信Bot] 文本消息发送成功: message_id=%s", send_resp.get("message_id", ""))
+                return {"ret": 0, "message_id": send_resp.get("message_id", "")}
+            logger.warning("[微信Bot] sendmessage 文本消息失败: status=%s resp=%s", resp.status_code, json.dumps(send_resp, ensure_ascii=False)[:300])
+            return {"ret": -1, "detail": send_resp}
 
     async def send_image(
         self, to_user_id: str, context_token: str, image_path: str
@@ -544,15 +546,12 @@ class WeChatBot:
                     headers=headers,
                 )
                 resp_text = resp.text.strip()
-                if self._is_sendmessage_success(resp_text):
-                    logger.info("[微信Bot] 图片消息发送成功: %s -> %s", image_path[:60], to_user_id[:16])
-                    return {"ret": 0}
-                try:
-                    payload = json.loads(resp_text)
-                except json.JSONDecodeError:
-                    payload = {"raw": resp_text[:200]}
-                logger.warning("[微信Bot] sendmessage 图片消息失败: status=%s body=%s", resp.status_code, resp_text[:200])
-                return {"ret": -1, "detail": payload}
+                send_resp = self._parse_sendmessage_response(resp_text)
+                if send_resp.get("ret", -1) == 0:
+                    logger.info("[微信Bot] 图片消息发送成功: message_id=%s %s -> %s", send_resp.get("message_id", ""), image_path[:60], to_user_id[:16])
+                    return {"ret": 0, "message_id": send_resp.get("message_id", "")}
+                logger.warning("[微信Bot] sendmessage 图片消息失败: status=%s resp=%s", resp.status_code, json.dumps(send_resp, ensure_ascii=False)[:300])
+                return {"ret": -1, "detail": send_resp}
         except Exception as e:
             logger.warning("[微信Bot] 发送图片消息失败: %s", e)
             return {"ret": -1, "error": str(e)}
@@ -952,16 +951,20 @@ class WeChatBot:
             if clean_text:
                 send_resp = await self.send_message(from_user, context_token, clean_text)
                 send_ret = send_resp.get("ret", -1)
+                send_msg_id = send_resp.get("message_id", "")
                 if send_ret != 0:
-                    logger.warning("[微信Bot] sendmessage 返回 ret=%s: %s", send_ret, json.dumps(send_resp, ensure_ascii=False)[:200])
+                    logger.warning("[微信Bot:%s] sendmessage 首次失败 ret=%s message_id=%s resp=%s",
+                                   self.user_id, send_ret, send_msg_id, json.dumps(send_resp, ensure_ascii=False)[:300])
                     send_resp2 = await self.send_message(from_user, context_token, clean_text)
                     send_ret2 = send_resp2.get("ret", -1)
+                    send_msg_id2 = send_resp2.get("message_id", "")
                     if send_ret2 == 0:
-                        logger.info("[微信Bot:%s] 回复成功（重试）: %s", self.user_id, clean_text[:120])
+                        logger.info("[微信Bot:%s] 回复成功（重试）: message_id=%s text=%s", self.user_id, send_msg_id2, clean_text[:120])
                     else:
-                        logger.warning("[微信Bot:%s] 重试仍失败 ret=%s", self.user_id, send_ret2)
+                        logger.warning("[微信Bot:%s] 重试仍失败 ret=%s message_id=%s resp=%s",
+                                       self.user_id, send_ret2, send_msg_id2, json.dumps(send_resp2, ensure_ascii=False)[:300])
                 else:
-                    logger.info("[微信Bot:%s] 回复: %s", self.user_id, clean_text[:120])
+                    logger.info("[微信Bot:%s] 回复: message_id=%s text=%s", self.user_id, send_msg_id, clean_text[:120])
             elif sent_image:
                 logger.info("[微信Bot:%s] 回复仅为图片，已发送", self.user_id)
 
