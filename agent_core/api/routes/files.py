@@ -409,6 +409,9 @@ def _llm_commit_message(diff_text: str, stat_text: str, untracked: list) -> Opti
     """用 LLM 基于 diff 生成提交信息；失败返回 None（调用方降级为规则生成）。"""
     try:
         from config import AgentConfig
+    except ImportError:
+        from agent_core.config import AgentConfig
+    try:
         from langchain_openai import ChatOpenAI
         from langchain_core.messages import HumanMessage
         cfg = AgentConfig.load()
@@ -461,17 +464,22 @@ def _commit_at(repo: str, message: str) -> tuple[bool, str]:
 
 
 def _push_at(repo: str) -> tuple[bool, str]:
-    """git push（origin 当前分支）；若无 upstream 自动 -u。返回 (是否成功, 输出)。"""
-    out, err = _run_git(repo, "push", timeout=60)
-    if not err and out and "set-upstream" not in out:
-        return True, out
-    if err and ("set-upstream" in err or "no upstream" in err or "has no upstream" in err):
+    """git push（origin 当前分支）；若无 upstream 自动 -u origin <当前分支>。返回 (是否成功, 输出)。"""
+    # 检查当前分支是否已配置 upstream（不依赖错误文本解析，更健壮）
+    up_out, up_err = _run_git(repo, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
+    if up_err or not (up_out or "").strip():
+        # 无 upstream → 自动设置 -u origin <branch>
         branch_out, _ = _run_git(repo, "rev-parse", "--abbrev-ref", "HEAD")
         branch = (branch_out or "").strip() or "main"
+        rem_out, _ = _run_git(repo, "remote", "get-url", "origin")
+        if not (rem_out or "").strip():
+            return False, "未配置 origin 远程仓库，无法推送（请先 git remote add origin <url> 或手动推送）"
         out2, err2 = _run_git(repo, "push", "-u", "origin", branch, timeout=60)
-        if not err2:
-            return True, out2
-        return False, (err or "") + "\n" + (err2 or "")
+        if err2:
+            return False, err2
+        return True, out2
+    # 已配置 upstream → 直接推送
+    out, err = _run_git(repo, "push", timeout=60)
     if err:
         return False, err
     return True, out
