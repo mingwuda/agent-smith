@@ -389,7 +389,10 @@ async def get_file_diff(
 
 def _resolve_repo_root(request: Request, project_id: str) -> Path:
     """解析 project_id 对应的 git 仓库根目录（与 /files/changes 同源逻辑）。"""
-    from services.workspace import _workspace_for_user
+    try:
+        from services.workspace import _workspace_for_user
+    except ImportError:
+        from agent_core.services.workspace import _workspace_for_user
     uid = getattr(request.state, "user_id", "default")
     base = _workspace_for_user(uid)
     if project_id and project_id.strip():
@@ -450,39 +453,52 @@ def _rule_commit_message(stat_text: str, untracked: list) -> str:
     return f"chore: 更新 {total} 个文件"
 
 
+def _git_rc(repo: str, *args: str, timeout: int = 15) -> tuple[str, str, int]:
+    """执行 git 命令并返回 (stdout, stderr, returncode)，用 returncode 判成功（不被 stderr 回显误导）。"""
+    try:
+        r = subprocess.run(
+            ["git", "-C", repo] + list(args),
+            capture_output=True, text=True, timeout=timeout,
+            env={**os.environ, "LC_ALL": "C"},
+        )
+        return r.stdout.strip(), r.stderr.strip(), r.returncode
+    except FileNotFoundError:
+        raise HTTPException(status_code=500, detail="未找到 git 命令，请确认系统已安装 git")
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=504, detail=f"Git 命令超时（{timeout}s）")
+
+
 def _commit_at(repo: str, message: str) -> tuple[bool, str]:
     """git add -A + git commit，返回 (是否成功, 输出文本)。"""
-    add_out, add_err = _run_git(repo, "add", "-A")
-    if add_err and "error" in add_err.lower():
+    _, add_err, add_code = _git_rc(repo, "add", "-A")
+    if add_code != 0 and add_err:
         return False, add_err
-    commit_out, commit_err = _run_git(repo, "commit", "-m", message)
-    if commit_err:
-        combined = (commit_out + "\n" + commit_err).strip()
-        # nothing to commit 视为无改动（不算成功提交）
-        return False, combined
-    return True, commit_out
+    commit_out, commit_err, commit_code = _git_rc(repo, "commit", "-m", message)
+    if commit_code != 0:
+        return False, (commit_err or "提交失败（可能无改动可提交）")
+    return True, commit_out or "已提交"
 
 
 def _push_at(repo: str) -> tuple[bool, str]:
     """git push（origin 当前分支）；若无 upstream 自动 -u origin <当前分支>。返回 (是否成功, 输出)。"""
-    # 检查当前分支是否已配置 upstream（不依赖错误文本解析，更健壮）
-    up_out, up_err = _run_git(repo, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
-    if up_err or not (up_out or "").strip():
+    # 检查当前分支是否已配置 upstream
+    up_out, _, up_code = _git_rc(repo, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
+    if up_code != 0 or not up_out.strip():
         # 无 upstream → 自动设置 -u origin <branch>
-        branch_out, _ = _run_git(repo, "rev-parse", "--abbrev-ref", "HEAD")
-        branch = (branch_out or "").strip() or "main"
-        rem_out, _ = _run_git(repo, "remote", "get-url", "origin")
-        if not (rem_out or "").strip():
+        branch_out, _, _ = _git_rc(repo, "rev-parse", "--abbrev-ref", "HEAD")
+        branch = branch_out.strip() or "main"
+        rem_out, _, _ = _git_rc(repo, "remote", "get-url", "origin")
+        if not rem_out.strip():
             return False, "未配置 origin 远程仓库，无法推送（请先 git remote add origin <url> 或手动推送）"
-        out2, err2 = _run_git(repo, "push", "-u", "origin", branch, timeout=60)
-        if err2:
-            return False, err2
-        return True, out2
+        _, push_err, push_code = _git_rc(repo, "push", "-u", "origin", branch, timeout=60)
+        if push_code != 0:
+            return False, (push_err or "推送失败")
+        return True, f"已推送至 origin/{branch}"
     # 已配置 upstream → 直接推送
-    out, err = _run_git(repo, "push", timeout=60)
-    if err:
-        return False, err
-    return True, out
+    _, push_err, push_code = _git_rc(repo, "push", timeout=60)
+    if push_code != 0:
+        return False, (push_err or "推送失败")
+    return True, "已推送"
 
 
 @router.post("/files/generate-commit-message")
