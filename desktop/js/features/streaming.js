@@ -12,6 +12,9 @@ var _timerInterval = null;     // 耗时更新定时器
 var _currentActiveLine = null; // 当前执行中动作行 DOM
 var _currentProgressLine = null; // 当前进度指示行 DOM
 
+// 会话回放标记：加载历史消息时设为 true，避免重复触发工具副作用
+var _isReplaying = false;
+
 // ---------- 耗时格式化 ----------
 
 function formatElapsed(ms) {
@@ -250,7 +253,14 @@ async function send() {
           break;
         }
         if (line.startsWith('data: ')) {
-          const data = JSON.parse(line.slice(6));
+          let data;
+          try {
+            data = JSON.parse(line.slice(6));
+          } catch (parseErr) {
+            // ponytail: 单行坏数据不应中断整轮；跳过并继续后续事件
+            console.warn('[SSE] 跳过无法解析的事件行:', line.slice(0, 120), parseErr.message);
+            continue;
+          }
           if (data.type === 'done' || data.type === 'error') gotTerminalEvent = true;
           markStreamActivity();
           handleStreamEvent(data);
@@ -263,10 +273,18 @@ async function send() {
     if (buffer.trim() === 'data: [DONE]') {
       streamDone = true;
     } else if (buffer.startsWith('data: ')) {
-      const data = JSON.parse(buffer.slice(6));
-      if (data.type === 'done' || data.type === 'error') gotTerminalEvent = true;
-      markStreamActivity();
-      handleStreamEvent(data);
+      let data;
+      try {
+        data = JSON.parse(buffer.slice(6));
+      } catch (parseErr) {
+        console.warn('[SSE] 跳过无法解析的剩余事件:', buffer.slice(0, 120), parseErr.message);
+        data = null;
+      }
+      if (data && (data.type === 'done' || data.type === 'error')) gotTerminalEvent = true;
+      if (data) {
+        markStreamActivity();
+        handleStreamEvent(data);
+      }
     }
 
     if (streamDone && !gotTerminalEvent) {
