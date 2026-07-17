@@ -1,5 +1,6 @@
-"""文件浏览器路由 — 安全浏览项目目录、读取文件内容"""
+"""文件浏览器路由 — 安全浏览项目目录、读取文件内容、Git 变更查看"""
 import os
+import subprocess
 from pathlib import Path
 from typing import Optional
 
@@ -167,4 +168,217 @@ async def read_file(
         "content": content,
         "size": size,
         "lines": content.count('\n') + 1,
+    }
+
+
+def _run_git(repo_dir: str, *args: str, timeout: int = 15) -> tuple[str | None, str]:
+    """在指定目录执行 git 命令，返回 (stdout, stderr)"""
+    try:
+        result = subprocess.run(
+            ["git", "-C", repo_dir] + list(args),
+            capture_output=True, text=True, timeout=timeout,
+            env={**os.environ, "LC_ALL": "C"},
+        )
+        return result.stdout.strip(), result.stderr.strip()
+    except FileNotFoundError:
+        raise HTTPException(status_code=500, detail="未找到 git 命令，请确认系统已安装 git")
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=504, detail=f"Git 命令超时（{timeout}s）")
+
+
+@router.get("/files/changes")
+async def get_changed_files(
+    request: Request,
+    project_id: str = Query("", description="项目 ID"),
+):
+    """
+    获取当前工作区相对于最近一次提交的变更文件列表。
+    返回每个文件的变更状态（M/A/D/R/U 等）和路径。
+    """
+    from services.workspace import _workspace_for_user
+    uid = getattr(request.state, "user_id", "default")
+    base = _workspace_for_user(uid)
+
+    # 如果传了 project_id 且项目有 directory_path，优先用项目目录
+    if project_id and project_id.strip():
+        import session_store as _ss
+        project = _ss.get_project(uid, project_id)
+        if project and project.get("directory_path"):
+            base = Path(project["directory_path"])
+
+    if not base or not base.is_dir():
+        raise HTTPException(status_code=400, detail="无法确定项目根目录")
+
+    # 确认是 Git 仓库
+    _, err = _run_git(str(base), "rev-parse", "--is-inside-work-tree")
+    if err:
+        raise HTTPException(status_code=400, detail="当前目录不是 Git 仓库")
+
+    stdout, _ = _run_git(str(base), "status", "--porcelain=v1")
+
+    changes = []
+    for line in (stdout or "").splitlines():
+        if len(line) < 4:
+            continue
+        # 安全解析：用 split 分割 XY 和 path（兼容不同数量的分隔空格）
+        # porcelain v1 格式为 "XY path"，但某些边界情况下空格数可能不固定
+        parts = line.split(None, 1)
+        if len(parts) < 2:
+            continue
+        xy = parts[0].ljust(2)   # 保证长度为 2（单字符状态补空格）
+        path_raw = parts[1]
+        # 处理 rename 格式：old -> new
+        if "\x00" in path_raw:
+            parts_path = path_raw.split("\x00")
+            old_path = parts_path[0]
+            new_path = parts_path[1] if len(parts_path) > 1 else old_path
+        elif " -> " in path_raw:
+            old_path, new_path = (p.strip() for p in path_raw.split(" -> ", 1))
+        else:
+            old_path = new_path = path_raw
+
+        status_map = {
+            "M": "modified", "A": "added", "D": "deleted",
+            "R": "renamed", "C": "copied", "U": "unmerged",
+            "?": "untracked", "!": "ignored",
+        }
+        x_status = status_map.get(xy[0], "unknown") if xy[0].strip() else ""
+        y_status = status_map.get(xy[1], "unknown") if xy[1].strip() else ""
+
+        entry = {
+            "path": new_path,
+            "status": x_status or y_status,
+            "index_status": x_status,
+            "work_status": y_status,
+            "raw_xy": xy,
+        }
+        if x_status == "renamed" or y_status == "renamed":
+            entry["old_path"] = old_path
+        changes.append(entry)
+
+    # 排序：已跟踪的在前，未跟踪在后；同组按路径排序
+    def sort_key(c):
+        is_untracked = c["status"] == "untracked"
+        return (is_untracked, c["path"].lower())
+
+    changes.sort(key=sort_key)
+
+    return {
+        "repo_root": str(base),
+        "total_changes": len(changes),
+        "changes": changes,
+    }
+
+
+def _parse_status(status_out: str) -> str | None:
+    """从 `git status --porcelain` 的输出推断单个文件的有效状态。
+
+    返回 'added' | 'deleted' | 'renamed' | 'copied' | 'unmerged' | 'modified' | None
+    未跟踪（??）也视为 added —— 整份内容对仓库而言都是新增。
+    """
+    for line in (status_out or "").splitlines():
+        if len(line) < 4:
+            continue
+        parts = line.split(None, 1)
+        if len(parts) < 2:
+            continue
+        xy = parts[0].ljust(2)
+        x, y = xy[0].strip(), xy[1].strip()
+        if x == "A" or y == "A" or "?" in xy:
+            return "added"
+        if x == "D" or y == "D":
+            return "deleted"
+        if x == "R" or y == "R":
+            return "renamed"
+        if x == "C" or y == "C":
+            return "copied"
+        if x == "U" or y == "U":
+            return "unmerged"
+        if x or y:
+            return "modified"
+    return None
+
+
+@router.get("/files/diff")
+async def get_file_diff(
+    request: Request,
+    file_path: str = Query(..., description="要查看 diff 的文件相对或绝对路径"),
+    staged: bool = Query(False, description="是否查看暂存区的 diff"),
+    project_id: str = Query("", description="项目 ID"),
+):
+    """
+    获取单个文件的 diff 内容。
+    返回格式化的 diff 文本，前端可高亮展示。
+    对「新增 / 未跟踪」文件（git diff 无输出）自动合成全量 diff，按「新增」展示。
+    """
+    from services.workspace import _workspace_for_user
+    uid = getattr(request.state, "user_id", "default")
+    base = _workspace_for_user(uid)
+
+    if project_id and project_id.strip():
+        import session_store as _ss
+        project = _ss.get_project(uid, project_id)
+        if project and project.get("directory_path"):
+            base = Path(project["directory_path"])
+
+    if not base or not base.is_dir():
+        raise HTTPException(status_code=400, detail="无法确定项目根目录")
+
+    _, err = _run_git(str(base), "rev-parse", "--is-inside-work-tree")
+    if err:
+        raise HTTPException(status_code=400, detail="当前目录不是 Git 仓库")
+
+    # 1) 先确定该文件的 git 状态（未跟踪也视为新增）
+    status_out, _ = _run_git(str(base), "status", "--porcelain=v1", "--", file_path)
+    effective_status = _parse_status(status_out)
+
+    # 2) 取 diff：未暂存优先，空则回退暂存区
+    stdout, stderr = _run_git(str(base), "diff", "--", file_path)
+    used_staged = False
+    if not stdout:
+        cached, _ = _run_git(str(base), "diff", "--cached", "--", file_path)
+        if cached:
+            stdout = cached
+            used_staged = True
+
+    # 3) 新增 / 未跟踪文件：git diff 无输出 → 整文件视为新增，合成全量 diff
+    if not stdout and effective_status == "added":
+        target = Path(base) / file_path
+        if not target.is_file():
+            raise HTTPException(status_code=404, detail="文件不存在或已被删除")
+        try:
+            raw = target.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            raise HTTPException(status_code=400, detail="无法读取文件内容")
+        content_lines = raw.split("\n")
+        if content_lines and content_lines[-1] == "":
+            content_lines = content_lines[:-1]  # 去掉末尾换行产生的空行
+        n = len(content_lines)
+        synth = "@@ -0,0 +1,%d @@\n" % n
+        for ln in content_lines:
+            synth += "+" + ln + "\n"
+        stdout = synth
+
+    if not stdout and not stderr:
+        if effective_status == "deleted":
+            raise HTTPException(status_code=404, detail="文件已删除，无内容可显示")
+        raise HTTPException(status_code=404, detail="该文件无变更（或文件不在仓库中）")
+
+    lines = stdout.splitlines()
+    # 解析统计信息
+    stats = {"additions": 0, "deletions": 0}
+    for line in lines:
+        if line.startswith("+") and not line.startswith("+++"):
+            stats["additions"] += 1
+        elif line.startswith("-") and not line.startswith("---"):
+            stats["deletions"] += 1
+
+    return {
+        "file_path": file_path,
+        "staged": used_staged,
+        "diff_text": stdout,
+        "stats": stats,
+        "line_count": len(lines),
+        "effective_status": effective_status or "modified",
+        "is_new": effective_status == "added",
     }

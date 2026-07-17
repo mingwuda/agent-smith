@@ -219,6 +219,8 @@ async function openFileBrowser(projectId) {
 
   const path = currentProjectDir || '';
   await browseDirectory(path, projectId);
+  // 预加载变更数量，显示角标
+  prefetchChangesCount();
 }
 
 function exitFileBrowser() {
@@ -229,6 +231,11 @@ function exitFileBrowser() {
   if (fbEl) fbEl.style.display = 'none';
   document.querySelectorAll('.sidebar-accordion').forEach(a => a.style.display = '');
   closeFilePreview();
+  // 重置变更视图状态和角标
+  _isChangesView = false;
+  const btn = document.getElementById('fb-changes-btn');
+  if (btn) btn.classList.remove('active');
+  _updateChangesBadge(0);
 }
 
 function refreshFileBrowser() {
@@ -330,4 +337,247 @@ function formatSize(bytes) {
   if (bytes < 1024) return bytes + ' B';
   if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
   return (bytes / 1024 / 1024).toFixed(1) + ' MB';
+}
+
+// ---------- 变更文件视图 ----------
+
+let _isChangesView = false;   // 当前是否在变更文件视图
+
+function toggleChangesView() {
+  _isChangesView = !_isChangesView;
+  const btn = document.getElementById('fb-changes-btn');
+  if (btn) {
+    btn.classList.toggle('active', _isChangesView);
+    btn.title = _isChangesView ? '返回文件列表' : '变更文件';
+  }
+  if (_isChangesView) {
+    loadChangedFiles();
+  } else {
+    refreshFileBrowser();
+  }
+}
+
+async function loadChangedFiles() {
+  const treeEl = document.getElementById('file-tree');
+  const pathEl = document.getElementById('fb-current-path');
+  if (!treeEl || !pathEl) return;
+
+  // 更新路径显示
+  const repoName = currentProjectDir ? currentProjectDir.split('/').pop() : '';
+  pathEl.textContent = '📝 变更文件' + (repoName ? (' · ' + repoName) : '');
+
+  treeEl.innerHTML = '<div class="fb-empty">加载中…</div>';
+
+  try {
+    const qs = new URLSearchParams();
+    if (currentProjectId) qs.set('project_id', currentProjectId);
+    const res = await fetch('/files/changes?' + qs.toString());
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({ detail: res.statusText }));
+      treeEl.innerHTML = '<div class="fb-empty">' + escapeHtml(errData.detail || '加载失败') + '</div>';
+      return;
+    }
+    const data = await res.json();
+    _updateChangesBadge(data.total_changes || 0);
+    renderChangedFiles(data);
+  } catch (e) {
+    treeEl.innerHTML = '<div class="fb-empty">' + escapeHtml(t('loadFailed') || '加载失败') + '</div>';
+  }
+}
+
+/** 更新变更按钮角标数字 */
+function _updateChangesBadge(count) {
+  const badge = document.getElementById('fb-changes-badge');
+  if (!badge) return;
+  if (count > 0) {
+    badge.textContent = count > 99 ? '99+' : String(count);
+    badge.style.display = '';
+  } else {
+    badge.style.display = 'none';
+  }
+}
+
+/** 预加载变更数量（打开文件浏览器时自动调用，不切换视图） */
+function prefetchChangesCount() {
+  try {
+    const qs = new URLSearchParams();
+    if (currentProjectId) qs.set('project_id', currentProjectId);
+    fetch('/files/changes?' + qs.toString())
+      .then(res => res.ok ? res.json() : null)
+      .then(data => { if (data) _updateChangesBadge(data.total_changes || 0); })
+      .catch(() => {});
+  } catch (_) {}
+}
+
+const _STATUS_LABELS = {
+  modified: '已修改', added: '新增', deleted: '已删除',
+  renamed: '重命名', copied: '复制', unmerged: '冲突',
+  untracked: '新增', ignored: '忽略',
+};
+
+const _STATUS_ICONS = {
+  modified: '📝', added: '✚', deleted: '✖', renamed: '↔',
+  copied: '⧉', unmerged: '⚠', untracked: '✚', ignored: '⊘',
+};
+
+function renderChangedFiles(data) {
+  const treeEl = document.getElementById('file-tree');
+  if (!treeEl) return;
+
+  const changes = data.changes || [];
+  if (changes.length === 0) {
+    treeEl.innerHTML = '<div class="fb-empty" style="padding:20px;text-align:center;color:#8e8e93;">✅ 没有变更</div>';
+    return;
+  }
+
+  let html = '<div class="changes-summary">' +
+    '<span>共 <strong>' + changes.length + '</strong> 个文件有变更</span>' +
+    '</div>';
+
+  changes.forEach(c => {
+    const label = _STATUS_LABELS[c.status] || c.status;
+    const icon = _STATUS_ICONS[c.status] || '•';
+
+    // 文件名（取 basename）
+    const displayName = c.path.split('/').pop();
+    const dirPart = c.path.includes('/') ? ('<span class="cf-dir">' + escapeHtml(c.path.replace(/\/[^/]+$/, '')) + '/</span>') : '';
+
+    html += '<div class="change-item" data-path="' + escapeHtml(c.path) + '" onclick="showFileDiff(\'' + escapeJsStr(c.path) + '\')">';
+    html += '  <span class="cf-icon">' + icon + '</span>';
+    html += '  <span class="cf-info">';
+    html += '    <span class="cf-name">' + dirPart + escapeHtml(displayName) + '</span>';
+    html += '    <span class="cf-status ' + c.status + '">' + label + '</span>';
+    html += '  </span>';
+    html += '</div>';
+  });
+
+  treeEl.innerHTML = html;
+}
+
+// 转义 JS 字符串字面量中的特殊字符
+function escapeJsStr(s) {
+  return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/"/g, '\\"');
+}
+
+async function showFileDiff(filePath) {
+  try {
+    const qs = new URLSearchParams({ file_path: filePath });
+    if (currentProjectId) qs.set('project_id', currentProjectId);
+    const res = await fetch('/files/diff?' + qs.toString());
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      alert(d.detail || '获取 diff 失败');
+      return;
+    }
+    const data = await res.json();
+
+    // 用 diff 预览模式打开
+    openFileDiffPreview(data);
+  } catch (e) {
+    alert(t('readFileFailed') || '读取失败');
+  }
+}
+
+/** 当前正在预览的 diff 原始文本（供复制按钮使用） */
+let _currentDiffText = '';
+
+/** 打开 diff 预览面板 */
+function openFileDiffPreview(diffData) {
+  const panel = document.querySelector('.file-preview-panel');
+  if (!panel) return;
+
+  // 标题：显示文件名、状态标签和统计
+  const titleEl = panel.querySelector('.fpp-title');
+  if (titleEl) {
+    const fileName = (diffData.file_path || '').split('/').pop();
+    const statusLabel = _STATUS_LABELS[diffData.effective_status] || '';
+    const stats = diffData.stats || {};
+    let extra = [];
+    if (stats.additions) extra.push('+' + stats.additions);
+    if (stats.deletions) extra.push('-' + stats.deletions);
+    titleEl.textContent = '📝 ' + fileName +
+      (statusLabel ? ' · ' + statusLabel : '') +
+      (extra.length ? ' (' + extra.join(' ') + ')' : '');
+  }
+
+  // 元信息
+  const metaEl = panel.querySelector('.fpp-meta');
+  if (metaEl) {
+    let meta = (diffData.file_path || '') + '  ·  ' + (diffData.line_count || 0) + ' 行 diff';
+    if (diffData.is_new) meta += '  ·  新文件（整份内容均为新增）';
+    metaEl.textContent = meta;
+  }
+
+  // 渲染 diff 内容
+  const bodyEl = panel.querySelector('#fpp-body');
+  if (!bodyEl) return;
+
+  bodyEl.style.display = ''; // 显示 fpp-body
+  const mdContainer = bodyEl.querySelector('#fpp-md');
+  if (mdContainer) mdContainer.style.display = 'none'; // 隐藏 MD 容器
+  const codeWrap = bodyEl.querySelector('#fpp-code-wrap');
+  if (codeWrap) codeWrap.style.display = 'none';       // 隐藏普通代码容器
+
+  const diffWrap = bodyEl.querySelector('#fpp-diff-wrap');
+  if (!diffWrap) return;
+  diffWrap.style.display = '';
+  diffWrap.scrollTop = 0;
+
+  _currentDiffText = diffData.diff_text || '';
+  renderDiffHtml(diffWrap, _currentDiffText || '(无差异)');
+
+  // 显示面板
+  panel.classList.add('open');
+  document.body.classList.add('file-preview-open');
+}
+
+/**
+ * 将原始 diff 文本渲染为带双列行号（旧行号 | 新行号）的网格。
+ * 从 @@ -old,count +new,count @@ hunk 头解析起始行号，逐行计算精确行号。
+ */
+function renderDiffHtml(wrapEl, diffText) {
+  const lines = diffText.split('\n');
+  let oldLine = 0, newLine = 0;
+  let html = '';
+
+  // 元信息行（无行号）：diff --git / index / --- / +++ / \ No newline 等
+  const isMeta = (s) =>
+    s.startsWith('diff --git') || s.startsWith('index ') ||
+    s.startsWith('--- ') || s.startsWith('+++ ') ||
+    s.startsWith('\\ No newline');
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
+    if (line.startsWith('@@')) {
+      // 解析 hunk 头：@@ -a,b +c,d @@
+      const m = line.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
+      if (m) { oldLine = parseInt(m[1], 10); newLine = parseInt(m[3], 10); }
+      html += diffRow('', '', line, 'hunk');
+    } else if (isMeta(line)) {
+      html += diffRow('', '', line, 'meta');
+    } else if (line.startsWith('+')) {
+      html += diffRow('', String(newLine), line, 'add');
+      newLine++;
+    } else if (line.startsWith('-')) {
+      html += diffRow(String(oldLine), '', line, 'del');
+      oldLine++;
+    } else {
+      // 上下文行（含前导空格），新旧行号都推进
+      html += diffRow(String(oldLine), String(newLine), line, 'context');
+      oldLine++;
+      newLine++;
+    }
+  }
+
+  wrapEl.innerHTML = html;
+}
+
+/** 构建一行 diff（三列网格：旧行号 | 新行号 | 内容） */
+function diffRow(oldLn, newLn, text, kind) {
+  return '<div class="diff-row ' + kind + '">' +
+    '<span class="dg-old">' + escapeHtml(oldLn) + '</span>' +
+    '<span class="dg-new">' + escapeHtml(newLn) + '</span>' +
+    '<span class="dg-code">' + escapeHtml(text) + '</span>' +
+  '</div>';
 }

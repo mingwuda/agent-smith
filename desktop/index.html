@@ -47,6 +47,9 @@
       <button class="fb-back" onclick="exitFileBrowser()">←</button>
       <span class="fb-path" id="fb-current-path"></span>
       <button class="fb-refresh" onclick="refreshFileBrowser()" title="刷新">⟳</button>
+      <button class="fb-changes-btn" id="fb-changes-btn" onclick="toggleChangesView()" title="变更文件">
+        📝<span class="fb-badge" id="fb-changes-badge" style="display:none;"></span>
+      </button>
     </div>
     <div id="file-tree" class="file-tree"></div>
   </div>
@@ -108,6 +111,7 @@
       <div class="fpp-gutter" id="fpp-gutter"></div>
       <pre class="fpp-code"><code id="fpp-code"></code></pre>
     </div>
+    <div id="fpp-diff-wrap" class="fpp-diff-wrap" style="display:none;"></div>
     <div id="fpp-md" class="fpp-md" style="display:none;"></div>
   </div>
 </div>

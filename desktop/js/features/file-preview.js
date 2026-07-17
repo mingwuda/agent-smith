@@ -47,7 +47,11 @@ function openFilePreview(name, content, meta) {
   const codeWrap = document.getElementById('fpp-code-wrap');
   const gutter = document.getElementById('fpp-gutter');
   const mdEl = document.getElementById('fpp-md');
+  const diffWrap = document.getElementById('fpp-diff-wrap');
   if (!codeEl || !mdEl) return;
+
+  // 普通预览时隐藏 diff 容器（避免与 diff 视图互相串味）
+  if (diffWrap) diffWrap.style.display = 'none';
 
   // 按内容行数生成连续行号(零依赖行号列), 行号与代码逐行对齐
   function fillGutter(text) {
@@ -109,6 +113,17 @@ function closeFilePreview() {
 }
 
 function copyFileContent() {
+  // diff 视图：复制原始 diff 文本（不含行号，保持可用）
+  const diffWrap = document.getElementById('fpp-diff-wrap');
+  if (diffWrap && diffWrap.style.display !== 'none' && typeof _currentDiffText !== 'undefined' && _currentDiffText) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(_currentDiffText).then(function () {
+        if (typeof showToast === 'function') showToast(t('copied') || '已复制');
+      }).catch(function () {});
+    }
+    return;
+  }
+
   const mdEl = document.getElementById('fpp-md');
   const codeEl = document.getElementById('fpp-code');
   let text = '';
