@@ -447,12 +447,18 @@ function renderChangedFiles(data) {
     const displayName = c.path.split('/').pop();
     const dirPart = c.path.includes('/') ? ('<span class="cf-dir">' + escapeHtml(c.path.replace(/\/[^/]+$/, '')) + '/</span>') : '';
 
+    const isUntracked = c.status === 'untracked';
+    const actionBtn = isUntracked
+      ? '<button class="cf-action-btn track-btn" title="加入跟踪" onclick="event.stopPropagation(); trackFile(\'' + escapeJsStr(c.path) + '\')">➕</button>'
+      : '<button class="cf-action-btn untrack-btn" title="取消跟踪" onclick="event.stopPropagation(); untrackFile(\'' + escapeJsStr(c.path) + '\')">📤</button>';
+
     html += '<div class="change-item" data-path="' + escapeHtml(c.path) + '" onclick="showFileDiff(\'' + escapeJsStr(c.path) + '\')">';
     html += '  <span class="cf-icon">' + icon + '</span>';
     html += '  <span class="cf-info">';
     html += '    <span class="cf-name">' + dirPart + escapeHtml(displayName) + '</span>';
     html += '    <span class="cf-status ' + c.status + '">' + label + '</span>';
     html += '  </span>';
+    html += '  <span class="cf-actions">' + actionBtn + '</span>';
     html += '</div>';
   });
 
@@ -581,6 +587,46 @@ async function showFileDiff(filePath) {
     openFileDiffPreview(data);
   } catch (e) {
     alert(t('readFileFailed') || '读取失败');
+  }
+}
+
+async function trackFile(filePath) {
+  if (!confirm('确定要跟踪该文件吗？\n' + filePath)) return;
+  try {
+    const res = await fetch('/files/track', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project_id: currentProjectId || '', file_path: filePath }),
+    });
+    const d = await res.json();
+    if (d.success) {
+      if (typeof showToast === 'function') showToast('✅ ' + (d.output || '已跟踪'));
+      loadChangedFiles();
+    } else {
+      alert('跟踪失败：\n' + (d.output || '未知错误'));
+    }
+  } catch (e) {
+    alert('跟踪失败：' + (e && e.message ? e.message : e));
+  }
+}
+
+async function untrackFile(filePath) {
+  if (!confirm('确定要取消跟踪该文件吗？文件将保留在工作区，但不再被 git 管理。\n' + filePath)) return;
+  try {
+    const res = await fetch('/files/untrack', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project_id: currentProjectId || '', file_path: filePath }),
+    });
+    const d = await res.json();
+    if (d.success) {
+      if (typeof showToast === 'function') showToast('✅ ' + (d.output || '已取消跟踪'));
+      loadChangedFiles();
+    } else {
+      alert('取消跟踪失败：\n' + (d.output || '未知错误'));
+    }
+  } catch (e) {
+    alert('取消跟踪失败：' + (e && e.message ? e.message : e));
   }
 }
 

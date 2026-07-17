@@ -387,6 +387,40 @@ async def get_file_diff(
     }
 
 
+@router.post("/files/track")
+async def track_file(request: Request, payload: dict = Body(...)):
+    """将未跟踪的文件加入 git 跟踪（git add -- <file_path>）。"""
+    project_id = (payload or {}).get("project_id", "")
+    file_path = (payload or {}).get("file_path", "")
+    if not file_path:
+        raise HTTPException(status_code=400, detail="file_path 不能为空")
+    base = _resolve_repo_root(request, project_id)
+    target = (base / file_path).resolve()
+    if not target.exists():
+        raise HTTPException(status_code=404, detail=f"文件不存在: {file_path}")
+    _, err, code = _git_rc(str(base), "add", "--", str(target))
+    if code != 0:
+        return {"success": False, "output": err or "git add 失败"}
+    return {"success": True, "output": f"已跟踪: {file_path}"}
+
+
+@router.post("/files/untrack")
+async def untrack_file(request: Request, payload: dict = Body(...)):
+    """将已跟踪的文件从 git 索引移除（git rm --cached），保留工作区文件。"""
+    project_id = (payload or {}).get("project_id", "")
+    file_path = (payload or {}).get("file_path", "")
+    if not file_path:
+        raise HTTPException(status_code=400, detail="file_path 不能为空")
+    base = _resolve_repo_root(request, project_id)
+    target = (base / file_path).resolve()
+    if not target.exists():
+        raise HTTPException(status_code=404, detail=f"文件不存在: {file_path}")
+    _, err, code = _git_rc(str(base), "rm", "--cached", "--", str(target))
+    if code != 0:
+        return {"success": False, "output": err or "git rm --cached 失败"}
+    return {"success": True, "output": f"已取消跟踪: {file_path}"}
+
+
 def _resolve_repo_root(request: Request, project_id: str) -> Path:
     """解析 project_id 对应的 git 仓库根目录（与 /files/changes 同源逻辑）。"""
     try:

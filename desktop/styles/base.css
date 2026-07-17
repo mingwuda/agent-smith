@@ -730,6 +730,12 @@
   .change-item .cf-status.deleted   { background: #ff453a22; color: #ff453a; }
   .change-item .cf-status.renamed   { background: #bf5af222; color: #bf5af2; }
   .change-item .cf-status.untracked { background: #30d15822; color: #30d158; }
+  .change-item .cf-actions { display: flex; gap: 4px; flex: 0 0 auto; opacity: 0; transition: opacity 0.15s; }
+  .change-item:hover .cf-actions { opacity: 1; }
+  .cf-action-btn { width: 22px; height: 22px; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; display: flex; align-items: center; justify-content: center; background: transparent; color: #8e8e93; }
+  .cf-action-btn:hover { background: #2c2c2e; color: #f5f5f7; }
+  .track-btn:hover { color: #30d158; }
+  .untrack-btn:hover { color: #ff453a; }
   .fb-empty { padding: 24px 16px; color: #8e8e93; font-size: 12px; text-align: center; }
 
   /* ===== 右侧文件预览面板（浅色 chrome + 深色代码区，覆盖主区右侧） ===== */
