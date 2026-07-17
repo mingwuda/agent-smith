@@ -10,6 +10,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections import defaultdict
 from pathlib import Path
 from typing import Optional
 from langchain_core.tools import tool
@@ -26,16 +27,13 @@ def set_workspace(path: Path):
 # ── 安全配置 ──
 # 始终拒绝的命令/模式（硬编码，不可绕过）
 _FORBIDDEN_PATTERNS: list[str] = [
-    r'\brm\s+-rf\s+/\b',               # rm -rf /
-    r'\brm\s+-rf\s+/root\b',            # rm -rf /root
-    r'\brm\s+-rf\s+/etc\b',             # rm -rf /etc
-    r'\brm\s+-rf\s+/home\b',            # rm -rf /home
+    r'\brm\s+-rf\s+/',                  # rm -rf /（含 /root /etc /home 等任意根下绝对路径，结尾不加 \b 以免 EOL 漏匹配）
     r'\bdd\s+if=',                       # dd 直接写磁盘
     r'\bmkfs\.',                         # 格式化磁盘
     r'\bmkswap\b',                       # swap 操作
     r':\(\)\s*\{.*:\|:.*\};',          # fork bomb
     r'\|\s*shutdown',                    # pipe to shutdown
-    r'\bchmod\s+777\s+/',               # chmod 777 /
+    r'\bchmod\s+777\s+/',               # chmod 777 /（根下绝对路径，结尾不加 \b）
     r'\bsudo\b',                         # 不允许提权
     r'\bsu\b',                           # 切换用户
 ]
@@ -125,6 +123,61 @@ def _is_command_forbidden(command: str) -> tuple[bool, str]:
     return False, ""
 
 
+# ── 高危但可确认执行的命令 ──
+# 命中后 run_shell 不会真正执行，而是返回 __CONFIRM_NEEDED__ 标记，由前端弹出确认框；
+# 用户在前端点「确认执行」后，命令被加入当前用户的已确认集合，代理再次调用时才放行。
+# 与 _FORBIDDEN_PATTERNS 的区别：禁止项永不执行，高危项经用户确认后可执行。
+_HIGH_RISK_PATTERNS: list[tuple[str, str]] = [
+    (r'\brm\b[^|]*\s-[a-z]*r[a-z]*\b', "递归删除 (rm -r/-rf) 会不可恢复地删除文件/目录"),
+    (r'\brmdir\b', "删除目录 (rmdir)"),
+    (r'\brd\b', "删除目录 (rd)"),
+    (r'\bdel\b[^|]*\s/s\b', "Windows 递归删除 (del /s)"),
+    (r'\btaskkill\b', "结束进程 (taskkill) 会终止正在运行的程序"),
+    (r'\bgit\s+reset\s+--hard\b', "git reset --hard 会丢弃所有未提交改动"),
+    (r'\bgit\s+push\b[^|]*--force\b', "git push --force 会覆盖远程历史"),
+    (r'\bgit\s+push\b[^|]*\s-f\b', "git push -f 会覆盖远程历史"),
+    (r'\bgit\s+clean\b[^|]*-[a-z]*f', "git clean -f 会删除未跟踪文件"),
+    (r'\b(shutdown|reboot|halt|poweroff)\b', "关机/重启命令会影响系统运行"),
+    (r'\bformat\s+[a-zA-Z]:', "格式化磁盘 (format) 会销毁分区数据"),
+    (r'\bdiskpart\b', "diskpart 会修改磁盘分区"),
+    (r'\bchmod\s+(-R\s+)?777\b', "chmod 777 会开放任意用户读写执行权限"),
+    (r'(curl|wget)\b[^|]*\|\s*(sh|bash)\b', "从网络下载并直接执行脚本存在安全风险"),
+]
+
+# 已确认（用户点「确认执行」）的高危命令，按用户隔离，进程内有效。
+_approved_commands: dict[str, set[str]] = defaultdict(set)
+_current_user: str = "default"
+
+
+def set_current_user(uid: str) -> None:
+    """设置当前执行上下文的用户（用于按用户隔离已确认命令）。"""
+    global _current_user
+    _current_user = uid
+
+
+def add_approved_command(uid: str, command: str) -> None:
+    """将命令加入指定用户的已确认集合（归一化后存储）。"""
+    _approved_commands[uid].add(_normalize_cmd(command))
+
+
+def _normalize_cmd(cmd: str) -> str:
+    """归一化命令：压缩空白、去首尾空格，便于已确认命令的宽松比对。"""
+    return re.sub(r"\s+", " ", (cmd or "").strip())
+
+
+def _is_command_high_risk(command: str) -> tuple[bool, str]:
+    """检查命令是否命中高危但可确认执行的模式。返回 (是否高危, 风险说明)。"""
+    for pattern, reason in _HIGH_RISK_PATTERNS:
+        if re.search(pattern, command, re.IGNORECASE):
+            return True, reason
+    return False, ""
+
+
+def _is_command_approved(uid: str, command: str) -> bool:
+    """命令是否已被当前用户确认过（归一化比对）。"""
+    return _normalize_cmd(command) in _approved_commands.get(uid, set())
+
+
 # cmd 参数标志：以 / 开头、第二字符为字母，且不含点号与额外斜杠（如 /i /s /c:"x" /d:C:\p）
 # ponytail: 旧实现把所有非 URL 片段的 / 都替换成 \，会把 findstr /i、dir /s 等参数
 # 标志破坏成 \i、\s，导致命令报错（FINDSTR: Cannot open ...）。现跳过疑似 cmd 标志的片段。
@@ -188,6 +241,13 @@ def run_shell(command: str, timeout: int = _DEFAULT_TIMEOUT) -> str:
     forbidden, reason = _is_command_forbidden(cmd)
     if forbidden:
         return f"❌ {reason}。请使用更安全的命令重试。"
+
+    # ── 高危命令确认闸 ──
+    # 命中高危模式且未获当前用户确认时，绝不执行，仅返回确认标记；
+    # 前端据此弹出「确认执行」按钮，用户确认后命令进入已确认集合，代理再次调用才放行。
+    risky, risk_reason = _is_command_high_risk(cmd)
+    if risky and not _is_command_approved(_current_user, command):
+        return f"__CONFIRM_NEEDED__::{risk_reason}::__CMD__::{command}"
 
     # ── 超时上限 ──
     timeout = min(max(1, int(timeout)), 600)

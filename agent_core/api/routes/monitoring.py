@@ -85,6 +85,10 @@ class GrantPathRequest(BaseModel):
     path: str
 
 
+class GrantCommandRequest(BaseModel):
+    command: str
+
+
 class SubagentTaskInfo(BaseModel):
     id: str
     agent_type: str
@@ -340,3 +344,12 @@ def list_granted_paths(request: Request):
     uid = _get_current_user(request)
     from tools.file_tools import _outside_auths
     return {"paths": _outside_auths.get(uid, [])}
+
+
+@router.post("/permissions/grant-command")
+def grant_command(req: GrantCommandRequest, request: Request):
+    """授权 AI 执行某条高危命令（用户在前端点「确认执行」后调用）。仅当前进程有效。"""
+    uid = _get_current_user(request)
+    from tools.shell_tools import add_approved_command
+    add_approved_command(uid, req.command)
+    return {"status": "ok", "message": f"已授权命令: {req.command}"}

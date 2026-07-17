@@ -406,13 +406,22 @@ def append_to_file(path: str, content: str) -> str:
 
 
 @tool
-def edit_file(path: str, old_string: str, new_string: str, replace_all: bool = False) -> str:
-    """按关键字替换文件内容。支持精确替换和正则替换。
+def edit_file(path: str, old_string: str, new_string: str, replace_all: bool = False, occurrence: int = 0) -> str:
+    """按文本（或正则）替换文件内容。修改代码/文本时优先使用本工具，不要改用 run_python 执行脚本去改写文件（更慢且不易校验）。
 
     参数:
-      - old_string: 要替换的旧文本（支持正则表达式，以 re: 开头）
-      - new_string: 新文本
-      - replace_all: True=替换全部匹配；False=仅替换第一个匹配（默认）
+      - old_string: 要查找并替换的旧文本。普通文本按字面匹配；以 re: 开头则按正则表达式匹配。
+      - new_string: 替换后的新文本。
+      - replace_all: True=替换全部匹配；False=只替换一处（默认）。
+      - occurrence:  仅当 replace_all=False 时生效。指定替换第几处匹配（1=第一处，2=第二处…）。
+                     为 0（默认）时要求 old_string 在文件中唯一：若出现多处会明确报错并提示匹配数量，
+                     避免误改到非目标位置。此时可：① 补充上下文让 old_string 唯一；
+                     ② 设 replace_all=True 替换全部；③ 设 occurrence=k 指定第 k 处（1–N）。
+
+    提示：
+      - 让 old_string 足够长且带上唯一上下文（前后各几行），可避免“不唯一”报错。
+      - 跨多处的大段重构，可多次调用本工具，每次给出明确且唯一的 old_string。
+      - old_string 与文件中空白/缩进/换行必须完全一致；不确定时先用 read_file 核对原文。
     """
     try:
         full = _resolve(path)
@@ -427,24 +436,62 @@ def edit_file(path: str, old_string: str, new_string: str, replace_all: bool = F
         return f"❌ 读取失败: {e}"
 
     is_regex = old_string.startswith("re:")
-    pattern = old_string[3:] if is_regex else re.escape(old_string)
+    raw_pattern = old_string[3:] if is_regex else old_string
+    pattern = raw_pattern if is_regex else re.escape(raw_pattern)
 
     try:
-        if replace_all:
-            new_content = re.sub(pattern, new_string, old_content)
-        else:
-            new_content = re.sub(pattern, new_string, old_content, count=1)
+        matches = list(re.finditer(pattern, old_content))
     except re.error as e:
         return f"❌ 正则错误: {e}"
 
+    n = len(matches)
+    if n == 0:
+        return (
+            f"⚠️ 未找到匹配: {raw_pattern[:80]!r}\n"
+            f"请检查 old_string 的空白/缩进/换行是否与文件完全一致；或改用 re: 前缀走正则；"
+            f"也可先用 read_file 核对原文。"
+        )
+
+    if replace_all:
+        targets = matches
+    elif occurrence == 0:
+        if n > 1:
+            preview = matches[0].group(0)[:60].replace("\n", "\\n")
+            return (
+                f"⚠️ old_string 在文件中出现了 {n} 处，不唯一，无法确认要改哪一处。\n"
+                f"做法三选一：① 补充更多上下文让 old_string 唯一；② 设 replace_all=True 替换全部；"
+                f"③ 设 occurrence=k 指定第 k 处（合法范围 1–{n}）。\n"
+                f"首处匹配预览：{preview!r}"
+            )
+        targets = matches  # 唯一，直接替换
+    else:
+        if occurrence < 1 or occurrence > n:
+            return f"⚠️ occurrence={occurrence} 超出范围，文件中共有 {n} 处匹配（合法范围 1–{n}）。"
+        targets = [matches[occurrence - 1]]
+
+    # 逐段拼接，仅替换目标匹配（精确替换指定位置，不改变其他内容/换行）
+    # 正则模式下用 m.expand 展开反向引用（\1 等），与旧 re.sub 行为一致；普通模式按字面插入。
+    parts: list[str] = []
+    last = 0
+    for m in targets:
+        parts.append(old_content[last:m.start()])
+        parts.append(m.expand(new_string) if is_regex else new_string)
+        last = m.end()
+    parts.append(old_content[last:])
+    new_content = "".join(parts)
+
     if new_content == old_content:
-        return f"⚠️ 未找到匹配: {old_string[:80]}"
+        return f"⚠️ 替换成功但内容未变化（new_string 与匹配文本相同），共 {n} 处匹配未实际改动。"
 
     full.write_text(new_content, encoding="utf-8")
     _invalidate_line_cache(str(full))
-    count = old_content.count(old_string) if not is_regex else len(re.findall(pattern, old_content))
+
+    replaced = len(targets)
+    first_start = targets[0].start()
+    first_line = old_content.count("\n", 0, first_start) + 1  # 1-based 行号
+    line_hint = f"，位于第 {first_line} 行" if replaced == 1 else f"，首处位于第 {first_line} 行"
     diff = _generate_diff(full, new_content, old_content_override=old_content)
-    return f"✅ 已替换 {path}（替换了 {count} 处）{diff}"
+    return f"✅ 已替换 {path}（替换了 {replaced} 处{line_hint}）{diff}"
 
 
 @tool

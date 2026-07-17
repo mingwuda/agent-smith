@@ -430,7 +430,12 @@ function renderChangedFiles(data) {
     return;
   }
 
-  let html = '<div class="changes-summary">' +
+  let html = '<div class="changes-commit-bar">' +
+    '<button class="cf-commit-ico" onclick="openCommitDialog()" title="提交变更">💾</button>' +
+    '<span class="cf-commit-label">提交变更</span>' +
+    '</div>';
+
+  html += '<div class="changes-summary">' +
     '<span>共 <strong>' + changes.length + '</strong> 个文件有变更</span>' +
     '</div>';
 
@@ -457,6 +462,107 @@ function renderChangedFiles(data) {
 // 转义 JS 字符串字面量中的特殊字符
 function escapeJsStr(s) {
   return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/"/g, '\\"');
+}
+
+/* ───────────────────────── 提交变更对话框 ───────────────────────── */
+
+function openCommitDialog() {
+  const existing = document.getElementById('commit-modal');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'commit-modal';
+  overlay.className = 'commit-modal-overlay';
+  overlay.innerHTML =
+    '<div class="commit-modal">' +
+      '<div class="commit-modal-head">' +
+        '<span>💾 提交变更</span>' +
+        '<button class="commit-modal-close" onclick="closeCommitDialog()" title="关闭">✕</button>' +
+      '</div>' +
+      '<textarea id="commit-msg" class="commit-msg" placeholder="提交信息（可手写，或点击「生成提交信息」自动生成后调整）"></textarea>' +
+      '<div class="commit-modal-actions">' +
+        '<button id="commit-gen-btn" class="btn-soft" onclick="commitGenerate()">✨ 生成提交信息</button>' +
+        '<button id="commit-btn" class="btn-primary" onclick="commitDo(false)">📦 提交</button>' +
+        '<button id="commit-push-btn" class="btn-accent" onclick="commitDo(true)">🚀 提交并推送</button>' +
+      '</div>' +
+      '<div id="commit-status" class="commit-status"></div>' +
+    '</div>';
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', function (e) {
+    if (e.target === overlay) closeCommitDialog();
+  });
+}
+
+function closeCommitDialog() {
+  const m = document.getElementById('commit-modal');
+  if (m) m.remove();
+}
+
+async function commitGenerate() {
+  const btn = document.getElementById('commit-gen-btn');
+  const status = document.getElementById('commit-status');
+  const ta = document.getElementById('commit-msg');
+  if (!btn || !status || !ta) return;
+  btn.disabled = true;
+  btn.textContent = '⏳ 生成中…';
+  status.className = 'commit-status';
+  status.textContent = '正在根据改动生成提交信息…';
+  try {
+    const res = await fetch('/files/generate-commit-message', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project_id: currentProjectId || '' }),
+    });
+    const d = await res.json();
+    ta.value = d.message || '';
+    status.className = 'commit-status ok';
+    status.textContent = '✅ 已生成，可修改后提交';
+  } catch (e) {
+    status.className = 'commit-status err';
+    status.textContent = '❌ 生成失败：' + (e && e.message ? e.message : e);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '✨ 生成提交信息';
+  }
+}
+
+async function commitDo(push) {
+  const ta = document.getElementById('commit-msg');
+  const btn = push ? document.getElementById('commit-push-btn') : document.getElementById('commit-btn');
+  const status = document.getElementById('commit-status');
+  if (!ta || !btn || !status) return;
+  const msg = (ta.value || '').trim();
+  if (!msg) {
+    status.className = 'commit-status err';
+    status.textContent = '⚠️ 请先填写或生成提交信息';
+    return;
+  }
+  btn.disabled = true;
+  btn.textContent = push ? '⏳ 提交并推送…' : '⏳ 提交中…';
+  status.className = 'commit-status';
+  status.textContent = push ? '正在提交并推送到远程…' : '正在提交…';
+  try {
+    const res = await fetch(push ? '/files/commit-and-push' : '/files/commit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project_id: currentProjectId || '', message: msg }),
+    });
+    const d = await res.json();
+    if (d.success) {
+      status.className = 'commit-status ok';
+      status.textContent = '✅ ' + (push ? '已提交并推送' : '已提交') + '\n' + (d.output || '');
+      setTimeout(function () { loadChangedFiles(); closeCommitDialog(); }, 900);
+    } else {
+      status.className = 'commit-status err';
+      status.textContent = '❌ 失败:\n' + (d.output || '未知错误');
+    }
+  } catch (e) {
+    status.className = 'commit-status err';
+    status.textContent = '❌ 请求失败：' + (e && e.message ? e.message : e);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = push ? '🚀 提交并推送' : '📦 提交';
+  }
 }
 
 async function showFileDiff(filePath) {

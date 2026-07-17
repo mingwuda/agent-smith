@@ -1,11 +1,14 @@
 """文件浏览器路由 — 安全浏览项目目录、读取文件内容、Git 变更查看"""
+import logging
 import os
 import subprocess
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request, Body
 from fastapi.responses import Response
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["files"])
 
@@ -382,3 +385,142 @@ async def get_file_diff(
         "effective_status": effective_status or "modified",
         "is_new": effective_status == "added",
     }
+
+
+def _resolve_repo_root(request: Request, project_id: str) -> Path:
+    """解析 project_id 对应的 git 仓库根目录（与 /files/changes 同源逻辑）。"""
+    from services.workspace import _workspace_for_user
+    uid = getattr(request.state, "user_id", "default")
+    base = _workspace_for_user(uid)
+    if project_id and project_id.strip():
+        import session_store as _ss
+        project = _ss.get_project(uid, project_id)
+        if project and project.get("directory_path"):
+            base = Path(project["directory_path"])
+    if not base or not base.is_dir():
+        raise HTTPException(status_code=400, detail="无法确定项目根目录")
+    _, err = _run_git(str(base), "rev-parse", "--is-inside-work-tree")
+    if err:
+        raise HTTPException(status_code=400, detail="当前目录不是 Git 仓库")
+    return base
+
+
+def _llm_commit_message(diff_text: str, stat_text: str, untracked: list) -> Optional[str]:
+    """用 LLM 基于 diff 生成提交信息；失败返回 None（调用方降级为规则生成）。"""
+    try:
+        from config import AgentConfig
+        from langchain_openai import ChatOpenAI
+        from langchain_core.messages import HumanMessage
+        cfg = AgentConfig.load()
+        api_key = cfg.api_key or "sk-no-key-required"
+        llm = ChatOpenAI(
+            model=cfg.model,
+            api_key=api_key,
+            base_url=cfg.base_url or None,
+            temperature=0,
+            timeout=30,
+        )
+        diff_clip = (diff_text or "")[:8000]
+        untracked_str = "\n".join("- " + u for u in (untracked or [])) or "（无）"
+        prompt = (
+            "你是一个资深的 Git 提交信息生成器。根据下面的代码改动，生成一条简洁、准确的中文提交信息，"
+            "遵循 Conventional Commits 风格（如 feat/fix/refactor/docs/chore 等 + 简短描述，必要时可补一行正文）。"
+            "只输出提交信息本身，不要解释、不要使用引号或代码块包裹。\n\n"
+            "变更统计:\n" + (stat_text or "（无）") + "\n\n"
+            "未跟踪的新文件:\n" + untracked_str + "\n\n"
+            "diff (节选):\n" + diff_clip
+        )
+        resp = llm.invoke([HumanMessage(content=prompt)])
+        msg = (getattr(resp, "content", "") or "").strip().strip('"').strip("'").strip("`").strip()
+        return msg or None
+    except Exception as e:
+        logger.warning("[generate-commit-message] LLM 生成失败，降级规则生成: %s", e)
+        return None
+
+
+def _rule_commit_message(stat_text: str, untracked: list) -> str:
+    """规则降级：基于变更统计生成朴素提交信息。"""
+    changed = [l for l in (stat_text or "").splitlines() if "|" in l]
+    total = len(changed) + len(untracked or [])
+    if total == 0:
+        return "chore: 更新代码"
+    return f"chore: 更新 {total} 个文件"
+
+
+def _commit_at(repo: str, message: str) -> tuple[bool, str]:
+    """git add -A + git commit，返回 (是否成功, 输出文本)。"""
+    add_out, add_err = _run_git(repo, "add", "-A")
+    if add_err and "error" in add_err.lower():
+        return False, add_err
+    commit_out, commit_err = _run_git(repo, "commit", "-m", message)
+    if commit_err:
+        combined = (commit_out + "\n" + commit_err).strip()
+        # nothing to commit 视为无改动（不算成功提交）
+        return False, combined
+    return True, commit_out
+
+
+def _push_at(repo: str) -> tuple[bool, str]:
+    """git push（origin 当前分支）；若无 upstream 自动 -u。返回 (是否成功, 输出)。"""
+    out, err = _run_git(repo, "push", timeout=60)
+    if not err and out and "set-upstream" not in out:
+        return True, out
+    if err and ("set-upstream" in err or "no upstream" in err or "has no upstream" in err):
+        branch_out, _ = _run_git(repo, "rev-parse", "--abbrev-ref", "HEAD")
+        branch = (branch_out or "").strip() or "main"
+        out2, err2 = _run_git(repo, "push", "-u", "origin", branch, timeout=60)
+        if not err2:
+            return True, out2
+        return False, (err or "") + "\n" + (err2 or "")
+    if err:
+        return False, err
+    return True, out
+
+
+@router.post("/files/generate-commit-message")
+async def generate_commit_message(request: Request, payload: dict = Body(...)):
+    """基于当前未提交的改动，生成一条提交信息（LLM 优先，失败降级规则）。"""
+    project_id = (payload or {}).get("project_id", "")
+    base = _resolve_repo_root(request, project_id)
+
+    stat_out, _ = _run_git(str(base), "diff", "HEAD", "--stat")
+    diff_out, _ = _run_git(str(base), "diff", "HEAD")
+    status_out, _ = _run_git(str(base), "status", "--porcelain=v1")
+    untracked = []
+    for line in (status_out or "").splitlines():
+        if len(line) >= 2 and line[0] == "?" and line[1] == "?":
+            parts = line.split(None, 1)
+            if len(parts) >= 2:
+                untracked.append(parts[1])
+
+    message = _llm_commit_message(diff_out, stat_out, untracked)
+    if not message:
+        message = _rule_commit_message(stat_out, untracked)
+    return {"message": message}
+
+
+@router.post("/files/commit")
+async def commit_changes(request: Request, payload: dict = Body(...)):
+    """暂存所有改动并提交（不推送）。"""
+    project_id = (payload or {}).get("project_id", "")
+    message = (payload or {}).get("message", "")
+    if not (message or "").strip():
+        raise HTTPException(status_code=400, detail="提交信息不能为空")
+    base = _resolve_repo_root(request, project_id)
+    ok, output = _commit_at(str(base), message.strip())
+    return {"success": ok, "output": output}
+
+
+@router.post("/files/commit-and-push")
+async def commit_and_push(request: Request, payload: dict = Body(...)):
+    """暂存、提交并推送到远程。"""
+    project_id = (payload or {}).get("project_id", "")
+    message = (payload or {}).get("message", "")
+    if not (message or "").strip():
+        raise HTTPException(status_code=400, detail="提交信息不能为空")
+    base = _resolve_repo_root(request, project_id)
+    ok, output = _commit_at(str(base), message.strip())
+    if not ok:
+        return {"success": False, "output": "提交失败：\n" + output}
+    pushed, pout = _push_at(str(base))
+    return {"success": pushed, "output": output + "\n\n" + (pout or "")}

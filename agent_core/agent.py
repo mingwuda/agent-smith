@@ -592,6 +592,12 @@ class DesktopAgent:
             _set_ft_user(user_id)
         except Exception:
             pass
+        # 同步 shell 工具的用户上下文（用于高危命令确认按用户隔离）
+        try:
+            from tools.shell_tools import set_current_user as _set_st_user
+            _set_st_user(user_id)
+        except Exception:
+            pass
 
     @property
     def user_id(self) -> str:

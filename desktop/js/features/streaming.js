@@ -822,10 +822,13 @@ function handleStreamEvent(data) {
           if (permMatch) {
             var permPath = permMatch[1];
             var permBtn = document.createElement('div');
-            permBtn.style.cssText = 'margin-top:8px;display:flex;gap:10px;align-items:center;';
+            permBtn.style.cssText = 'margin-top:8px;display:flex;flex-direction:column;gap:8px;';
             permBtn.innerHTML = `
-              <span style="font-size:12px;color:#8e8e93;">📝 需要授权后才能写入 <code style="background:#2c2c2e;color:#f5f5f7;padding:2px 6px;border-radius:4px;font-size:11px;">${escapeHtml(permPath)}</code></span>
-              <button class="perm-grant-btn" style="padding:5px 14px;background:#007aff;color:#fff;border:none;border-radius:6px;font-size:12px;cursor:pointer;" data-path="${escapeHtml(permPath)}">授权写入</button>
+              <div style="font-size:12px;color:#ff9f0a;font-weight:600;">⏳ 等待您在界面授权：该文件位于工作区外，需点击「授权写入」后才能继续</div>
+              <div style="display:flex;gap:10px;align-items:center;">
+                <span style="font-size:12px;color:#8e8e93;">📝 目标路径 <code style="background:#2c2c2e;color:#f5f5f7;padding:2px 6px;border-radius:4px;font-size:11px;">${escapeHtml(permPath)}</code></span>
+                <button class="perm-grant-btn" style="padding:5px 14px;background:#007aff;color:#fff;border:none;border-radius:6px;font-size:12px;cursor:pointer;" data-path="${escapeHtml(permPath)}">授权写入</button>
+              </div>
             `;
             permBtn.querySelector('.perm-grant-btn').addEventListener('click', async function() {
               var path = this.dataset.path;
@@ -856,6 +859,44 @@ function handleStreamEvent(data) {
               }
             });
             outArea.appendChild(permBtn);
+          }
+
+          // ── 高危命令执行确认 ──
+          var confirmMatch = resultStr.match(/__CONFIRM_NEEDED__::([\s\S]*?)::__CMD__::([\s\S]+)/);
+          if (confirmMatch) {
+            var riskReason = confirmMatch[1];
+            var dangerCmd = confirmMatch[2];
+            var confirmWrap = document.createElement('div');
+            confirmWrap.style.cssText = 'margin-top:8px;display:flex;flex-direction:column;gap:8px;';
+            confirmWrap.innerHTML = `
+              <div style="font-size:12px;color:#ff9f0a;font-weight:600;">⚠️ 高危操作待确认：${escapeHtml(riskReason)}</div>
+              <div style="background:#2c2c2e;color:#f5f5f7;padding:8px 10px;border-radius:6px;font-size:12px;font-family:monospace;white-space:pre-wrap;word-break:break-all;">${escapeHtml(dangerCmd)}</div>
+              <div style="display:flex;gap:10px;align-items:center;">
+                <button class="danger-confirm-btn" style="padding:5px 14px;background:#ff453a;color:#fff;border:none;border-radius:6px;font-size:12px;cursor:pointer;" data-cmd="${escapeHtml(dangerCmd)}">确认执行</button>
+                <button class="danger-cancel-btn" style="padding:5px 14px;background:#3a3a3c;color:#fff;border:none;border-radius:6px;font-size:12px;cursor:pointer;">取消</button>
+              </div>
+            `;
+            confirmWrap.querySelector('.danger-confirm-btn').addEventListener('click', async function() {
+              var cmd = this.dataset.cmd;
+              try {
+                var r = await fetch('/permissions/grant-command', {
+                  method: 'POST',
+                  headers: {'Content-Type': 'application/json'},
+                  body: JSON.stringify({command: cmd}),
+                });
+                if (r.ok) {
+                  this.parentElement.innerHTML = '<span style="font-size:12px;color:#30d158;">✅ 已确认，请在输入框输入「继续」重试</span>';
+                } else {
+                  this.textContent = '授权失败';
+                }
+              } catch(e) {
+                this.textContent = '网络错误';
+              }
+            });
+            confirmWrap.querySelector('.danger-cancel-btn').addEventListener('click', function() {
+              this.parentElement.innerHTML = '<span style="font-size:12px;color:#8e8e93;">❌ 已取消执行</span>';
+            });
+            outArea.appendChild(confirmWrap);
           }
 
           // web_search 特殊处理：从结果中提取搜索来源并显示 badge
