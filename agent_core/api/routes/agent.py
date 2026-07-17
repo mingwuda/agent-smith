@@ -301,10 +301,7 @@ async def run_agent_stream(req: RunRequest, request: Request):
                     m = re.search(r'data: ({.*})', sse_event)
                     if m:
                         final_content = json.loads(m.group(1)).get("content", "")
-                    # ponytail: 仅当 done 有实际内容才算已转发 terminal；空 done（模型只输出推理、
-                    # 无正文无工具调用就 stop）不置位，让下方兜底逻辑发出提示，避免前端"秒终止无回复"。
-                    if final_content:
-                        forwarded_terminal_event = True
+                    forwarded_terminal_event = True  # ponytail: 只要后端显式结束流，就不算异常终止
                     continue
                 if '"type": "error"' in sse_event:
                     m = re.search(r'data: ({.*})', sse_event)
