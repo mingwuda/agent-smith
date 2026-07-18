@@ -298,7 +298,39 @@ async function pushUnpushedCommits() {
 async function browseDirectory(path, projectId) {
   currentBrowsePath = path || '';
   const fbPathEl = document.getElementById('fb-current-path');
-  if (fbPathEl) fbPathEl.textContent = path || (t('defaultWorkspace') || '默认工作区');
+  if (fbPathEl) {
+    fbPathEl.innerHTML = '';
+    if (!path) {
+      fbPathEl.textContent = t('defaultWorkspace') || '默认工作区';
+    } else {
+      const parts = path.split('/').filter(Boolean);
+      const crumbs = [];
+      let accum = '';
+      parts.forEach((p, i) => {
+        accum += (accum ? '/' : '') + p;
+        crumbs.push({ name: p, path: accum, isLast: i === parts.length - 1 });
+      });
+      const root = document.createElement('span');
+      root.className = 'crumb';
+      root.textContent = (t('defaultWorkspace') || '默认工作区');
+      root.onclick = () => browseDirectory('', projectId);
+      fbPathEl.appendChild(root);
+      crumbs.forEach(c => {
+        const sep = document.createElement('span');
+        sep.className = 'crumb-sep';
+        sep.textContent = '/';
+        fbPathEl.appendChild(sep);
+        const span = document.createElement('span');
+        span.className = 'crumb' + (c.isLast ? ' crumb-active' : '');
+        span.textContent = c.name;
+        if (!c.isLast) {
+          span.onclick = () => browseDirectory(c.path, projectId);
+          span.style.cursor = 'pointer';
+        }
+        fbPathEl.appendChild(span);
+      });
+    }
+  }
 
   const treeEl = document.getElementById('file-tree');
   if (treeEl) {
@@ -311,11 +343,22 @@ async function browseDirectory(path, projectId) {
 
   try {
     const qs = new URLSearchParams();
-    if (path) qs.set('path', path);
+    if (path) {
+      const apiPath = path.startsWith('/') ? path : '/' + path;
+      qs.set('path', apiPath);
+    }
     if (projectId) qs.set('project_id', projectId);
     const res = await fetch('/files/browse?' + qs.toString());
     if (!res.ok) {
-      if (treeEl) treeEl.innerHTML = '<div class="fb-empty">' + escapeHtml(t('loadFailed') || '加载失败') + '</div>';
+      if (res.status === 403) {
+        if (typeof showToast === 'function') showToast('🔒 无权限访问该目录');
+        const rootPath = currentProjectDir || '';
+        if (path !== rootPath) {
+          browseDirectory(rootPath, projectId);
+        }
+      } else {
+        if (treeEl) treeEl.innerHTML = '<div class="fb-empty">' + escapeHtml(t('loadFailed') || '加载失败') + '</div>';
+      }
       return;
     }
     const data = await res.json();

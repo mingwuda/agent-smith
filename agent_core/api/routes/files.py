@@ -36,30 +36,37 @@ def _resolve_base_path(request: Request) -> Path:
     return _workspace_for_user(uid)
 
 
-def _resolve_allowed_root(request: Request, path: Optional[str] = None) -> Path:
+def _resolve_allowed_root(request: Request, path: Optional[str] = None, project_id: Optional[str] = None) -> Path:
     """
     解析允许访问的根目录。
-    - path 为空：返回默认 workspace
-    - path 为绝对路径：验证是否在 workspace 下（或直接使用该路径作为项目目录）
+    - path 为空：返回默认 workspace 或项目目录
+    - path 为绝对/相对路径：强制限制在允许的根目录内
     - 返回安全的根路径对象
     """
+    uid = getattr(request.state, "user_id", "default")
+    base = _resolve_base_path(request)
+
+    # 如果传了 project_id 且项目有 directory_path，优先用项目目录作为根路径
+    if project_id and project_id.strip():
+        import session_store as _ss
+        project = _ss.get_project(uid, project_id)
+        if project and project.get("directory_path"):
+            base = Path(project["directory_path"])
+
+    if not base:
+        base = Path.home()
+    base = base.resolve()
+
     if not path or not path.strip():
-        base = _resolve_base_path(request)
-        if not base:
-            base = Path.home()
         return base
 
-    target = Path(path).resolve()
+    target = Path(path).expanduser().resolve()
 
-    # 安全检查：不允许路径穿越到敏感目录
-    _dangerous_prefixes = ['/etc', '/usr', '/var', '/System', '/Library',
-                           '/bin', '/sbin', '/Applications']
-    for prefix in _dangerous_prefixes:
-        try:
-            if str(target).startswith(prefix):
-                raise HTTPException(status_code=403, detail=f"禁止访问系统目录: {prefix}")
-        except (ValueError, TypeError):
-            pass
+    # 安全检查：只允许访问允许根目录内的路径
+    try:
+        target.relative_to(base)
+    except ValueError:
+        raise HTTPException(status_code=403, detail="禁止访问项目目录外的路径")
 
     if not target.exists():
         raise HTTPException(status_code=404, detail=f"路径不存在: {path}")
@@ -85,7 +92,7 @@ async def browse_directory(
     project_id: str = Query("", description="项目 ID，用于确定根目录"),
 ):
     """列出目录结构（树形数据），前端渲染为文件浏览器"""
-    root = _resolve_allowed_root(request, path)
+    root = _resolve_allowed_root(request, path, project_id)
 
     if not root.is_dir():
         raise HTTPException(status_code=400, detail="指定路径不是目录")
