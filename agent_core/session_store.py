@@ -252,61 +252,6 @@ def get_session(user_id: str, session_id: str) -> Optional[dict]:
         return _row_to_session(row, include_messages=True, messages=messages)
 
 
-def get_session_lite(user_id: str, session_id: str) -> Optional[dict]:
-    """获取单个会话的轻量消息（不含 steps/todo_list/images，用于懒加载）"""
-    with _connect(user_id) as conn:
-        row = conn.execute(
-            """
-            SELECT s.id, s.title, s.created_at, s.updated_at, COUNT(m.id) AS message_count,
-                   s.workspace, COALESCE(s.project_id,'') AS project_id
-            FROM sessions s LEFT JOIN messages m ON m.session_id = s.id
-            WHERE s.id = ? GROUP BY s.id
-            """,
-            (session_id,),
-        ).fetchone()
-        if not row:
-            return None
-        msg_rows = conn.execute(
-            "SELECT role, content, timestamp FROM messages WHERE session_id = ? ORDER BY id ASC",
-            (session_id,),
-        ).fetchall()
-        messages = []
-        for idx, r in enumerate(msg_rows):
-            parsed = _decode_message_content(r["content"])
-            messages.append({
-                "index": idx,
-                "role": r["role"],
-                "timestamp": r["timestamp"],
-                "content_preview": (parsed.get("content") or "")[:100],
-                "has_steps": bool(parsed.get("steps")),
-                "has_todo": bool(parsed.get("todo_list")),
-                "has_images": bool(parsed.get("images")),
-            })
-        return _row_to_session(row, include_messages=True, messages=messages)
-
-
-def get_message_detail(user_id: str, session_id: str, message_index: int) -> Optional[dict]:
-    """获取单条消息的完整内容（用于懒加载展开）"""
-    with _connect(user_id) as conn:
-        # 验证会话存在
-        row = conn.execute(
-            "SELECT id FROM sessions WHERE id = ?",
-            (session_id,),
-        ).fetchone()
-        if not row:
-            return None
-        # 按索引取消息（利用主键顺序）
-        msg_rows = conn.execute(
-            "SELECT role, content, timestamp FROM messages WHERE session_id = ? ORDER BY id ASC LIMIT 1 OFFSET ?",
-            (session_id, message_index),
-        ).fetchall()
-        if not msg_rows:
-            return None
-        r = msg_rows[0]
-        parsed = _decode_message_content(r["content"])
-        return parsed | {"role": r["role"], "timestamp": r["timestamp"], "index": message_index}
-
-
 def delete_session(user_id: str, session_id: str) -> bool:
     """删除会话"""
     with _connect(user_id) as conn:

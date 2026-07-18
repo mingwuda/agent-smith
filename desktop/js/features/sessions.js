@@ -59,7 +59,7 @@ async function loadSessions() {
   } catch {}
 }
 
-async function loadSessionMessages(sessionId, source, include = 'full') {
+async function loadSessionMessages(sessionId, source) {
   const container = document.getElementById('messages');
   // 立即清空旧消息，避免切换会话时短暂残留上一会话内容
   container.innerHTML = '';
@@ -71,12 +71,8 @@ async function loadSessionMessages(sessionId, source, include = 'full') {
   container.appendChild(loadingHint);
 
   try {
-    const params = new URLSearchParams();
-    if (source) params.set('source', source);
-    if (include === 'lite') params.set('include', 'lite');
-    const qs = params.toString() ? `?${params.toString()}` : '';
-    const endpoint = include === 'lite' ? `/sessions/${sessionId}/messages/lite${qs}` : `/sessions/${sessionId}${qs}`;
-    const res = await fetch(endpoint);
+    const qs = source ? `?source=${encodeURIComponent(source)}` : '';
+    const res = await fetch(`/sessions/${sessionId}${qs}`);
     // 无论成功失败都先移除加载提示
     const hint = document.getElementById('__session_loading_hint__');
     if (hint) hint.remove();
@@ -109,21 +105,13 @@ async function loadSessionMessages(sessionId, source, include = 'full') {
           addUserMessage(parsed.message, parsed.files.map(f => ({ name: f.name, mime_type: 'text/plain', content: f.content })));
         } else if (role === 'user' && msg.images && msg.images.length) {
           addUserMessage(content, msg.images.map(u => ({data_url: u})));
-        } else if (role === 'bot' && msg.has_steps) {
+        } else if (role === 'bot' && msg.steps && msg.steps.length) {
           // 估算本轮 bot 响应耗时：bot 时间 - 前一条 user 消息时间
           var botElapsed = 0;
           if (msg.timestamp && lastUserTs > 0) {
             try { botElapsed = new Date(msg.timestamp).getTime() - lastUserTs; } catch(e){}
           }
-          // 懒加载：直接渲染折叠卡片，首次展开时才加载完整 steps
-          // lite 接口只返回 content_preview，用预览文本作为占位内容
-          var previewContent = msg.content_preview || content || '';
-          addBotMessageWithSteps(previewContent, null, null, botElapsed, {
-            sessionId: sessionId,
-            source: source,
-            messageIndex: msg.index,
-            hasSteps: true
-          });
+          addBotMessageWithSteps(content, msg.steps, msg.todo_list, botElapsed);
         } else {
           addMessage(content, role);
         }
@@ -143,8 +131,7 @@ async function loadSessionMessages(sessionId, source, include = 'full') {
 }
 
 // 恢复带步骤卡片的助手消息（从历史加载时使用）
-// lazyOptions: { sessionId, source, messageIndex, hasSteps } 用于懒加载展开
-function addBotMessageWithSteps(content, steps, todoList, elapsedMs, lazyOptions) {
+function addBotMessageWithSteps(content, steps, todoList, elapsedMs) {
   const container = document.getElementById('messages');
   // 防止前一条消息的 _lastToolImageHtml 泄漏到当前消息
   _lastToolImageHtml = null;
@@ -163,12 +150,11 @@ function addBotMessageWithSteps(content, steps, todoList, elapsedMs, lazyOptions
   _isReplaying = true;  // 不会发起 WebSocket 等实时连接
 
   // ── 创建 .agent-response 卡片外壳（与实时输出结构一致）──
-  var hasSteps = !!(steps && steps.length);
-  var needsLazyLoad = !!(lazyOptions && lazyOptions.hasSteps);
+  var hasSteps = steps && steps.length > 0;
   var responseCard = null;
   var bodyEl = null;
 
-  if (hasSteps || content || needsLazyLoad) {
+  if (hasSteps || content) {
     responseCard = document.createElement('div');
     responseCard.className = 'agent-response finished collapsed';
     // 历史消息：耗时使用传入的估算值（有值显示，无值显示 —）
@@ -180,48 +166,11 @@ function addBotMessageWithSteps(content, steps, todoList, elapsedMs, lazyOptions
       '<span class="agent-toggle-arrow">\u25B6</span>' +
       '<span class="agent-time"><span class="agent-time-label">' + (t('workElapsed') || '工作耗时') + ': </span> <span class="agent-time-val">' + timeVal + '</span></span>';
     headerEl.onclick = function() {
-      var willExpand = responseCard.classList.contains('collapsed');
       responseCard.classList.toggle('collapsed');
-      // ponytail: 历史回放懒加载：首次展开时才加载并渲染 steps
-      if (willExpand && lazyOptions && lazyOptions.hasSteps && !responseCard.dataset.lazyStepsRendered) {
-        responseCard.dataset.lazyStepsRendered = 'true';
-        (async function() {
-          try {
-            const params = new URLSearchParams();
-            if (lazyOptions.source) params.set('source', lazyOptions.source);
-            const res = await fetch(`/sessions/${lazyOptions.sessionId}/messages/${lazyOptions.messageIndex}?${params.toString()}`);
-            if (res.ok) {
-              const detail = await res.json();
-              // 移除旧卡片，用完整数据重新渲染
-              if (responseCard.parentNode) responseCard.remove();
-              const fullSteps = detail.steps || [];
-              const todoList = detail.todo_list || null;
-              const fullContent = detail.content || content;
-              addBotMessageWithSteps(fullContent, fullSteps, todoList, elapsedMs, null);
-            }
-          } catch (e) {
-            console.error('[lazy load] failed:', e);
-          }
-        })();
-      } else if (willExpand && hasSteps && !responseCard.dataset.lazyStepsRendered) {
-        // 非懒加载场景（如已有完整 steps 的历史消息）
-        responseCard.dataset.lazyStepsRendered = 'true';
-        _isReplaying = true;
-        currentStepsEl = bodyEl;
-        var finalOutput = responseCard.querySelector('.agent-final-output');
-        if (finalOutput) currentBotMsgEl = finalOutput;
-        steps.forEach(function(data) {
-          handleStreamEvent(data);
-        });
-        _isReplaying = false;
-        document.querySelectorAll('.tool-card.open').forEach(function(card) {
-          card.classList.remove('open');
-        });
-      }
     };
     responseCard.appendChild(headerEl);
 
-    if (hasSteps || needsLazyLoad) {
+    if (hasSteps) {
       bodyEl = document.createElement('div');
       bodyEl.className = 'agent-body';
       responseCard.appendChild(bodyEl);
@@ -231,6 +180,16 @@ function addBotMessageWithSteps(content, steps, todoList, elapsedMs, lazyOptions
 
     container.appendChild(responseCard);
   }
+
+  // 先重放 steps（生成 🤔 思考块 / 🔧 工具卡片），顺序与实时流式一致：
+  // [用户消息] → [步骤容器：思考块/工具卡片] → [最终答案]
+  if (hasSteps) {
+    steps.forEach(data => {
+      handleStreamEvent(data);
+    });
+  }
+
+  _isReplaying = false;
 
   // 重放结束后，把最终答案 content 渲染为 agent-final-output（在卡片内）
   if (content) {
@@ -294,7 +253,7 @@ async function switchSession(sessionId, source, forceLoad = false) {
 
   try {
     // 加载该会话的历史消息（内部已立即清空旧消息）
-    await loadSessionMessages(sessionId, currentSessionSource, 'lite');
+    await loadSessionMessages(sessionId, currentSessionSource);
     refreshStats();
     // 加载该会话的工作目录
     loadWorkspaceDisplay();
