@@ -8,11 +8,11 @@
 """
 import asyncio
 import json
+import os
 import time
 import httpx
 
 BASE_URL = "http://127.0.0.1:8899"
-API_KEY = "1QY5zaOletbcA3g8hH3qcYeC3AzZ0vrFCaLErnz5jWXorpUq4iEa5wFJlheunghBC"
 PASS = 0
 FAIL = 0
 
@@ -107,8 +107,12 @@ async def test_log_context():
         
         # 再验证日志不乱：检查最近的日志
         import subprocess
+        log_path = os.environ.get("AGENT_LOG_PATH", "")
+        if not log_path:
+            print("  ⏭️  未设置 AGENT_LOG_PATH，跳过日志隔离检查")
+            return
         log = subprocess.check_output(
-            "grep 'test_log_a\|test_log_b' /Users/zhangming/.desktop_agent/logs/agent.log | tail -20",
+            f"grep 'test_log_a\\|test_log_b' {log_path} | tail -20",
             shell=True, text=True
         )
         has_a = "test_log_a" in log

@@ -67,6 +67,23 @@ for arg in "$@"; do
   esac
 done
 
+# ── 单实例守卫：清理遗留的 main.py 工作进程 ──
+# 背景：start.sh 以 nohup 后台拉起 python 时，若该进程被外层(systemd)误杀，
+# python 子进程会脱离端口绑定继续后台运行(尤其微信轮询)，普通端口检测抓不到它，
+# 导致"两个进程同时轮询同一账号→双回复"。这里在启动/重启前显式清理所有 main.py 工作进程。
+kill_stray_workers() {
+  local pids
+  pids=$(pgrep -f "main\.py" 2>/dev/null | grep -v "^$$\$") || true
+  if [[ -n "$pids" ]]; then
+    echo "🧹 清理遗留的 Agent 工作进程: $pids"
+    kill $pids 2>/dev/null || true
+    sleep 1
+    # 仍有残留则强制
+    pids=$(pgrep -f "main\.py" 2>/dev/null | grep -v "^$$\$") || true
+    [[ -n "$pids" ]] && kill -9 $pids 2>/dev/null || true
+  fi
+}
+
 # ── 查看状态 ──
 if [[ "$ACTION" == "status" ]]; then
   if [[ -f "$PIDFILE" ]]; then
@@ -127,6 +144,7 @@ if [[ "$ACTION" == "restart" ]]; then
     fi
   fi
   echo "   旧进程已停止"
+  kill_stray_workers
   cd "$SCRIPT_DIR/agent_core"
   nohup "$PYTHON" main.py > "$SCRIPT_DIR/agent.log" 2>&1 &
   echo $! > "$PIDFILE"
@@ -175,6 +193,7 @@ if lsof -ti ":$AGENT_PORT" >/dev/null 2>&1; then
 fi
 
 cd "$SCRIPT_DIR/agent_core"
+kill_stray_workers
 echo "🚀 Agent 启动中... http://$AGENT_HOST:$AGENT_PORT"
 echo "   日志目录: $HOME/.desktop_agent/logs/ (7天自动滚动)"
 

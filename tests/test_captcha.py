@@ -18,7 +18,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "agent_core"))
 
 # ── 配置 ─────────────────────────────────────────────────
-API_KEY = "1QY5zaOletbcA3g8hH3qcYeC3AzZ0vrFCaLErnz5jWXorpUq4iEa5wFJlheunghBC"
+# API Key 通过环境变量注入，禁止在代码/版本库中硬编码（避免密钥泄露）
+API_KEY = os.environ.get("AGENT_API_KEY", "")
 API_URL = "https://api.stepfun.com/v1/chat/completions"
 MODEL = "step-3.7-flash"
 
@@ -176,6 +177,10 @@ def check(name: str, condition: bool, detail: str = ""):
 async def call_vision_llm(png_path: str, is_page_level: bool, instruction_hint: str = "") -> dict | None:
     """调用视觉 LLM 识别验证码。返回解析后的 JSON dict。"""
     import httpx
+
+    if not API_KEY:
+        print("  ⚠️  未设置环境变量 AGENT_API_KEY，跳过视觉 LLM 真实调用")
+        return None
 
     w, h = png_dimensions(png_path)
     with open(png_path, "rb") as f:

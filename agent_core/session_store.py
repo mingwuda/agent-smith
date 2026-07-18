@@ -75,9 +75,13 @@ def _db_path(user_id: str) -> Path:
 def _connect(user_id: str = "default"):
     _ensure_dir()
     db_path = _db_path(user_id)
-    conn = sqlite3.connect(db_path)
+    # timeout: 写锁等待上限(秒)，避免瞬时并发直接抛 "database is locked"
+    # journal_mode=WAL + busy_timeout: 提升读写并发能力，写冲突时自动重试等待
+    conn = sqlite3.connect(db_path, timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA busy_timeout = 5000")
     try:
         _init_db(conn)
         yield conn

@@ -5,6 +5,7 @@
 """
 import asyncio
 import base64
+import fcntl
 import hashlib
 import json
 import logging
@@ -206,6 +207,7 @@ class WeChatBot:
         self.bot_token: Optional[str] = None
         self.bot_base_url: Optional[str] = None
         self._running = False
+        self._lock_fd = None  # 跨进程文件锁（fcntl），用于防止同一账号被多进程同时轮询
         self._task: Optional[asyncio.Task] = None
         self._update_buf: str = ""
         self._seen_msg_ids: set[str] = set()
@@ -883,12 +885,10 @@ class WeChatBot:
         # 发送"正在输入"状态
         await self.send_typing(from_user, context_token)
 
-        # 为当前会话设置独立的 agent 线程
-        self.agent._thread_id = session_id
-
+        # 为当前会话设置独立的 agent 线程（显式传入，避免并发时覆盖共享的 _thread_id）
         # 调用 agent 获取完整回复（支持图文消息）
         try:
-            reply = await self.agent.chat_sync(text, attachments=attachments)
+            reply = await self.agent.chat_sync(text, attachments=attachments, thread_id=session_id)
         except Exception as e:
             logger.exception("[微信Bot] agent 调用异常")
             reply = f"❌ 处理出错: {e}"
@@ -978,15 +978,41 @@ class WeChatBot:
             logger.warning("[微信Bot] 未登录，请先扫码")
             return
 
+        # 跨进程互斥：同一账号(同一 data_dir)全局只允许一个进程轮询。
+        # 用 fcntl 文件锁保证——若已有另一进程在轮询同一账号，这里抢锁失败，
+        # 直接放弃启动轮询并告警，从根上杜绝"两个进程都收消息→双回复"的问题。
+        # 进程被 kill 时 OS 会自动释放锁，因此无需手动清理也能自愈。
+        lock_path = Path(self.data_dir) / "wechat_bot.lock"
+        try:
+            self._lock_fd = open(lock_path, "w")
+            fcntl.flock(self._lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as e:
+            logger.warning(
+                "[微信Bot:%s] 未能获取轮询锁(另一进程可能已在轮询同一账号)，"
+                "本实例不启动轮询以避免重复回复: %s", self.user_id, e
+            )
+            if self._lock_fd:
+                self._lock_fd.close()
+            self._lock_fd = None
+            return
+
         self._running = True
         self._task = asyncio.create_task(self._poll_loop())
-        logger.info("[微信Bot] 已启动")
+        logger.info("[微信Bot:%s] 已启动(已获取轮询锁)", self.user_id)
 
     async def stop(self):
         """停止后台轮询"""
         self._running = False
         if self._task:
             self._task.cancel()
+        # 释放跨进程轮询锁，允许其他实例接管
+        if self._lock_fd:
+            try:
+                fcntl.flock(self._lock_fd, fcntl.LOCK_UN)
+                self._lock_fd.close()
+            except OSError:
+                pass
+            self._lock_fd = None
             try:
                 await self._task
             except asyncio.CancelledError:

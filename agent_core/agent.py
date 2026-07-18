@@ -777,13 +777,16 @@ class DesktopAgent:
 
         return "\n".join(learned) if learned else ""
 
-    async def chat_sync(self, message: str, attachments: Optional[list[dict]] = None) -> str:
+    async def chat_sync(self, message: str, attachments: Optional[list[dict]] = None, thread_id: str = "") -> str:
         """同步聊天：运行 agent 并收集完整的流式回复文本。
 
         适用于非浏览器场景（如微信、API 调用）需要一次性获取完整回复。
+
+        thread_id: 显式指定会话线程，避免并发时多个调用方互相覆盖共享的
+        self._thread_id（曾导致微信多用户并发串会话）。不传则回退到默认线程。
         """
         full = ""
-        async for sse_line in self._stream_done_wrapper(message, attachments=attachments):
+        async for sse_line in self._stream_done_wrapper(message, attachments=attachments, thread_id=thread_id):
             line = sse_line.strip()
             if line.startswith("data: ") and not line.startswith("data: [DONE]"):
                 try:
