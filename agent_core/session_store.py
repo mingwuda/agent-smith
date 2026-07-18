@@ -311,22 +311,8 @@ def get_session_lite(user_id: str, session_id: str, limit: int = 20, offset: int
                 if "images" in parsed:
                     msg_meta["images"] = parsed["images"]
             else:
-            else:
                 # 助手消息：只保留 content 和是否有 steps/todo 的标记
                 content_text = parsed.get("content", "") or ""
-                # 如果 content 为空，尝试从 steps 里提取最后一条文本作为 fallback
-                if not content_text and parsed.get("steps"):
-                    for step in reversed(parsed["steps"]):
-                        if not isinstance(step, dict):
-                            continue
-                        # 兼容不同历史版本存储的文本字段
-                        for key in ("text", "content", "output", "result", "message", "answer"):
-                            val = step.get(key)
-                            if isinstance(val, str) and val.strip():
-                                content_text = val.strip()
-                                break
-                        if content_text:
-                            break
                 # ponytail: lite 已排除 steps/todo 等重负载，最终正文本身很轻，
                 # 直接返回全文（仅对极端长文本兜底截断），避免历史卡片只显示 200 字让人误以为"输出丢失"。
                 # 这里不再 [:200]，详情接口仍返回完整内容。
@@ -338,18 +324,19 @@ def get_session_lite(user_id: str, session_id: str, limit: int = 20, offset: int
             messages.append(msg_meta)
 
         # 判断是否还有更早的消息
-        # 判断是否还有更早的消息
         if offset < 0:
             has_more = total_count > len(messages)
         else:
-            has_more = (offset + len(messages)) < total_count
+            has_more = offset > 0
+
         result = _row_to_session(row, include_messages=True, messages=messages)
         result["has_more"] = has_more
         result["total_count"] = total_count
         return result
 
 
-def get_message_detail(user_id: str, session_id: str, message_index: int) -> Optional[dict]:    """获取单条消息的完整详情（含 steps/todo/content）"""
+def get_message_detail(user_id: str, session_id: str, message_index: int) -> Optional[dict]:
+    """获取单条消息的完整详情（含 steps/todo/content）"""
     with _connect(user_id) as conn:
         msg_rows = conn.execute(
             "SELECT role, content, timestamp FROM messages WHERE session_id = ? ORDER BY id ASC",
