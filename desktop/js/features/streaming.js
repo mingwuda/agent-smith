@@ -432,10 +432,20 @@ function handleStreamEvent(data) {
       row = document.createElement('div');
       row.className = 'subagent-row';
       if (currentStepsEl) {
-        currentStepsEl.insertAdjacentElement('afterend', row);
+        currentStepsEl.appendChild(row);  // ponytail: 子代理输出放入工作耗时区域（agent-body），而非 messages 底部
       } else {
         container.appendChild(row);
       }
+      // 折叠 toggle
+      const toggle = document.createElement('div');
+      toggle.className = 'subagent-row-toggle';
+      toggle.innerHTML = '<span class="subagent-row-arrow">▶</span><span class="subagent-row-title">子代理执行</span><span class="subagent-row-count"></span>';
+      toggle.onclick = function() {
+        row.classList.toggle('collapsed');
+        const arrow = toggle.querySelector('.subagent-row-arrow');
+        if (arrow) arrow.style.transform = row.classList.contains('collapsed') ? '' : 'rotate(90deg)';
+      };
+      row.parentNode.insertBefore(toggle, row);
     }
     const iconMap = { searcher: '🔍', coder: '<>', reviewer: '👁', debugger: '🐛' };
 
@@ -518,6 +528,13 @@ function handleStreamEvent(data) {
       _ensureCapsuleStream(capId, logEl);
     });
 
+    // 更新折叠 toggle 计数
+    const row = container.querySelector('.subagent-row');
+    const toggle = row && row.parentNode.querySelector('.subagent-row-toggle');
+    const countEl = toggle && toggle.querySelector('.subagent-row-count');
+    if (countEl && capsules && capsules.length) {
+      countEl.textContent = '(' + capsules.length + ')';
+    }
     smartScroll(container);
   }
 

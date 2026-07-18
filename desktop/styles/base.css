@@ -179,7 +179,13 @@
   @keyframes bounce { 0%,80%,100% { transform:translateY(0); } 40% { transform:translateY(-6px); } }
 
   /* 子代理胶囊 */
-  .subagent-row { display:flex; flex-flow:row wrap; gap:12px 16px; margin:8px 0 4px; align-items:flex-start; max-width:100%; }
+  .subagent-row-toggle { display:flex; align-items:center; gap:6px; padding:6px 10px; cursor:pointer; user-select:none; color:#555; font-size:12px; }
+  .subagent-row-toggle:hover { background:#f5f5f7; }
+  .subagent-row-arrow { font-size:9px; color:#999; transition:transform .2s; display:inline-block; }
+  .subagent-row-title { font-weight:500; }
+  .subagent-row-count { color:#999; font-size:11px; }
+  .subagent-row { display:flex; flex-flow:row wrap; gap:12px 16px; margin:4px 0 4px 0; align-items:flex-start; max-width:100%; }
+  .subagent-row.collapsed .subagent-group { display:none; }
   .subagent-group { display:flex; flex-direction:column; gap:4px; min-width:0; max-width:280px; border:1px dashed #ccc; border-radius:10px; padding:6px; background:#fafafa; }
   .subagent-capsule { display:inline-flex; align-items:center; gap:5px; padding:4px 10px 4px 5px; background:#fff; border:1px solid #b0b0b8; border-radius:18px; font-size:12px; cursor:pointer; transition:all .15s; box-shadow:0 1px 3px rgba(0,0,0,.08); max-width:260px; }
   .subagent-capsule:hover { background:#f5f5ff; border-color:#7c5ce7; }
