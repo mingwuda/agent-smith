@@ -1128,7 +1128,13 @@ class DesktopAgent:
         """
         tid = thread_id or self._thread_id
         run_config = self._run_config(tid)
-        graph = self._create_graph(model_override) if model_override else self._graph
+        # workspace 变化会令 self._graph 失效为 None，这里在缺失时惰性重建
+        if model_override:
+            graph = self._create_graph(model_override)
+        elif self._graph is None:
+            graph = self._create_graph()
+        else:
+            graph = self._graph
         input_messages = []
         thread_key = self._thread_key(tid)
         await self._repair_checkpoint_tool_history(run_config, graph)
