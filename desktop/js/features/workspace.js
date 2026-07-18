@@ -221,6 +221,8 @@ async function openFileBrowser(projectId) {
   await browseDirectory(path, projectId);
   // 预加载变更数量，显示角标
   prefetchChangesCount();
+  // 检测未推送提交，显示推送图标
+  checkUnpushedCommits();
 }
 
 function exitFileBrowser() {
@@ -240,6 +242,57 @@ function exitFileBrowser() {
 
 function refreshFileBrowser() {
   browseDirectory(currentBrowsePath, currentProjectId);
+  checkUnpushedCommits();
+}
+
+async function checkUnpushedCommits() {
+  const btn = document.getElementById('fb-push-btn');
+  if (!btn) return;
+  try {
+    const qs = new URLSearchParams();
+    if (currentProjectId) qs.set('project_id', currentProjectId);
+    const res = await fetch('/files/unpushed-count?' + qs.toString());
+    if (!res.ok) return;
+    const data = await res.json();
+    const count = data.unpushed_count || 0;
+    if (count > 0) {
+      btn.style.display = '';
+      btn.title = '推送 ' + count + ' 个未推送提交';
+    } else if (count === -1) {
+      btn.style.display = '';
+      btn.title = '推送（未设置 upstream）';
+    } else {
+      btn.style.display = 'none';
+    }
+  } catch (_) {}
+}
+
+async function pushUnpushedCommits() {
+  const btn = document.getElementById('fb-push-btn');
+  if (!btn) return;
+  btn.disabled = true;
+  btn.textContent = '⏳';
+  try {
+    const res = await fetch('/files/push', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project_id: currentProjectId || '' }),
+    });
+    const d = await res.json();
+    if (d.success) {
+      if (typeof showToast === 'function') showToast('✅ ' + (d.output || '推送成功'));
+      checkUnpushedCommits();
+    } else {
+      alert('推送失败：\n' + (d.output || '未知错误'));
+    }
+  } catch (e) {
+    alert('推送失败：' + (e && e.message ? e.message : e));
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = '⬆️';
+    }
+  }
 }
 
 async function browseDirectory(path, projectId) {

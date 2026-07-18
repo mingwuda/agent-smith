@@ -273,6 +273,53 @@ async def get_changed_files(
     }
 
 
+@router.get("/files/unpushed-count")
+async def get_unpushed_count(
+    request: Request,
+    project_id: str = Query("", description="项目 ID"),
+):
+    """
+    获取当前 Git 仓库未推送的提交数量。
+    返回 {"unpushed_count": N}，N=0 表示没有未推送提交。
+    """
+    from services.workspace import _workspace_for_user
+    uid = getattr(request.state, "user_id", "default")
+    base = _workspace_for_user(uid)
+
+    if project_id and project_id.strip():
+        import session_store as _ss
+        project = _ss.get_project(uid, project_id)
+        if project and project.get("directory_path"):
+            base = Path(project["directory_path"])
+
+    if not base or not base.is_dir():
+        raise HTTPException(status_code=400, detail="无法确定项目根目录")
+
+    _, err = _run_git(str(base), "rev-parse", "--is-inside-work-tree")
+    if err:
+        raise HTTPException(status_code=400, detail="当前目录不是 Git 仓库")
+
+    # 获取当前分支名
+    branch, _ = _run_git(str(base), "rev-parse", "--abbrev-ref", "HEAD")
+    if not branch:
+        return {"unpushed_count": 0}
+
+    # 检查是否有 upstream
+    upstream, _ = _run_git(str(base), "rev-parse", "--abbrev-ref", "@{upstream}")
+    if not upstream:
+        # 没有 upstream，视为有未推送提交（需要先 push -u）
+        return {"unpushed_count": -1}
+
+    # 比较本地与远程的提交数
+    count_out, _ = _run_git(str(base), "rev-list", "--count", "HEAD", "--not", upstream)
+    try:
+        count = int(count_out.strip()) if count_out.strip() else 0
+    except ValueError:
+        count = 0
+
+    return {"unpushed_count": count}
+
+
 def _parse_status(status_out: str) -> str | None:
     """从 `git status --porcelain` 的输出推断单个文件的有效状态。
 
@@ -582,3 +629,12 @@ async def commit_and_push(request: Request, payload: dict = Body(...)):
         return {"success": False, "output": "提交失败：\n" + output}
     pushed, pout = _push_at(str(base))
     return {"success": pushed, "output": output + "\n\n" + (pout or "")}
+
+
+@router.post("/files/push")
+async def push_commits(request: Request, payload: dict = Body(...)):
+    """推送当前分支到远程（不提交，只 push）。"""
+    project_id = (payload or {}).get("project_id", "")
+    base = _resolve_repo_root(request, project_id)
+    pushed, output = _push_at(str(base))
+    return {"success": pushed, "output": output}
