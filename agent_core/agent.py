@@ -958,7 +958,20 @@ class DesktopAgent:
 
     def _rebuild_graph(self):
         self._graph = self._create_graph()
-    
+
+    def _get_graph(self, model_override: str = ""):
+        """获取当前可用的编译图，统一处理两种取图场景。
+
+        - model_override 给定时总是重新编译（用于按请求切换模型），不缓存。
+        - 否则若缓存的 self._graph 为 None（例如 set_workspace 使其失效），
+          则惰性重建并缓存，避免重复编译。
+        """
+        if model_override:
+            return self._create_graph(model_override)
+        if self._graph is None:
+            self._graph = self._create_graph()
+        return self._graph
+
     async def run(
         self,
         message: str,
@@ -974,13 +987,8 @@ class DesktopAgent:
         """
         tid = thread_id or self._thread_id
         config = self._run_config(tid)
-        # workspace 变化会令 self._graph 失效为 None，这里在缺失时惰性重建
-        if model_override:
-            graph = self._create_graph(model_override)
-        elif self._graph is None:
-            graph = self._create_graph()
-        else:
-            graph = self._graph
+        # 取可用 graph：model_override 时重建，缺失时惰性重建（见 _get_graph）
+        graph = self._get_graph(model_override)
         input_messages = []
         thread_key = self._thread_key(tid)
         await self._repair_checkpoint_tool_history(config, graph)
@@ -1128,13 +1136,8 @@ class DesktopAgent:
         """
         tid = thread_id or self._thread_id
         run_config = self._run_config(tid)
-        # workspace 变化会令 self._graph 失效为 None，这里在缺失时惰性重建
-        if model_override:
-            graph = self._create_graph(model_override)
-        elif self._graph is None:
-            graph = self._create_graph()
-        else:
-            graph = self._graph
+        # 取可用 graph：model_override 时重建，缺失时惰性重建（见 _get_graph）
+        graph = self._get_graph(model_override)
         input_messages = []
         thread_key = self._thread_key(tid)
         await self._repair_checkpoint_tool_history(run_config, graph)
