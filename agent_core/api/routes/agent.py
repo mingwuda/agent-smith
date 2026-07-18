@@ -354,7 +354,16 @@ async def run_agent_stream(req: RunRequest, request: Request):
                 yield f"data: {json.dumps({'type': 'done', 'content': fallback}, ensure_ascii=False)}\n\n"
                 _save_assistant_result(uid, session_id, req.message, fallback, collected_steps, collected_todo_list)
             else:
-                logger.info("[run/stream] 已转发 terminal 事件，不再发送兜底")
+                # ponytail: 已转发 terminal 事件但正文为空（如到达最大推理步数、模型未产出可见正文），
+                # 原逻辑会直接跳过保存，导致这一轮历史完全丢失（历史里只剩用户提问）。
+                # 用已收集的步骤合成占位正文后照常保存，保证历史完整、可回放。
+                logger.warning(
+                    "[run/stream] terminal 事件正文为空，用收集到的步骤合成占位历史（steps=%d）",
+                    len(collected_steps or []),
+                )
+                note = "（本轮已结束，但未生成正文；已记录以下工作步骤。）"
+                yield f"data: {json.dumps({'type': 'done', 'content': note}, ensure_ascii=False)}\n\n"
+                _save_assistant_result(uid, session_id, req.message, note, collected_steps, collected_todo_list)
         except Exception as e:
             logger.exception("SSE 流处理异常")
             err_msg = f"服务内部错误: {e}"
