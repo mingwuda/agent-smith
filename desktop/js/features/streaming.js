@@ -14,6 +14,7 @@ var _currentProgressLine = null; // 当前进度指示行 DOM
 
 // 会话回放标记：加载历史消息时设为 true，避免重复触发工具副作用
 var _isReplaying = false;
+var _subagentToolStep = null;  // 当前子代理对应的工具调用 step，用于锚定胶囊行位置
 
 // ---------- 耗时格式化 ----------
 
@@ -157,6 +158,7 @@ async function send() {
   _agentStartTime = Date.now();
   _currentActiveLine = null;
   _currentProgressLine = null;
+  _subagentToolStep = null;
 
   // 用于挂载本轮卡片的消息容器
   const container = document.getElementById('messages');
@@ -425,13 +427,24 @@ function handleStreamEvent(data) {
   // 子代理胶囊渲染（按 cap.id diff 复用/创建/删除）
   const _subagentStreams = new Map();  // capId -> EventSource
 
-  function renderSubagentCapsules(capsules, forcedStatus) {
+  function renderSubagentCapsules(capsules, forcedStatus, anchorStep) {
     if (!capsules) return;
-    let row = container.querySelector('.subagent-row');
+    let row = anchorStep !== undefined && anchorStep !== null
+      ? container.querySelector('.subagent-row[data-for-step="' + anchorStep + '"]')
+      : container.querySelector('.subagent-row');
     if (!row) {
       row = document.createElement('div');
       row.className = 'subagent-row';
-      if (currentStepsEl) {
+      if (anchorStep !== undefined && anchorStep !== null) {
+        row.dataset.forStep = anchorStep;
+      }
+      let anchorCard = null;
+      if (anchorStep !== undefined && anchorStep !== null) {
+        anchorCard = currentStepsEl ? currentStepsEl.querySelector('.tool-card[data-step="' + anchorStep + '"]') : null;
+      }
+      if (anchorCard) {
+        anchorCard.after(row);            // 锚定到对应工具卡片之后
+      } else if (currentStepsEl) {
         currentStepsEl.appendChild(row);  // ponytail: 子代理输出放入工作耗时区域（agent-body），而非 messages 底部
       } else {
         container.appendChild(row);
@@ -529,8 +542,8 @@ function handleStreamEvent(data) {
     });
 
     // 更新折叠 toggle 计数
-    const row = container.querySelector('.subagent-row');
-    const toggle = row && row.parentNode.querySelector('.subagent-row-toggle');
+    const subRow = container.querySelector('.subagent-row');
+    const toggle = subRow && subRow.parentNode.querySelector('.subagent-row-toggle');
     const countEl = toggle && toggle.querySelector('.subagent-row-count');
     if (countEl && capsules && capsules.length) {
       countEl.textContent = '(' + capsules.length + ')';
@@ -641,13 +654,12 @@ function handleStreamEvent(data) {
         addMessage('⚠️ 触发子代理但无胶囊数据', 'system');
         break;
       }
-      addMessage('🔍 子代理搜索已启动：' + data.capsules.length + ' 个任务', 'system');
-      renderSubagentCapsules(data.capsules, 'running');
+      renderSubagentCapsules(data.capsules, 'running', _subagentToolStep);
       break;
 
     case 'subagent_end':
-      renderSubagentCapsules(data.capsules, 'done');
-      addMessage('✅ 子代理搜索已完成，正在汇总...', 'system');
+      renderSubagentCapsules(data.capsules, 'done', _subagentToolStep);
+      _subagentToolStep = null;
       showGeneratingBadge('🔄 正在汇总...');
       break;
 
@@ -691,6 +703,9 @@ function handleStreamEvent(data) {
       totalSteps = data.step || totalSteps + 1;
       const curStep = data.step || (totalSteps - 1);
       _toolTimers[curStep] = Date.now();
+      if (data.tool === 'delegate_tasks_parallel' || data.tool === 'delegate_task') {
+        _subagentToolStep = curStep;
+      }
       ensureStepsContainer();
 
       const toolIcon = getToolIcon(data.tool);
