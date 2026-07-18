@@ -402,14 +402,13 @@ function toggleChangesView() {
   if (btn) {
     btn.classList.toggle('active', _isChangesView);
     if (_isChangesView) {
-      btn.title = '提交变更';
-      // 变更清单视图下：把图标改成 💾，点击打开提交对话框
+      // 进入变更视图：先加载数据，再根据是否有变更决定按钮行为
+      btn.title = '变更文件';
       const iconNode = btn.childNodes[0];
-      if (iconNode && iconNode.nodeType === Node.TEXT_NODE) iconNode.textContent = '💾';
-      btn.onclick = openCommitDialog;
+      if (iconNode && iconNode.nodeType === Node.TEXT_NODE) iconNode.textContent = '📝';
+      btn.onclick = toggleChangesView;
     } else {
       btn.title = '变更文件';
-      // 返回文件列表视图：恢复图标和点击行为
       const iconNode = btn.childNodes[0];
       if (iconNode && iconNode.nodeType === Node.TEXT_NODE) iconNode.textContent = '📝';
       btn.onclick = toggleChangesView;
@@ -445,6 +444,22 @@ async function loadChangedFiles() {
     const data = await res.json();
     _updateChangesBadge(data.total_changes || 0);
     renderChangedFiles(data);
+    // 根据是否有变更，切换按钮行为
+    const hasChanges = (data.total_changes || 0) > 0;
+    const btn = document.getElementById('fb-changes-btn');
+    if (btn) {
+      if (hasChanges) {
+        btn.title = '提交变更';
+        const iconNode = btn.childNodes[0];
+        if (iconNode && iconNode.nodeType === Node.TEXT_NODE) iconNode.textContent = '💾';
+        btn.onclick = openCommitDialog;
+      } else {
+        btn.title = '变更文件';
+        const iconNode = btn.childNodes[0];
+        if (iconNode && iconNode.nodeType === Node.TEXT_NODE) iconNode.textContent = '📝';
+        btn.onclick = toggleChangesView;
+      }
+    }
   } catch (e) {
     treeEl.innerHTML = '<div class="fb-empty">' + escapeHtml(t('loadFailed') || '加载失败') + '</div>';
   }
