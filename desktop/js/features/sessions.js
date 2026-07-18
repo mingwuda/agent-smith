@@ -59,7 +59,7 @@ async function loadSessions() {
   } catch {}
 }
 
-async function loadSessionMessages(sessionId, source) {
+async function loadSessionMessages(sessionId, source, options = {}) {
   const container = document.getElementById('messages');
   // 立即清空旧消息，避免切换会话时短暂残留上一会话内容
   container.innerHTML = '';
@@ -71,8 +71,10 @@ async function loadSessionMessages(sessionId, source) {
   container.appendChild(loadingHint);
 
   try {
-    const qs = source ? `?source=${encodeURIComponent(source)}` : '';
-    const res = await fetch(`/sessions/${sessionId}${qs}`);
+    const limit = options.limit || 20;
+    const offset = options.offset != null ? options.offset : -20;
+    const qs = source ? `?source=${encodeURIComponent(source)}&include=lite&limit=${limit}&offset=${offset}` : `?include=lite&limit=${limit}&offset=${offset}`;
+    const res = await fetch(`/sessions/${sessionId}/messages/lite${qs}`);
     // 无论成功失败都先移除加载提示
     const hint = document.getElementById('__session_loading_hint__');
     if (hint) hint.remove();
@@ -85,7 +87,7 @@ async function loadSessionMessages(sessionId, source) {
       // 用于估算每轮 bot 响应的耗时（前一条 user 消息时间 → 当前 bot 消息时间）
       var lastUserTs = 0;
       if (data.messages && data.messages.length > 0) {
-      data.messages.forEach(msg => {
+      data.messages.forEach((msg, idx) => {
         const role = msg.role === 'user' ? 'user' : 'bot';
         const content = msg.content || '';
         const parsed = role === 'user' ? parseTextFilesFromContent(content) : null;
@@ -105,13 +107,15 @@ async function loadSessionMessages(sessionId, source) {
           addUserMessage(parsed.message, parsed.files.map(f => ({ name: f.name, mime_type: 'text/plain', content: f.content })));
         } else if (role === 'user' && msg.images && msg.images.length) {
           addUserMessage(content, msg.images.map(u => ({data_url: u})));
-        } else if (role === 'bot' && msg.steps && msg.steps.length) {
+        } else if (role === 'bot' && msg.has_steps) {
           // 估算本轮 bot 响应耗时：bot 时间 - 前一条 user 消息时间
           var botElapsed = 0;
           if (msg.timestamp && lastUserTs > 0) {
             try { botElapsed = new Date(msg.timestamp).getTime() - lastUserTs; } catch(e){}
           }
-          addBotMessageWithSteps(content, msg.steps, msg.todo_list, botElapsed);
+          addBotMessagePlaceholder(content, msg.content_preview, botElapsed, sessionId, msg.index != null ? msg.index : idx);
+        } else if (role === 'bot') {
+          addMessage(content || msg.content_preview || '', 'bot');
         } else {
           addMessage(content, role);
         }
@@ -119,6 +123,18 @@ async function loadSessionMessages(sessionId, source) {
       } else {
         addMessage(t('emptySession'), 'system');
       }
+      // 存储分页状态
+      _sessionPageState = {
+        sessionId,
+        source: source || 'web',
+        limit,
+        offset,
+        hasMore: data.has_more,
+        totalCount: data.total_count,
+        loadedCount: data.messages ? data.messages.length : 0,
+      };
+      // 绑定滚动加载更多
+      _attachSessionScrollLoader();
     }
     // 会话消息加载完成后强制滚动到底部
     if (container) container.scrollTop = container.scrollHeight;
@@ -127,6 +143,117 @@ async function loadSessionMessages(sessionId, source) {
     const hint = document.getElementById('__session_loading_hint__');
     if (hint) hint.remove();
     console.error('[loadSession] failed:', e);
+  }
+}
+
+// 历史消息占位卡片（带步骤但尚未展开详情）
+function addBotMessagePlaceholder(content, contentPreview, elapsedMs, sessionId, messageIndex) {
+  const container = document.getElementById('messages');
+  _lastToolImageHtml = null;
+  if (_currentTodoPanel && _currentTodoPanel.parentNode) {
+    _currentTodoPanel.remove();
+  }
+  _currentTodoPanel = null;
+  currentBotMsgEl = null;
+  currentStepsEl = null;
+  currentFinalContent = '';
+  totalSteps = 0;
+  hasToolCalls = false;
+  generatingBadgeEl = null;
+
+  var responseCard = document.createElement('div');
+  responseCard.className = 'agent-response finished collapsed';
+  var timeVal = (elapsedMs && elapsedMs > 0) ? formatElapsed(elapsedMs) : '\u2014';
+  var headerEl = document.createElement('div');
+  headerEl.className = 'agent-header';
+  headerEl.innerHTML =
+    '<div class="agent-avatar">\uD83E\uDD16</div>' +
+    '<span class="agent-toggle-arrow">\u25B6</span>' +
+    '<span class="agent-time"><span class="agent-time-label">' + (t('workElapsed') || '工作耗时') + ': </span> <span class="agent-time-val">' + timeVal + '</span></span>';
+  headerEl.onclick = function() {
+    if (responseCard.classList.contains('collapsed')) {
+      expandBotMessagePlaceholder(responseCard, sessionId, messageIndex);
+    } else {
+      responseCard.classList.add('collapsed');
+    }
+  };
+  responseCard.appendChild(headerEl);
+
+  var bodyEl = document.createElement('div');
+  bodyEl.className = 'agent-body';
+  responseCard.appendChild(bodyEl);
+
+  if (content || contentPreview) {
+    const ans = document.createElement('div');
+    ans.className = 'agent-final-output';
+    ans.innerHTML = renderMarkdown(content || contentPreview || '');
+    responseCard.appendChild(ans);
+    currentBotMsgEl = ans;
+  }
+
+  container.appendChild(responseCard);
+}
+
+// 展开历史消息占位卡片，按需加载完整 steps/todo
+async function expandBotMessagePlaceholder(responseCard, sessionId, messageIndex) {
+  if (responseCard.dataset.loading === 'true') return;
+  responseCard.dataset.loading = 'true';
+  const bodyEl = responseCard.querySelector('.agent-body');
+  if (!bodyEl) return;
+  bodyEl.innerHTML = '<div style="padding:8px 12px;color:#8e8e93;font-size:12px;">加载工作详情...</div>';
+
+  try {
+    const res = await fetch(`/sessions/${sessionId}/messages/${messageIndex}?source=${encodeURIComponent(currentSessionSource || 'web')}`);
+    if (!res.ok) throw new Error('failed');
+    const data = await res.json();
+    const msg = data.message || {};
+    const steps = msg.steps || [];
+    const todoList = msg.todo_list;
+    const content = msg.content || '';
+
+    bodyEl.innerHTML = '';
+    currentStepsEl = bodyEl;
+    currentBotMsgEl = null;
+    currentFinalContent = '';
+    totalSteps = 0;
+    hasToolCalls = false;
+    _isReplaying = true;
+
+    if (steps.length) {
+      steps.forEach(evt => handleStreamEvent(evt));
+    }
+
+    _isReplaying = false;
+
+    const ans = document.createElement('div');
+    ans.className = 'agent-final-output';
+    ans.innerHTML = renderMarkdown(content);
+    currentBotMsgEl = ans;
+    responseCard.appendChild(ans);
+
+    if (todoList) {
+      renderTodoPanel(todoList, false);
+    }
+    if (currentBotMsgEl && _currentTodoPanel) {
+      responseCard.insertBefore(_currentTodoPanel, currentBotMsgEl);
+    }
+
+    document.querySelectorAll('.tool-status-dot.running').forEach(d => {
+      d.className = 'tool-status-dot done';
+    });
+    document.querySelectorAll('.thinking-step').forEach(el => el.remove());
+    document.querySelectorAll('.tool-card.open').forEach(card => {
+      card.classList.remove('open');
+    });
+    removeGeneratingBadge();
+
+    currentBotMsgEl = null;
+    currentStepsEl = null;
+    responseCard.classList.remove('collapsed');
+  } catch (e) {
+    bodyEl.innerHTML = '<div style="padding:8px 12px;color:#ff453a;font-size:12px;">加载失败，请重试</div>';
+  } finally {
+    responseCard.dataset.loading = 'false';
   }
 }
 
@@ -253,7 +380,7 @@ async function switchSession(sessionId, source, forceLoad = false) {
 
   try {
     // 加载该会话的历史消息（内部已立即清空旧消息）
-    await loadSessionMessages(sessionId, currentSessionSource);
+    await loadSessionMessages(sessionId, currentSessionSource, { limit: 20, offset: -20 });
     refreshStats();
     // 加载该会话的工作目录
     loadWorkspaceDisplay();
@@ -396,3 +523,108 @@ window.addEventListener('resize', function() {
     overlay.classList.remove('show');
   }
 });
+
+// 会话消息滚动加载更多（往上滚动时加载更早的消息）
+let _sessionPageState = null;
+let _sessionLoadingMore = false;
+
+function _attachSessionScrollLoader() {
+  const container = document.getElementById('messages');
+  if (!container) return;
+  container.removeEventListener('scroll', _onSessionScroll);
+  container.addEventListener('scroll', _onSessionScroll);
+}
+
+function _onSessionScroll() {
+  const container = document.getElementById('messages');
+  console.log('[scroll] fired', {
+    hasContainer: !!container,
+    hasState: !!_sessionPageState,
+    loadingMore: _sessionLoadingMore,
+    scrollTop: container ? container.scrollTop : null,
+    hasMore: _sessionPageState ? _sessionPageState.hasMore : null,
+  });
+  if (!container || !_sessionPageState || _sessionLoadingMore) return;
+  // 当用户往上滚动，且距离顶部小于 100px 时，加载更早的消息
+  if (container.scrollTop < 100 && _sessionPageState.hasMore) {
+    console.log('[scroll] trigger load older', {
+      scrollTop: container.scrollTop,
+      hasMore: _sessionPageState.hasMore,
+      loadedCount: _sessionPageState.loadedCount,
+      totalCount: _sessionPageState.totalCount,
+      offset: _sessionPageState.offset,
+    });
+    _loadOlderMessages();
+  }
+}
+
+async function _loadOlderMessages() {
+  if (!_sessionPageState || _sessionLoadingMore) return;
+  _sessionLoadingMore = true;
+  const { sessionId, source, limit, loadedCount, totalCount } = _sessionPageState;
+  // 从末尾往回取：用 totalCount 计算更早消息的起始 offset，避免重复
+  const newOffset = Math.max(0, totalCount - loadedCount - limit);
+  try {
+    const qs = source ? `?source=${encodeURIComponent(source)}&include=lite&limit=${limit}&offset=${newOffset}` : `?include=lite&limit=${limit}&offset=${newOffset}`;
+    const res = await fetch(`/sessions/${sessionId}/messages/lite${qs}`);
+    if (!res.ok) return;
+    const data = await res.json();
+    if (!data.messages || data.messages.length === 0) return;
+
+    // 在消息列表顶部插入更早的消息
+    const container = document.getElementById('messages');
+    const firstExisting = container.firstChild;
+    // 临时保存当前 scrollHeight，以便插入后保持滚动位置
+    const prevScrollHeight = container.scrollHeight;
+    const prevScrollTop = container.scrollTop;
+
+    // 用数组暂存新消息元素，再统一插入到顶部
+    const newEls = [];
+    data.messages.forEach((msg) => {
+      const role = msg.role === 'user' ? 'user' : 'bot';
+      const content = msg.content || '';
+      const parsed = role === 'user' ? parseTextFilesFromContent(content) : null;
+      let newEl = null;
+      if (role === 'user' && parsed && parsed.files.length) {
+        newEl = addUserMessage(parsed.message, parsed.files.map(f => ({ name: f.name, mime_type: 'text/plain', content: f.content })));
+      } else if (role === 'user' && msg.images && msg.images.length) {
+        newEl = addUserMessage(content, msg.images.map(u => ({data_url: u})));
+      } else if (role === 'bot' && msg.has_steps) {
+        // 估算 bot 耗时
+        var botElapsed = 0;
+        if (msg.timestamp) {
+          const prevUser = _msgHistory.length > 0 ? new Date(_msgHistory[_msgHistory.length - 1]).getTime() : 0;
+          try { botElapsed = new Date(msg.timestamp).getTime() - prevUser; } catch(e){}
+        }
+        newEl = addBotMessagePlaceholder(content, msg.content_preview, botElapsed, sessionId, msg.index != null ? msg.index : 0);
+      } else if (role === 'bot') {
+        newEl = addMessage(content || msg.content_preview || '', 'bot');
+      } else {
+        newEl = addMessage(content, role);
+      }
+      if (newEl) newEls.push(newEl);
+    });
+
+    // 将新消息统一插入到现有消息顶部
+    if (newEls.length > 0 && firstExisting) {
+      const fragment = document.createDocumentFragment();
+      newEls.forEach(el => fragment.appendChild(el));
+      container.insertBefore(fragment, firstExisting);
+    }
+
+    // 更新分页状态
+    _sessionPageState.offset = newOffset;
+    _sessionPageState.hasMore = data.has_more;
+    _sessionPageState.loadedCount += data.messages.length;
+
+    // 保持滚动位置：用户往上滚时，新内容插在顶部，不应把视口往下推
+    requestAnimationFrame(() => {
+      const newScrollHeight = container.scrollHeight;
+      container.scrollTop = prevScrollTop + (newScrollHeight - prevScrollHeight);
+    });
+  } catch (e) {
+    console.error('[loadOlderMessages] failed:', e);
+  } finally {
+    _sessionLoadingMore = false;
+  }
+}

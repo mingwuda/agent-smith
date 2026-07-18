@@ -559,6 +559,8 @@ function handleStreamEvent(data) {
   function _ensureCapsuleStream(capId, logEl) {
     // 已存在则不重建
     if (_subagentStreams.has(capId)) return;
+    // 历史回放模式下不建立 EventSource，避免为已结束的子代理创建无效连接
+    if (_isReplaying) return;
     const preEl = logEl.querySelector('pre');
     if (!preEl) return;
     const es = new EventSource(`/subagent-progress/${capId}`);

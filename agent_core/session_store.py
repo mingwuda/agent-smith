@@ -252,6 +252,100 @@ def get_session(user_id: str, session_id: str) -> Optional[dict]:
         return _row_to_session(row, include_messages=True, messages=messages)
 
 
+def get_session_lite(user_id: str, session_id: str, limit: int = 20, offset: int = -20) -> Optional[dict]:
+    """获取单个会话的轻量版本（仅消息元数据，不含 steps/todo/content 详情）
+
+    参数:
+      limit: 返回消息数量上限，默认 20
+      offset: 偏移量。负数表示从末尾往前取（如 -20 表示最后 20 条），正数表示从开头跳过
+    """
+    with _connect(user_id) as conn:
+        row = conn.execute(
+            """
+            SELECT s.id, s.title, s.created_at, s.updated_at, COUNT(m.id) AS message_count,
+                   s.workspace, COALESCE(s.project_id,'') AS project_id
+            FROM sessions s LEFT JOIN messages m ON m.session_id = s.id
+            WHERE s.id = ? GROUP BY s.id
+            """,
+            (session_id,),
+        ).fetchone()
+        if not row:
+            return None
+
+        # 单独查询消息总数，避免 sessions.message_count 字段未维护导致不准
+        total_count = conn.execute(
+            "SELECT COUNT(*) FROM messages WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()[0]
+
+        # 构建分页查询
+        if offset < 0:
+            # 从末尾往前取：先算起始位置
+            start = max(0, total_count + offset)
+            end = total_count
+            msg_rows = conn.execute(
+                "SELECT id, role, content, timestamp FROM messages WHERE session_id = ? ORDER BY id ASC LIMIT ? OFFSET ?",
+                (session_id, limit, start),
+            ).fetchall()
+        else:
+            # 从开头跳过 offset 条
+            msg_rows = conn.execute(
+                "SELECT id, role, content, timestamp FROM messages WHERE session_id = ? ORDER BY id ASC LIMIT ? OFFSET ?",
+                (session_id, limit, offset),
+            ).fetchall()
+
+        messages = []
+        for i, r in enumerate(msg_rows):
+            parsed = _decode_message_content(r["content"])
+            # index 必须是全量列表中的真实位置，否则详情接口取值会偏移
+            real_index = (start if offset < 0 else offset) + i
+            msg_meta = {
+                "role": r["role"],
+                "timestamp": r["timestamp"],
+                "index": real_index,
+            }
+            # 用户消息：保留 content 和 images，截断大文本
+            if r["role"] == "user":
+                content_text = parsed.get("content", "") or ""
+                msg_meta["content"] = content_text[:200]
+                if "images" in parsed:
+                    msg_meta["images"] = parsed["images"]
+            else:
+                # 助手消息：只保留 content 和是否有 steps/todo 的标记
+                content_text = parsed.get("content", "") or ""
+                msg_meta["content"] = content_text[:200]
+                msg_meta["has_steps"] = bool(parsed.get("steps"))
+                msg_meta["has_todo"] = bool(parsed.get("todo_list"))
+                # 保留 content_preview 用于占位显示
+                msg_meta["content_preview"] = content_text[:120]
+            messages.append(msg_meta)
+
+        # 判断是否还有更早的消息
+        if offset < 0:
+            has_more = total_count > len(messages)
+        else:
+            has_more = offset > 0
+
+        result = _row_to_session(row, include_messages=True, messages=messages)
+        result["has_more"] = has_more
+        result["total_count"] = total_count
+        return result
+
+
+def get_message_detail(user_id: str, session_id: str, message_index: int) -> Optional[dict]:
+    """获取单条消息的完整详情（含 steps/todo/content）"""
+    with _connect(user_id) as conn:
+        msg_rows = conn.execute(
+            "SELECT role, content, timestamp FROM messages WHERE session_id = ? ORDER BY id ASC",
+            (session_id,),
+        ).fetchall()
+        if message_index < 0 or message_index >= len(msg_rows):
+            return None
+        r = msg_rows[message_index]
+        parsed = _decode_message_content(r["content"])
+        return parsed | {"role": r["role"], "timestamp": r["timestamp"], "index": message_index}
+
+
 def delete_session(user_id: str, session_id: str) -> bool:
     """删除会话"""
     with _connect(user_id) as conn:

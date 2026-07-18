@@ -36,6 +36,15 @@ class SessionMessagesResponse(BaseModel):
     title: str
     messages: list[dict]
     source: str = "web"
+    has_more: bool = False
+    total_count: int = 0
+
+
+class SessionMessageDetailResponse(BaseModel):
+    id: str
+    title: str
+    message: dict
+    source: str = "web"
 
 
 class RenameRequest(BaseModel):
@@ -194,3 +203,81 @@ def get_session_workspace(session_id: str, request: Request):
     uid = _get_current_user(request)
     ws = session_store.get_session_workspace(uid, session_id)
     return {"workspace": ws or ""}
+
+
+@router.get("/sessions/{session_id}/messages/lite", response_model=SessionMessagesResponse)
+def get_session_messages_lite(session_id: str, request: Request, source: str = "auto", include: str = "lite", limit: int = 20, offset: int = -20):
+    """获取会话消息的轻量版本（不含 steps/todo 详情）
+
+    参数:
+      limit: 返回消息数量上限，默认 20
+      offset: 偏移量。负数表示从末尾往前取（如 -20 表示最后 20 条），正数表示从开头跳过
+    """
+    if include != "lite":
+        include = "lite"
+    uid = _get_current_user(request)
+    is_wechat = False
+    session = None
+
+    if source == "wechat":
+        session = session_store.get_session_lite(f"wechat_{uid}", session_id, limit=limit, offset=offset)
+        is_wechat = True
+    elif source == "web":
+        session = session_store.get_session_lite(uid, session_id, limit=limit, offset=offset)
+    else:
+        session = session_store.get_session_lite(uid, session_id, limit=limit, offset=offset)
+        if not session:
+            wechat_session = session_store.get_session_lite(f"wechat_{uid}", session_id, limit=limit, offset=offset)
+            if wechat_session:
+                session = wechat_session
+                is_wechat = True
+
+    if not session:
+        raise HTTPException(404, "会话不存在")
+    raw_title = session.get("title", "未命名")
+    if is_wechat:
+        raw_title = _strip_wechat_prefix(raw_title)
+    return SessionMessagesResponse(
+        id=session["id"],
+        title=raw_title,
+        messages=session.get("messages", []),
+        source="wechat" if is_wechat else "web",
+        has_more=session.get("has_more", False),
+        total_count=session.get("total_count", 0),
+    )
+
+
+@router.get("/sessions/{session_id}/messages/{message_index}", response_model=SessionMessageDetailResponse)
+def get_session_message_detail(session_id: str, message_index: int, request: Request, source: str = "auto"):
+    """获取单条消息的完整详情（含 steps/todo/content）"""
+    uid = _get_current_user(request)
+    is_wechat = False
+    session = None
+
+    if source == "wechat":
+        session = session_store.get_session(f"wechat_{uid}", session_id)
+        is_wechat = True
+    elif source == "web":
+        session = session_store.get_session(uid, session_id)
+    else:
+        session = session_store.get_session(uid, session_id)
+        if not session:
+            wechat_session = session_store.get_session(f"wechat_{uid}", session_id)
+            if wechat_session:
+                session = wechat_session
+                is_wechat = True
+
+    if not session:
+        raise HTTPException(404, "会话不存在")
+    raw_title = session.get("title", "未命名")
+    if is_wechat:
+        raw_title = _strip_wechat_prefix(raw_title)
+    detail = session_store.get_message_detail(uid if not is_wechat else f"wechat_{uid}", session_id, message_index)
+    if not detail:
+        raise HTTPException(404, "消息不存在")
+    return SessionMessageDetailResponse(
+        id=session["id"],
+        title=raw_title,
+        message=detail,
+        source="wechat" if is_wechat else "web",
+    )
