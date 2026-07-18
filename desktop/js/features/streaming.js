@@ -230,7 +230,12 @@ async function send() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       signal: currentAbortController.signal,
-      body: JSON.stringify({ message: text, thread_id: threadId, attachments }),
+      body: JSON.stringify({
+        message: text,
+        thread_id: threadId,
+        attachments,
+        project_id: (typeof currentProjectId !== 'undefined' ? currentProjectId : '') || '',
+      }),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     

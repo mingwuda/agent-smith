@@ -578,6 +578,7 @@ class DesktopAgent:
         self.tools: list = []  # 由外部设置
         self._thread_id = "default"
         self._graph = None
+        self._current_workspace = ""  # 当前会话/项目实际工作目录，用于动态修正系统提示
         self._hydrated_threads: set[str] = set()
         self._ctx_token_sizes: dict[str, int] = {}  # run_id(12位) -> 真实上下文 token 估算，用于 LLM_END 对比网关虚高
 
@@ -598,6 +599,22 @@ class DesktopAgent:
             _set_st_user(user_id)
         except Exception:
             pass
+
+    def set_workspace(self, ws: str):
+        """设置当前会话/项目的实际工作目录。
+
+        当工作目录发生变化时，使缓存的 graph（含系统提示）失效，
+        下次 run 会重建并注入正确的工作区路径，避免 LLM 始终按
+        硬编码的 ~/agent_workspace 去找目录。
+        """
+        ws = str(ws or "").strip()
+        if ws and ws != self._current_workspace:
+            self._current_workspace = ws
+            self._graph = None
+        elif not ws and self._current_workspace:
+            # 回落到默认配置工作区
+            self._current_workspace = ""
+            self._graph = None
 
     @property
     def user_id(self) -> str:
@@ -674,8 +691,14 @@ class DesktopAgent:
     
     def _build_system_prompt(self) -> str:
         now = datetime.now().astimezone()
+        # 动态修正系统提示中的工作区路径：用当前实际工作目录替换硬编码的
+        # ~/agent_workspace（否则 LLM 始终认为工作区在固定目录，可能跑错目录）
+        ws = self._current_workspace or self.config.workspace
+        prompt_base = self.config.system_prompt.replace(
+            str(Path.home() / "agent_workspace"), ws
+        )
         prompt = (
-            self.config.system_prompt
+            prompt_base
             + "\n\n"
             + "## 当前日期与时间\n"
             + f"- 当前日期：{now.date().isoformat()}\n"
@@ -951,7 +974,13 @@ class DesktopAgent:
         """
         tid = thread_id or self._thread_id
         config = self._run_config(tid)
-        graph = self._create_graph(model_override) if model_override else self._graph
+        # workspace 变化会令 self._graph 失效为 None，这里在缺失时惰性重建
+        if model_override:
+            graph = self._create_graph(model_override)
+        elif self._graph is None:
+            graph = self._create_graph()
+        else:
+            graph = self._graph
         input_messages = []
         thread_key = self._thread_key(tid)
         await self._repair_checkpoint_tool_history(config, graph)

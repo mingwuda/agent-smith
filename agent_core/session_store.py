@@ -278,12 +278,18 @@ def set_session_workspace(user_id: str, session_id: str, workspace: str) -> bool
 
 
 def get_session_workspace(user_id: str, session_id: str) -> str:
-    """获取会话的工作目录。优先级：会话自身 workspace > 所属项目 directory_path。
+    """获取会话的工作目录。
 
-    兼容性：项目可能建在 default 命名空间，而当前会话在其它命名空间（如 admin），
-    因此本用户库查不到项目时，回退到 default 库查询。
+    优先级（方案B：项目目录优先于会话级 workspace）：
+      1. 所属项目的 directory_path（项目目录权威，避免旧会话级 workspace
+         把 agent 指到错误目录）
+      2. 会话自身 workspace（仅当会话未关联项目、或项目未设目录时兜底）
+      3. 跨命名空间回退：项目可能建在 default 库
+
+    返回空串表示使用默认用户工作区。
     """
     pid = ""
+    sess_ws = ""
     with _connect(user_id) as conn:
         row = conn.execute(
             "SELECT workspace, project_id FROM sessions WHERE id = ?", (session_id,)
@@ -291,25 +297,49 @@ def get_session_workspace(user_id: str, session_id: str) -> str:
         if not row:
             return ""
         try:
-            ws = (row["workspace"] or "").strip()
-            if ws:
-                return ws
-            # 回退：会话未设工作目录，尝试取所属项目的 directory_path
-            try:
-                pid = (row["project_id"] or "").strip()
-            except (IndexError, KeyError):
-                pid = ""
-            if pid:
-                dp = _project_dir_of(conn, pid)
-                if dp:
-                    return dp
+            sess_ws = (row["workspace"] or "").strip()
         except (IndexError, KeyError):
-            pass
-    # 跨命名空间回退：项目可能建在 default 库
+            sess_ws = ""
+        try:
+            pid = (row["project_id"] or "").strip()
+        except (IndexError, KeyError):
+            pid = ""
+        # 1. 项目目录优先
+        if pid:
+            dp = _project_dir_of(conn, pid)
+            if dp:
+                return dp
+    # 2. 跨命名空间回退：项目可能建在 default 库
     if pid and user_id and user_id != "default":
         try:
             with _connect("default") as dconn:
                 dp = _project_dir_of(dconn, pid)
+                if dp:
+                    return dp
+        except Exception:
+            pass
+    # 3. 会话级 workspace 兜底（无项目、或项目无目录时）
+    if sess_ws:
+        return sess_ws
+    return ""
+
+
+def get_project_workspace(user_id: str, project_id: str) -> str:
+    """直接按项目 id 取 directory_path（含跨命名空间回退）。
+
+    供前端实时切换项目时使用：用户当前选中的项目目录立即生效，
+    不依赖会话表里 project_id 是否已同步。
+    """
+    if not project_id:
+        return ""
+    with _connect(user_id) as conn:
+        dp = _project_dir_of(conn, project_id)
+        if dp:
+            return dp
+    if user_id and user_id != "default":
+        try:
+            with _connect("default") as dconn:
+                dp = _project_dir_of(dconn, project_id)
                 if dp:
                     return dp
         except Exception:

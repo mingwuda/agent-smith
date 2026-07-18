@@ -122,19 +122,42 @@ def _resolve_user(request: Request) -> str:
     return uid
 
 
-def _apply_session_workspace(uid: str, session_id: str):
-    """根据会话设置的工作目录覆盖当前工具的工作区。"""
-    ws = session_store.get_session_workspace(uid, session_id)
+def _apply_session_workspace(uid: str, session_id: str, project_id: str = ""):
+    """根据会话/项目设置的工作目录覆盖当前工具的工作区。
+
+    解析优先级（方案B：项目目录优先于会话级 workspace）：
+      1. 前端实时传入的 project_id 对应项目目录（用户当前选中的项目，立即生效）
+      2. 会话关联项目的 directory_path（get_session_workspace 已反转优先级）
+      3. 会话自身 workspace（兜底）
+    设置成功后同步告知 Agent 实例当前工作目录，使其能动态修正系统提示。
+    """
+    ws = ""
+    # 1. 前端实时项目目录优先（用户当前选中的项目，无需等会话表同步）
+    if project_id:
+        dp = session_store.get_project_workspace(uid, project_id)
+        if dp:
+            ws = dp
+    # 2/3. 回退到会话/项目解析
     if not ws:
-        return
+        ws = session_store.get_session_workspace(uid, session_id)
+    # 最终工作目录：明确目录优先，否则回落默认用户工作区
+    # （保证 system_prompt 与工具 cwd 始终一致）
+    effective = ws or str(_workspace_for_user(uid))
     try:
-        ws_path = Path(ws).expanduser().resolve()
+        ws_path = Path(effective).expanduser().resolve()
         if ws_path.is_dir():
             file_tools.set_workspace(ws_path)
             shell_tools.set_workspace(ws_path)
             browser_tools.set_workspace(ws_path)
             try:
                 git_tools.set_workspace(ws_path)
+            except Exception:
+                pass
+            # 同步当前工作目录给 Agent（用于动态修正系统提示里的工作区路径）
+            try:
+                from main import agent
+                if agent:
+                    agent.set_workspace(str(ws_path))
             except Exception:
                 pass
     except Exception:

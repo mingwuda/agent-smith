@@ -48,6 +48,7 @@ class RunRequest(BaseModel):
     message: str
     thread_id: str = "default"
     attachments: list[AttachmentRequest] = Field(default_factory=list)
+    project_id: str = ""
 
 
 class RunResponse(BaseModel):
@@ -86,7 +87,7 @@ async def run_agent(req: RunRequest, request: Request):
     session_id = req.thread_id
     message_id = str(uuid.uuid4())
     set_log_context(session_id=session_id, message_id=message_id)
-    _apply_session_workspace(uid, session_id)
+    _apply_session_workspace(uid, session_id, req.project_id)
     session = await _ensure_session(uid, session_id)
     history_messages = session.get("messages", [])
 
@@ -173,7 +174,7 @@ async def run_agent_stream(req: RunRequest, request: Request):
     session_id = req.thread_id
     message_id = str(uuid.uuid4())
     set_log_context(session_id=session_id, message_id=message_id)
-    _apply_session_workspace(uid, session_id)
+    _apply_session_workspace(uid, session_id, req.project_id)
     session = await _ensure_session(uid, session_id)
     history_messages = session.get("messages", [])
 
