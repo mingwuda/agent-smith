@@ -401,7 +401,19 @@ function toggleChangesView() {
   const btn = document.getElementById('fb-changes-btn');
   if (btn) {
     btn.classList.toggle('active', _isChangesView);
-    btn.title = _isChangesView ? '返回文件列表' : '变更文件';
+    if (_isChangesView) {
+      btn.title = '提交变更';
+      // 变更清单视图下：把图标改成 💾，点击打开提交对话框
+      const iconNode = btn.childNodes[0];
+      if (iconNode && iconNode.nodeType === Node.TEXT_NODE) iconNode.textContent = '💾';
+      btn.onclick = openCommitDialog;
+    } else {
+      btn.title = '变更文件';
+      // 返回文件列表视图：恢复图标和点击行为
+      const iconNode = btn.childNodes[0];
+      if (iconNode && iconNode.nodeType === Node.TEXT_NODE) iconNode.textContent = '📝';
+      btn.onclick = toggleChangesView;
+    }
   }
   if (_isChangesView) {
     loadChangedFiles();
@@ -483,12 +495,7 @@ function renderChangedFiles(data) {
     return;
   }
 
-  let html = '<div class="changes-commit-bar">' +
-    '<button class="cf-commit-ico" onclick="openCommitDialog()" title="提交变更">💾</button>' +
-    '<span class="cf-commit-label">提交变更</span>' +
-    '</div>';
-
-  html += '<div class="changes-summary">' +
+  let html = '<div class="changes-summary">' +
     '<span>共 <strong>' + changes.length + '</strong> 个文件有变更</span>' +
     '</div>';
 
