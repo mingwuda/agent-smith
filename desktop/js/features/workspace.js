@@ -269,7 +269,7 @@ async function checkUnpushedCommits() {
 
 async function pushUnpushedCommits() {
   const btn = document.getElementById('fb-push-btn');
-  if (!btn) return;
+  if (!btn || btn.disabled) return;
   btn.disabled = true;
   btn.textContent = '⏳';
   try {
@@ -482,6 +482,7 @@ async function loadChangedFiles() {
     if (!res.ok) {
       const errData = await res.json().catch(() => ({ detail: res.statusText }));
       treeEl.innerHTML = '<div class="fb-empty">' + escapeHtml(errData.detail || '加载失败') + '</div>';
+      _resetChangesBtn();
       return;
     }
     const data = await res.json();
@@ -505,7 +506,17 @@ async function loadChangedFiles() {
     }
   } catch (e) {
     treeEl.innerHTML = '<div class="fb-empty">' + escapeHtml(t('loadFailed') || '加载失败') + '</div>';
+    _resetChangesBtn();
   }
+}
+
+function _resetChangesBtn() {
+  const btn = document.getElementById('fb-changes-btn');
+  if (!btn) return;
+  btn.title = '变更文件';
+  const iconNode = btn.childNodes[0];
+  if (iconNode && iconNode.nodeType === Node.TEXT_NODE) iconNode.textContent = '📝';
+  btn.onclick = toggleChangesView;
 }
 
 /** 更新变更按钮角标数字 */
@@ -675,7 +686,7 @@ async function commitDo(push) {
     if (d.success) {
       status.className = 'commit-status ok';
       status.textContent = '✅ ' + (push ? '已提交并推送' : '已提交') + '\n' + (d.output || '');
-      setTimeout(function () { loadChangedFiles(); closeCommitDialog(); }, 900);
+      setTimeout(function () { loadChangedFiles(); checkUnpushedCommits(); closeCommitDialog(); }, 900);
     } else {
       status.className = 'commit-status err';
       status.textContent = '❌ 失败:\n' + (d.output || '未知错误');
