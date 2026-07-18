@@ -561,6 +561,8 @@ function handleStreamEvent(data) {
     if (_subagentStreams.has(capId)) return;
     const preEl = logEl.querySelector('pre');
     if (!preEl) return;
+    // ponytail: 历史回放模式下不建立 EventSource，避免为已结束的子代理创建无效连接
+    if (_isReplaying) return;
     const es = new EventSource(`/subagent-progress/${capId}`);
     es.onmessage = (e) => {
       try {
@@ -1255,7 +1257,12 @@ function renderTodoPanel(todoData, hasUpdate) {
 
   // 始终追加到消息容器末尾（与 steps/bot msg 平级）
   if (_currentTodoPanel.parentNode === container && container.lastChild !== _currentTodoPanel) {
-    container.appendChild(_currentTodoPanel);
+    // ponytail: 历史回放懒加载：如果当前 bot 消息存在，优先插入到 bot 消息之前，避免跑到消息列表末尾
+    if (_isReplaying && currentBotMsgEl && currentBotMsgEl.parentNode) {
+      currentBotMsgEl.parentNode.insertBefore(_currentTodoPanel, currentBotMsgEl);
+    } else {
+      container.appendChild(_currentTodoPanel);
+    }
   }
 
   var items = todoData.items || [];
