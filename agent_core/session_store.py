@@ -313,6 +313,19 @@ def get_session_lite(user_id: str, session_id: str, limit: int = 20, offset: int
             else:
                 # 助手消息：只保留 content 和是否有 steps/todo 的标记
                 content_text = parsed.get("content", "") or ""
+                # 如果 content 为空，尝试从 steps 里提取最后一条文本作为 fallback
+                if not content_text and parsed.get("steps"):
+                    for step in reversed(parsed["steps"]):
+                        if not isinstance(step, dict):
+                            continue
+                        # 兼容不同历史版本存储的文本字段
+                        for key in ("text", "content", "output", "result", "message", "answer"):
+                            val = step.get(key)
+                            if isinstance(val, str) and val.strip():
+                                content_text = val.strip()
+                                break
+                        if content_text:
+                            break
                 msg_meta["content"] = content_text[:200]
                 msg_meta["has_steps"] = bool(parsed.get("steps"))
                 msg_meta["has_todo"] = bool(parsed.get("todo_list"))
@@ -324,7 +337,7 @@ def get_session_lite(user_id: str, session_id: str, limit: int = 20, offset: int
         if offset < 0:
             has_more = total_count > len(messages)
         else:
-            has_more = offset > 0
+            has_more = (offset + len(messages)) < total_count
 
         result = _row_to_session(row, include_messages=True, messages=messages)
         result["has_more"] = has_more
