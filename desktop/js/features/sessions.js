@@ -562,14 +562,22 @@ async function _loadOlderMessages() {
   if (!_sessionPageState || _sessionLoadingMore) return;
   _sessionLoadingMore = true;
   const { sessionId, source, limit, loadedCount, totalCount } = _sessionPageState;
-  // 从末尾往回取：用 totalCount 计算更早消息的起始 offset，避免重复
-  const newOffset = Math.max(0, totalCount - loadedCount - limit);
+  // 从末尾往回取：用 totalCount 计算更早消息的起始 offset，避免重复。
+  // 边界：当剩余未加载的老消息不足一页时，请求量收敛为实际剩余条数 requestedLimit，
+  // 否则会越过开头、与已加载的窗口重叠——表现为“滚动到顶部又取一整页”。
+  const remaining = totalCount - loadedCount;
+  const requestedLimit = Math.max(0, Math.min(limit, remaining));
+  const newOffset = Math.max(0, totalCount - loadedCount - requestedLimit);
   try {
-    const qs = source ? `?source=${encodeURIComponent(source)}&include=lite&limit=${limit}&offset=${newOffset}` : `?include=lite&limit=${limit}&offset=${newOffset}`;
+    const qs = source ? `?source=${encodeURIComponent(source)}&include=lite&limit=${requestedLimit}&offset=${newOffset}` : `?include=lite&limit=${requestedLimit}&offset=${newOffset}`;
     const res = await fetch(`/sessions/${sessionId}/messages/lite${qs}`);
     if (!res.ok) return;
     const data = await res.json();
-    if (!data.messages || data.messages.length === 0) return;
+    if (!data.messages || data.messages.length === 0) {
+      // 没有更多消息（含边界：剩余为负等异常情况），停止继续向上加载，避免反复触发
+      _sessionPageState.hasMore = false;
+      return;
+    }
 
     // 在消息列表顶部插入更早的消息
     const container = document.getElementById('messages');
