@@ -29,7 +29,8 @@ function escapeId(s) { return s.replace(/[^a-zA-Z0-9_-]/g, '_'); }
 function smartScroll(el) {
   const threshold = 2; // 距底部 ≤2px 才滚动，避免用户翻看时被打断
   const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight <= threshold;
-  if (atBottom) {
+  // 流式输出期间强制跟随到最新内容，避免用户手动滚屏后漏看新输出
+  if (atBottom || streamingActive) {
     el.scrollTop = el.scrollHeight;
   }
 }
