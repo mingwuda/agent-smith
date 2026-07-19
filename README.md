@@ -499,6 +499,73 @@ triggers: [debug, 排查, 根因]
 
 <a href="#目录">⬆ 返回目录</a>
 
+## 子代理
+
+`delegate_task` 可以把独立任务委派给子代理同步执行，`delegate_tasks_parallel` 可以并行派发多个独立任务。
+
+| 子代理 | 用途 |
+| --- | --- |
+| `coder` | 编码实现、局部修改 |
+| `reviewer` | 代码审查、风险和缺失测试检查 |
+| `debugger` | 系统化排障、根因定位 |
+| `searcher` | 专精互联网搜索，调用 web_search + web_fetch 整理结果 |
+
+所有子代理都支持**实时日志流**，点击胶囊可查看执行过程（工具调用、AI 思考、结果）。
+
+### 串行执行
+
+```python
+delegate_task(task="...", agent_type="coder", context="...")
+```
+主 Agent 等待子代理完成后继续。适用于有依赖关系的任务。
+
+### 并行执行
+
+```python
+delegate_tasks_parallel('''[
+  {"task": "任务1", "agent_type": "coder", "context": "..."},
+  {"task": "任务2", "agent_type": "coder", "context": "..."}
+]''')
+```
+基于 `ThreadPoolExecutor` 真正并行，同一时间最多 4 个子代理。适用于无文件/数据依赖的任务。
+
+### 安全策略
+
+- 子代理默认不能再调用 `delegate_task` 和 `delegate_tasks_parallel`，避免递归委派
+- 每个子代理的 prompt 必须完全自包含
+- 并行任务的同一文件同一时间只能被一个子代理修改
+
+---
+
+
+<a href="#目录">⬆ 返回目录</a>
+
+## 长期记忆
+
+长期记忆按用户隔离，适合保存：
+
+- 用户偏好：默认语言、回答风格
+- 项目事实：部署目录、端口、常用服务器
+- 长期约定：公网部署必须开启登录保护
+
+工具：
+
+```text
+remember
+recall_memory
+forget_memory
+list_memories
+```
+
+当前采用显式记忆策略：只有用户明确要求“记住/以后记得/保存偏好”时才写入。不要保存 API Key、密码、Cookie、Token 等敏感信息。
+
+页面顶部“记忆”按钮可打开管理面板，支持新增、搜索和删除。
+
+---
+
+
+<a href="#目录">⬆ 返回目录</a>
+
 ## 微信集成
 
 Moss Agent 通过**腾讯官方 iLink Bot API** 接入微信个人号，让你可以直接在微信里与 Agent 对话。
@@ -634,136 +701,6 @@ roles:
 
 - 数据库连接：`~/.desktop_agent/dbcli/connections.yaml`
 - 权限规则：`~/.desktop_agent/dbcli/permissions.yaml`
-
----
-
-
-<a href="#目录">⬆ 返回目录</a>
-
-## 子代理
-
-`delegate_task` 可以把独立任务委派给子代理同步执行，`delegate_tasks_parallel` 可以并行派发多个独立任务。
-
-| 子代理 | 用途 |
-| --- | --- |
-| `coder` | 编码实现、局部修改 |
-| `reviewer` | 代码审查、风险和缺失测试检查 |
-| `debugger` | 系统化排障、根因定位 |
-| `searcher` | 专精互联网搜索，调用 web_search + web_fetch 整理结果 |
-
-所有子代理都支持**实时日志流**，点击胶囊可查看执行过程（工具调用、AI 思考、结果）。
-
-### 串行执行
-
-```python
-delegate_task(task="...", agent_type="coder", context="...")
-```
-主 Agent 等待子代理完成后继续。适用于有依赖关系的任务。
-
-### 并行执行
-
-```python
-delegate_tasks_parallel('''[
-  {"task": "任务1", "agent_type": "coder", "context": "..."},
-  {"task": "任务2", "agent_type": "coder", "context": "..."}
-]''')
-```
-基于 `ThreadPoolExecutor` 真正并行，同一时间最多 4 个子代理。适用于无文件/数据依赖的任务。
-
-### 安全策略
-
-- 子代理默认不能再调用 `delegate_task` 和 `delegate_tasks_parallel`，避免递归委派
-- 每个子代理的 prompt 必须完全自包含
-- 并行任务的同一文件同一时间只能被一个子代理修改
-
----
-
-
-<a href="#目录">⬆ 返回目录</a>
-
-## 长期记忆
-
-长期记忆按用户隔离，适合保存：
-
-- 用户偏好：默认语言、回答风格
-- 项目事实：部署目录、端口、常用服务器
-- 长期约定：公网部署必须开启登录保护
-
-工具：
-
-```text
-remember
-recall_memory
-forget_memory
-list_memories
-```
-
-当前采用显式记忆策略：只有用户明确要求“记住/以后记得/保存偏好”时才写入。不要保存 API Key、密码、Cookie、Token 等敏感信息。
-
-页面顶部“记忆”按钮可打开管理面板，支持新增、搜索和删除。
-
----
-
-
-<a href="#目录">⬆ 返回目录</a>
-
-## API
-
-启动后访问：
-
-```text
-http://127.0.0.1:8899/docs
-```
-
-主要接口：
-
-| 端点 | 方法 | 说明 |
-| --- | --- | --- |
-| `/` | GET | 桌面 UI |
-| `/login` | GET | 登录页 |
-| `/auth/login` | POST | 登录 |
-| `/auth/logout` | POST | 退出 |
-| `/auth/token-login` | GET | 短期 Token 登录 |
-| `/run` | POST | 非流式执行 |
-| `/run/stream` | POST | SSE 流式执行 |
-| `/sessions` | GET/POST | 列出或创建会话 |
-| `/sessions/{id}` | GET/DELETE | 获取或删除会话 |
-| `/sessions/{id}/rename` | PUT | 重命名会话 |
-| `/sessions/{id}/workspace` | GET/PUT | 获取或设置会话工作目录 |
-| `/permissions/grant-path` | POST | 授权工作区外路径写入 |
-| `/permissions/granted-paths` | GET | 查看已授权的路径列表 |
-| `/skills` | GET | 列出 Skills |
-| `/skills/reload` | POST | 热加载 Skills |
-| `/subagents` | GET | 列出子代理类型 |
-| `/subagents/tasks/{id}` | GET | 查询子代理任务 |
-| `/memories` | GET/POST | 查询或保存长期记忆 |
-| `/memories/{key}` | DELETE | 删除长期记忆 |
-| `/artifacts/download` | GET | 下载工作区文件制品 |
-| `/artifacts/preview` | GET | 预览 Markdown 制品 |
-| `/settings` | GET/POST | 读取或保存配置 |
-| `/usage` | GET | 今日用量 |
-| `/usage/session` | GET | 会话用量 |
-| `/usage/history` | GET | 历史用量 |
-| `/users` | GET/POST | 管理用户 |
-| `/users/{user_id}` | DELETE | 删除用户 |
-| `/users/me` | GET | 当前登录用户 |
-| `/users/me` | GET | 当前登录用户 |
-| `/db/connections` | GET/POST | 列出或添加数据库连接 |
-| `/db/connections/{name}` | DELETE | 删除数据库连接 |
-| `/db/connections/{name}/test` | POST | 测试已保存连接 |
-| `/db/test-connection` | POST | 测试未保存连接（表单预测试） |
-| `/db/permissions` | GET/PUT | 读写权限配置 |
-| `/db/query` | POST | 执行 SQL 查询（含权限检查） |
-| `/db/schema/{connection_name}` | GET | 获取数据库表结构 |
-| `/wechat/qrcode` | GET | 微信扫码登录页 |
-| `/wechat/status` | GET | 微信 Bot 状态 |
-| `/wechat/start` | POST | 启动微信轮询 |
-| `/wechat/stop` | POST | 停止微信轮询 |
-| `/wechat/sessions` | GET | 微信会话列表 |
-| `/wechat/sessions/{id}` | GET | 微信会话消息 |
-| `/health` | GET | 健康检查 |
-
-除登录、退出、Token 登录和健康检查外，其它 API 都需要登录。
 
 ---
 
@@ -1192,3 +1129,66 @@ moss-agent/
 - 长期记忆需要用户明确要求才写入，超过 10 天自动清理。
 - 多用户微信 Bot token 按用户隔离存储，互不干扰。
 - 公网部署必须配置强密码、固定密钥和 HTTPS。
+## API
+
+启动后访问：
+
+```text
+http://127.0.0.1:8899/docs
+```
+
+主要接口：
+
+| 端点 | 方法 | 说明 |
+| --- | --- | --- |
+| `/` | GET | 桌面 UI |
+| `/login` | GET | 登录页 |
+| `/auth/login` | POST | 登录 |
+| `/auth/logout` | POST | 退出 |
+| `/auth/token-login` | GET | 短期 Token 登录 |
+| `/run` | POST | 非流式执行 |
+| `/run/stream` | POST | SSE 流式执行 |
+| `/sessions` | GET/POST | 列出或创建会话 |
+| `/sessions/{id}` | GET/DELETE | 获取或删除会话 |
+| `/sessions/{id}/rename` | PUT | 重命名会话 |
+| `/sessions/{id}/workspace` | GET/PUT | 获取或设置会话工作目录 |
+| `/permissions/grant-path` | POST | 授权工作区外路径写入 |
+| `/permissions/granted-paths` | GET | 查看已授权的路径列表 |
+| `/skills` | GET | 列出 Skills |
+| `/skills/reload` | POST | 热加载 Skills |
+| `/subagents` | GET | 列出子代理类型 |
+| `/subagents/tasks/{id}` | GET | 查询子代理任务 |
+| `/memories` | GET/POST | 查询或保存长期记忆 |
+| `/memories/{key}` | DELETE | 删除长期记忆 |
+| `/artifacts/download` | GET | 下载工作区文件制品 |
+| `/artifacts/preview` | GET | 预览 Markdown 制品 |
+| `/settings` | GET/POST | 读取或保存配置 |
+| `/usage` | GET | 今日用量 |
+| `/usage/session` | GET | 会话用量 |
+| `/usage/history` | GET | 历史用量 |
+| `/users` | GET/POST | 管理用户 |
+| `/users/{user_id}` | DELETE | 删除用户 |
+| `/users/me` | GET | 当前登录用户 |
+| `/users/me` | GET | 当前登录用户 |
+| `/db/connections` | GET/POST | 列出或添加数据库连接 |
+| `/db/connections/{name}` | DELETE | 删除数据库连接 |
+| `/db/connections/{name}/test` | POST | 测试已保存连接 |
+| `/db/test-connection` | POST | 测试未保存连接（表单预测试） |
+| `/db/permissions` | GET/PUT | 读写权限配置 |
+| `/db/query` | POST | 执行 SQL 查询（含权限检查） |
+| `/db/schema/{connection_name}` | GET | 获取数据库表结构 |
+| `/wechat/qrcode` | GET | 微信扫码登录页 |
+| `/wechat/status` | GET | 微信 Bot 状态 |
+| `/wechat/start` | POST | 启动微信轮询 |
+| `/wechat/stop` | POST | 停止微信轮询 |
+| `/wechat/sessions` | GET | 微信会话列表 |
+| `/wechat/sessions/{id}` | GET | 微信会话消息 |
+| `/health` | GET | 健康检查 |
+
+除登录、退出、Token 登录和健康检查外，其它 API 都需要登录。
+
+---
+
+
+<a href="#目录">⬆ 返回目录</a>
+
