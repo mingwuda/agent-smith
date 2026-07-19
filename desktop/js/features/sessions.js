@@ -113,7 +113,8 @@ async function loadSessionMessages(sessionId, source, options = {}) {
           if (msg.timestamp && lastUserTs > 0) {
             try { botElapsed = new Date(msg.timestamp).getTime() - lastUserTs; } catch(e){}
           }
-          addBotMessagePlaceholder(content, msg.content_preview, botElapsed, sessionId, msg.index != null ? msg.index : idx);
+          var placeholderEl = addBotMessagePlaceholder(content, msg.content_preview, botElapsed, sessionId, msg.index != null ? msg.index : idx);
+          if (placeholderEl) container.appendChild(placeholderEl);
         } else if (role === 'bot') {
           addMessage(content || msg.content_preview || '', 'bot');
         } else {
@@ -191,7 +192,10 @@ function addBotMessagePlaceholder(content, contentPreview, elapsedMs, sessionId,
     currentBotMsgEl = ans;
   }
 
-  container.appendChild(responseCard);
+  // ponytail: 不在此处自动 container.appendChild，由调用方决定插入位置。
+  // 否则 _loadOlderMessages 用 fragment 批量插顶部时，bot 卡片被此函数内部
+  // append 到容器末尾，导致问题/回复位置全部错开。
+  return responseCard;
 }
 
 // 展开历史消息占位卡片，按需加载完整 steps/todo
