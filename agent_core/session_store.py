@@ -360,6 +360,27 @@ def delete_session(user_id: str, session_id: str) -> bool:
         return cur.rowcount > 0
 
 
+def delete_message(user_id: str, session_id: str, message_index: int) -> bool:
+    """删除会话中的单条消息（按全量顺序索引）"""
+    with _connect(user_id) as conn:
+        rows = conn.execute(
+            "SELECT id FROM messages WHERE session_id = ? ORDER BY id ASC",
+            (session_id,),
+        ).fetchall()
+        if message_index < 0 or message_index >= len(rows):
+            return False
+        target_id = rows[message_index]["id"]
+        cur = conn.execute("DELETE FROM messages WHERE id = ?", (target_id,))
+        if cur.rowcount == 0:
+            return False
+        now = _timestamp()
+        conn.execute(
+            "UPDATE sessions SET updated_at = ? WHERE id = ?",
+            (now, session_id),
+        )
+        return True
+
+
 def rename_session(user_id: str, session_id: str, new_title: str) -> bool:
     """重命名会话"""
     now = _timestamp()

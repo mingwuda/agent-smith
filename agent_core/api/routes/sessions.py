@@ -281,3 +281,33 @@ def get_session_message_detail(session_id: str, message_index: int, request: Req
         message=detail,
         source="wechat" if is_wechat else "web",
     )
+
+
+@router.delete("/sessions/{session_id}/messages/{message_index}")
+def delete_session_message(session_id: str, message_index: int, request: Request, source: str = "auto"):
+    """删除会话中的单条消息"""
+    uid = _get_current_user(request)
+    is_wechat = False
+    session = None
+
+    if source == "wechat":
+        session = session_store.get_session(f"wechat_{uid}", session_id)
+        is_wechat = True
+    elif source == "web":
+        session = session_store.get_session(uid, session_id)
+    else:
+        session = session_store.get_session(uid, session_id)
+        if not session:
+            wechat_session = session_store.get_session(f"wechat_{uid}", session_id)
+            if wechat_session:
+                session = wechat_session
+                is_wechat = True
+
+    if not session:
+        raise HTTPException(404, "会话不存在")
+
+    owner_uid = uid if not is_wechat else f"wechat_{uid}"
+    ok = session_store.delete_message(owner_uid, session_id, message_index)
+    if not ok:
+        raise HTTPException(404, "消息不存在")
+    return {"status": "ok", "message": "已删除消息"}

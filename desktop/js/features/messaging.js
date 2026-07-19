@@ -14,10 +14,13 @@ messages.addEventListener('click', (event) => {
 
 // ---------- 消息渲染 ----------
 
-function addMessage(text, role) {
+function addMessage(text, role, index) {
   text = unescapeDisplay(String(text || ''));
   const div = document.createElement('div');
   div.className = `msg ${role}`;
+  if (typeof index === 'number') {
+    div.dataset.index = String(index);
+  }
   if (role === 'bot') {
     // 渲染 Markdown
     div.innerHTML = renderMarkdown(text);
@@ -29,7 +32,7 @@ function addMessage(text, role) {
   return div;
 }
 
-function addUserMessage(text, attachments = []) {
+function addUserMessage(text, attachments = [], index) {
   const hasZip = attachments.some(item => item.mime_type === 'application/zip' || (item.name || '').endsWith('.zip'));
   const hasText = !hasZip && attachments.some(function(item) {
     return /\.(md|txt|json|yaml|yml|xml|html|css|js|ts|jsx|tsx|py|java|c|cpp|h|hpp|go|rs|rb|php|sh|bash|zsh|sql|csv|log|env|toml|ini|cfg|conf|vue|svelte|kt|swift|scala)$/i.test(item.name || '');
@@ -37,7 +40,7 @@ function addUserMessage(text, attachments = []) {
   var msgFallback = '分析附件中...';
   if (hasZip) msgFallback = '分析项目中...';
   else if (hasText) msgFallback = '分析文件中...';
-  const div = addMessage(text || (attachments.length ? msgFallback : ''), 'user');
+  const div = addMessage(text || (attachments.length ? msgFallback : ''), 'user', index);
   if (attachments.length) {
     const grid = document.createElement('div');
     grid.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;';

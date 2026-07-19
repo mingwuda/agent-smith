@@ -91,6 +91,7 @@ async function loadSessionMessages(sessionId, source, options = {}) {
         const role = msg.role === 'user' ? 'user' : 'bot';
         const content = msg.content || '';
         const parsed = role === 'user' ? parseTextFilesFromContent(content) : null;
+        const msgIndex = idx;
 
         if (msg.role === 'user' && msg.content) {
           // 只存纯文本，排除含图片/文本文件的消息（避免把 base64 或文件正文塞进历史）
@@ -104,21 +105,21 @@ async function loadSessionMessages(sessionId, source, options = {}) {
 
         if (role === 'user' && parsed && parsed.files.length) {
           // ponytail: 文本附件刷新后也显示为图标，双击展开内容（与实时发送一致）
-          addUserMessage(parsed.message, parsed.files.map(f => ({ name: f.name, mime_type: 'text/plain', content: f.content })));
+          addUserMessage(parsed.message, parsed.files.map(f => ({ name: f.name, mime_type: 'text/plain', content: f.content })), msgIndex);
         } else if (role === 'user' && msg.has_images) {
-          addUserMessageLazyImages(content, msg.image_count, sessionId, msg.index != null ? msg.index : idx, source);
+          addUserMessageLazyImages(content, msg.image_count, sessionId, msgIndex, source);
         } else if (role === 'bot' && msg.has_steps) {
           // 估算本轮 bot 响应耗时：bot 时间 - 前一条 user 消息时间
           var botElapsed = 0;
           if (msg.timestamp && lastUserTs > 0) {
             try { botElapsed = new Date(msg.timestamp).getTime() - lastUserTs; } catch(e){}
           }
-          var placeholderEl = addBotMessagePlaceholder(content, msg.content_preview, botElapsed, sessionId, msg.index != null ? msg.index : idx);
+          var placeholderEl = addBotMessagePlaceholder(content, msg.content_preview, botElapsed, sessionId, msgIndex);
           if (placeholderEl) container.appendChild(placeholderEl);
         } else if (role === 'bot') {
-          addMessage(content || msg.content_preview || '', 'bot');
+          addMessage(content || msg.content_preview || '', 'bot', msgIndex);
         } else {
-          addMessage(content, role);
+          addMessage(content, role, msgIndex);
         }
       });
       } else {
@@ -164,6 +165,9 @@ function addBotMessagePlaceholder(content, contentPreview, elapsedMs, sessionId,
 
   var responseCard = document.createElement('div');
   responseCard.className = 'agent-response finished collapsed';
+  if (typeof messageIndex === 'number') {
+    responseCard.dataset.index = String(messageIndex);
+  }
   var timeVal = (elapsedMs && elapsedMs > 0) ? formatElapsed(elapsedMs) : '\u2014';
   var headerEl = document.createElement('div');
   headerEl.className = 'agent-header';
@@ -202,7 +206,7 @@ function addBotMessagePlaceholder(content, contentPreview, elapsedMs, sessionId,
 // lite 接口不再返回图片 base64（单张截图可达数 MB），只给 has_images/image_count。
 // 这里先渲染灰色占位方块，再走详情接口 /messages/{index} 异步拉取真实图片替换。
 function addUserMessageLazyImages(text, imageCount, sessionId, messageIndex, source) {
-  const div = addUserMessage(text, []); // 只渲染文本，不带附件
+  const div = addUserMessage(text, [], messageIndex); // 只渲染文本，不带附件
   const count = imageCount && imageCount > 0 ? imageCount : 1;
   const grid = document.createElement('div');
   grid.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;';
@@ -653,11 +657,12 @@ async function _loadOlderMessages() {
       const role = msg.role === 'user' ? 'user' : 'bot';
       const content = msg.content || '';
       const parsed = role === 'user' ? parseTextFilesFromContent(content) : null;
+      const msgIndex = msg.index != null ? msg.index : idx;
       let newEl = null;
       if (role === 'user' && parsed && parsed.files.length) {
-        newEl = addUserMessage(parsed.message, parsed.files.map(f => ({ name: f.name, mime_type: 'text/plain', content: f.content })));
+        newEl = addUserMessage(parsed.message, parsed.files.map(f => ({ name: f.name, mime_type: 'text/plain', content: f.content })), msgIndex);
       } else if (role === 'user' && msg.has_images) {
-        newEl = addUserMessageLazyImages(content, msg.image_count, sessionId, msg.index != null ? msg.index : 0, source);
+        newEl = addUserMessageLazyImages(content, msg.image_count, sessionId, msgIndex, source);
       } else if (role === 'bot' && msg.has_steps) {
         // 估算 bot 耗时
         var botElapsed = 0;
@@ -665,11 +670,11 @@ async function _loadOlderMessages() {
           const prevUser = _msgHistory.length > 0 ? new Date(_msgHistory[_msgHistory.length - 1]).getTime() : 0;
           try { botElapsed = new Date(msg.timestamp).getTime() - prevUser; } catch(e){}
         }
-        newEl = addBotMessagePlaceholder(content, msg.content_preview, botElapsed, sessionId, msg.index != null ? msg.index : 0);
+        newEl = addBotMessagePlaceholder(content, msg.content_preview, botElapsed, sessionId, msgIndex);
       } else if (role === 'bot') {
-        newEl = addMessage(content || msg.content_preview || '', 'bot');
+        newEl = addMessage(content || msg.content_preview || '', 'bot', msgIndex);
       } else {
-        newEl = addMessage(content, role);
+        newEl = addMessage(content, role, msgIndex);
       }
       if (newEl) newEls.push(newEl);
     });
@@ -697,3 +702,119 @@ async function _loadOlderMessages() {
     _sessionLoadingMore = false;
   }
 }
+
+// ---------- 消息删除菜单（长按 / 右键） ----------
+let _msgDeleteMenu = null;
+let _msgDeleteTarget = null;
+let _msgDeletePressTimer = null;
+let _msgDeletePressStart = null;
+
+function hideMessageDeleteMenu() {
+  if (_msgDeleteMenu && _msgDeleteMenu.parentNode) {
+    _msgDeleteMenu.remove();
+  }
+  _msgDeleteMenu = null;
+  _msgDeleteTarget = null;
+}
+
+function showMessageDeleteMenuFor(el, x, y) {
+  hideMessageDeleteMenu();
+  const index = el.dataset.index;
+  if (index === undefined || index === null || index === '') return;
+  _msgDeleteTarget = el;
+
+  const menu = document.createElement('div');
+  menu.className = 'msg-delete-menu show';
+  menu.innerHTML = '<div class="msg-delete-item">🗑 删除消息</div>';
+  menu.querySelector('.msg-delete-item').addEventListener('click', () => {
+    hideMessageDeleteMenu();
+    deleteMessageByIndex(index);
+  });
+  document.body.appendChild(menu);
+  _msgDeleteMenu = menu;
+
+  const rect = menu.getBoundingClientRect();
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  let left = x;
+  let top = y;
+  if (left + rect.width > vw - 8) left = vw - rect.width - 8;
+  if (top + rect.height > vh - 8) top = vh - rect.height - 8;
+  if (left < 8) left = 8;
+  if (top < 8) top = 8;
+  menu.style.left = left + 'px';
+  menu.style.top = top + 'px';
+}
+
+function deleteMessageByIndex(index) {
+  if (!currentSessionId || !currentSessionSource) return;
+  const confirmed = confirm(t('deleteMessageConfirm'));
+  if (!confirmed) return;
+  const url = `/sessions/${currentSessionId}/messages/${index}?source=${encodeURIComponent(currentSessionSource || 'web')}`;
+  fetch(url, { method: 'DELETE' })
+    .then(r => r.ok ? r.json() : Promise.reject(r))
+    .then(data => {
+      const target = _msgDeleteTarget;
+      if (target && target.parentNode) target.remove();
+      loadSessions();
+      if (typeof refreshStats === 'function') refreshStats();
+      if (currentSessionId && typeof loadSessionMessages === 'function') {
+        loadSessionMessages(currentSessionId, currentSessionSource, { limit: 20, offset: -20 });
+      }
+      if (data && data.message) {
+        if (typeof addMessage === 'function') addMessage(t('deleteMessageSuccess'), 'system');
+      }
+    })
+    .catch(() => {
+      if (typeof addMessage === 'function') addMessage(t('deleteMessageFailed'), 'system');
+    });
+}
+
+messages.addEventListener('touchstart', (e) => {
+  const msgEl = e.target.closest('.msg, .agent-response');
+  if (!msgEl) return;
+  if (msgEl.dataset.index === undefined || msgEl.dataset.index === null || msgEl.dataset.index === '') return;
+  _msgDeletePressStart = { x: e.touches[0].clientX, y: e.touches[0].clientY, el: msgEl, time: Date.now() };
+  _msgDeletePressTimer = setTimeout(() => {
+    const rect = msgEl.getBoundingClientRect();
+    showMessageDeleteMenuFor(msgEl, rect.left, rect.top);
+    _msgDeletePressStart = null;
+  }, 600);
+}, { passive: true });
+
+messages.addEventListener('touchmove', (e) => {
+  if (!_msgDeletePressStart || !_msgDeletePressTimer) return;
+  const dx = Math.abs((e.touches[0].clientX || 0) - _msgDeletePressStart.x);
+  const dy = Math.abs((e.touches[0].clientY || 0) - _msgDeletePressStart.y);
+  if (dx > 10 || dy > 10) {
+    clearTimeout(_msgDeletePressTimer);
+    _msgDeletePressTimer = null;
+    _msgDeletePressStart = null;
+  }
+}, { passive: true });
+
+messages.addEventListener('touchend', () => {
+  if (_msgDeletePressTimer) {
+    clearTimeout(_msgDeletePressTimer);
+    _msgDeletePressTimer = null;
+  }
+  _msgDeletePressStart = null;
+});
+
+messages.addEventListener('contextmenu', (e) => {
+  const msgEl = e.target.closest('.msg, .agent-response');
+  if (!msgEl) return;
+  if (msgEl.dataset.index === undefined || msgEl.dataset.index === null || msgEl.dataset.index === '') return;
+  e.preventDefault();
+  showMessageDeleteMenuFor(msgEl, e.clientX, e.clientY);
+});
+
+document.addEventListener('click', (e) => {
+  if (_msgDeleteMenu && !_msgDeleteMenu.contains(e.target)) {
+    hideMessageDeleteMenu();
+  }
+});
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') hideMessageDeleteMenu();
+});

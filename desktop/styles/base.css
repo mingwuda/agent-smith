@@ -156,6 +156,30 @@
   .msg.system { background:transparent; color:#8e8e93; font-size:12px; text-align:center; max-width:100%; }
   .msg .msg-time { font-size:10px; opacity:0.6; margin-top:4px; }
 
+  /* 消息长按/右键删除菜单 */
+  .msg-delete-menu {
+    position: absolute;
+    background: #fff;
+    border: 1px solid #e0e0e3;
+    border-radius: 10px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.12);
+    padding: 6px 0;
+    z-index: 1100;
+    min-width: 160px;
+    display: none;
+  }
+  .msg-delete-menu.show { display: block; }
+  .msg-delete-item {
+    padding: 8px 14px;
+    font-size: 13px;
+    color: #ff3b30;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .msg-delete-item:hover { background: #fff0f0; }
+
   #input-area { padding:12px 24px 20px; background:#fff; border-top:1px solid #ddd; }
   #attachment-preview { display:none; gap:8px; flex-wrap:wrap; margin:0 0 10px; }
   #attachment-preview.show { display:flex; }
