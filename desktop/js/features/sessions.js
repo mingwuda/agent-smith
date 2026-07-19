@@ -224,13 +224,35 @@ function addUserMessageLazyImages(text, imageCount, sessionId, messageIndex, sou
         const img = document.createElement('img');
         img.src = u;
         img.alt = 'image';
-        img.style.cssText = 'width:96px;height:96px;object-fit:cover;border-radius:8px;border:1px solid rgba(255,255,255,.5);';
+        img.style.cssText = 'width:96px;height:96px;object-fit:cover;border-radius:8px;border:1px solid rgba(255,255,255,.5);cursor:zoom-in;';
+        img.title = '点击放大查看';
+        img.addEventListener('click', () => openImageZoom(u));
         grid.appendChild(img);
       });
     })
     .catch(() => { /* 拉取失败保留占位，不抛错 */ });
 
   return div;
+}
+
+// 点击图片放大查看：懒加载单例 overlay，点击遮罩/关闭按钮/Esc 关闭。
+// ponytail: 复用 streaming.js 的 capsule overlay 模式（单例 + classList 切换 + 点击外部关闭）。
+function openImageZoom(src) {
+  let overlay = document.getElementById('img-zoom-overlay');
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.id = 'img-zoom-overlay';
+    overlay.className = 'img-zoom-overlay';
+    overlay.innerHTML = '<button class="img-zoom-close" title="关闭">✕</button><img alt="放大查看">';
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay || e.target.classList.contains('img-zoom-close')) overlay.classList.remove('active');
+    });
+    overlay._escHandler = (e) => { if (e.key === 'Escape') overlay.classList.remove('active'); };
+    document.addEventListener('keydown', overlay._escHandler);
+    document.body.appendChild(overlay);
+  }
+  overlay.querySelector('img').src = src;
+  overlay.classList.add('active');
 }
 
 // 展开历史消息占位卡片，按需加载完整 steps/todo
