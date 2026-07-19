@@ -105,8 +105,8 @@ async function loadSessionMessages(sessionId, source, options = {}) {
         if (role === 'user' && parsed && parsed.files.length) {
           // ponytail: 文本附件刷新后也显示为图标，双击展开内容（与实时发送一致）
           addUserMessage(parsed.message, parsed.files.map(f => ({ name: f.name, mime_type: 'text/plain', content: f.content })));
-        } else if (role === 'user' && msg.images && msg.images.length) {
-          addUserMessage(content, msg.images.map(u => ({data_url: u})));
+        } else if (role === 'user' && msg.has_images) {
+          addUserMessageLazyImages(content, msg.image_count, sessionId, msg.index != null ? msg.index : idx, source);
         } else if (role === 'bot' && msg.has_steps) {
           // 估算本轮 bot 响应耗时：bot 时间 - 前一条 user 消息时间
           var botElapsed = 0;
@@ -196,6 +196,41 @@ function addBotMessagePlaceholder(content, contentPreview, elapsedMs, sessionId,
   // 否则 _loadOlderMessages 用 fragment 批量插顶部时，bot 卡片被此函数内部
   // append 到容器末尾，导致问题/回复位置全部错开。
   return responseCard;
+}
+
+// 用户图片消息：占位 + 懒加载。
+// lite 接口不再返回图片 base64（单张截图可达数 MB），只给 has_images/image_count。
+// 这里先渲染灰色占位方块，再走详情接口 /messages/{index} 异步拉取真实图片替换。
+function addUserMessageLazyImages(text, imageCount, sessionId, messageIndex, source) {
+  const div = addUserMessage(text, []); // 只渲染文本，不带附件
+  const count = imageCount && imageCount > 0 ? imageCount : 1;
+  const grid = document.createElement('div');
+  grid.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;';
+  for (let i = 0; i < count; i++) {
+    const ph = document.createElement('div');
+    ph.style.cssText = 'width:96px;height:96px;border-radius:8px;background:#e5e7eb;display:flex;align-items:center;justify-content:center;';
+    ph.innerHTML = '<span style="display:inline-block;width:14px;height:14px;border:2px solid #9ca3af;border-top-color:transparent;border-radius:50%;animation:spin .6s linear infinite;"></span>';
+    grid.appendChild(ph);
+  }
+  div.appendChild(grid);
+
+  fetch(`/sessions/${sessionId}/messages/${messageIndex}?source=${encodeURIComponent(source || 'web')}`)
+    .then(r => r.ok ? r.json() : null)
+    .then(data => {
+      const imgs = (data && data.message && data.message.images) || [];
+      if (!imgs.length) { grid.remove(); return; }
+      grid.innerHTML = '';
+      imgs.forEach(u => {
+        const img = document.createElement('img');
+        img.src = u;
+        img.alt = 'image';
+        img.style.cssText = 'width:96px;height:96px;object-fit:cover;border-radius:8px;border:1px solid rgba(255,255,255,.5);';
+        grid.appendChild(img);
+      });
+    })
+    .catch(() => { /* 拉取失败保留占位，不抛错 */ });
+
+  return div;
 }
 
 // 展开历史消息占位卡片，按需加载完整 steps/todo
@@ -599,8 +634,8 @@ async function _loadOlderMessages() {
       let newEl = null;
       if (role === 'user' && parsed && parsed.files.length) {
         newEl = addUserMessage(parsed.message, parsed.files.map(f => ({ name: f.name, mime_type: 'text/plain', content: f.content })));
-      } else if (role === 'user' && msg.images && msg.images.length) {
-        newEl = addUserMessage(content, msg.images.map(u => ({data_url: u})));
+      } else if (role === 'user' && msg.has_images) {
+        newEl = addUserMessageLazyImages(content, msg.image_count, sessionId, msg.index != null ? msg.index : 0, source);
       } else if (role === 'bot' && msg.has_steps) {
         // 估算 bot 耗时
         var botElapsed = 0;

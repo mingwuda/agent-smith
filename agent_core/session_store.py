@@ -304,12 +304,16 @@ def get_session_lite(user_id: str, session_id: str, limit: int = 20, offset: int
                 "timestamp": r["timestamp"],
                 "index": real_index,
             }
-            # 用户消息：保留 content 和 images，截断大文本
+            # 用户消息：保留 content，截断大文本
             if r["role"] == "user":
                 content_text = parsed.get("content", "") or ""
                 msg_meta["content"] = content_text[:200]
-                if "images" in parsed:
-                    msg_meta["images"] = parsed["images"]
+                # ponytail: lite 不返回图片 base64（单张截图可达数 MB，一屏多图会让列表
+                # 接口负载爆炸、拖慢滚动懒加载）。只给出是否有图 + 张数用于占位，
+                # 真正的图片走详情接口 /messages/{index} 懒加载。
+                imgs = parsed.get("images") or []
+                msg_meta["has_images"] = bool(imgs)
+                msg_meta["image_count"] = len(imgs)
             else:
                 # 助手消息：只保留 content 和是否有 steps/todo 的标记
                 content_text = parsed.get("content", "") or ""
