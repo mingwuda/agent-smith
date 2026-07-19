@@ -40,6 +40,8 @@ Moss Agent 是一个本地/私有部署的桌面 AI 工作台。它基于 FastAP
 | 多用户 | 登录保护、管理员用户管理、每个用户独立工作区、会话、用量和记忆；支持 `AGENT_USERS` 环境变量批量配置 |
 | 上下文管理 | 按模型上下文窗口估算长度，达到阈值时压缩历史；大日志/大文件不直接塞全文 |
 | 用量统计 | 按用户、会话、Provider、模型和工具统计调用与 token |
+| 会话消息管理 | 支持删除单条消息、历史消息图片点击放大、图片懒加载（lite 接口不传 base64） |
+| 系统守护与自愈 | Guardian 守护进程：boot 自愈、健康巡检、崩溃自动重启；主进程 + 守护进程双 systemd unit 管理 |
 | 工具卡片 | 步骤卡片带绿色左边框、工具名 + 耗时 + 状态圆点、参数/结果分栏展示，支持折叠
 
 ---
@@ -768,16 +770,52 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/opt/moss-agent
-Environment=AGENT_HOST=0.0.0.0
-Environment=AGENT_PORT=8080
-Environment=AGENT_OPEN_BROWSER=0
-Environment=DESKTOP_AGENT_AUTH_USER=admin
-Environment=DESKTOP_AGENT_AUTH_PASSWORD=change-me
-Environment=DESKTOP_AGENT_AUTH_SECRET=replace-with-random-secret
-ExecStart=/opt/moss-agent/.venv/bin/python /opt/moss-agent/agent_core/main.py
+# 安装路径从环境变量读取，未配置时使用下方默认值（${VAR:-默认值}）。
+# 两种覆盖方式任选其一：
+#   方式 A（推荐）：把变量写进 /etc/default/desktop-agent，本 unit 自动加载
+#       echo 'DA_HOME=/srv/desktop-agent' > /etc/default/desktop-agent
+#       echo 'DA_PYTHON=/srv/desktop-agent/.venv/bin/python' >> /etc/default/desktop-agent
+#   方式 B：直接在下方用 Environment= 改默认值
+EnvironmentFile=-/etc/default/desktop-agent
+WorkingDirectory=${DA_HOME:-/opt/desktop-agent}
+ExecStart=${DA_PYTHON:-/opt/desktop-agent/.venv/bin/python} agent_core/main.py
+# 崩溃自动拉起，比 nohup 更稳；守护进程（guardian）也依赖此 unit 名做 Restart
 Restart=always
-RestartSec=3
+RestartSec=5
+# 配置开关在此注入（按需取消注释；不配置则按 config.yaml / 默认值）
+# Environment=AGENT_SELF_EVOLUTION=1
+# Environment=AGENT_SELF_HEALING=1
+# Environment=AGENT_SELF_HEALING_INTERVAL=600
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Guardian 守护进程 unit（可选，用于 boot 自愈 + 健康巡检）：
+
+```ini
+[Unit]
+Description=Desktop Agent 守护进程（控制面：巡检与自愈编排）
+# 依赖主服务先起来；主服务挂了由它自己的 unit 拉起，本单元只管守护进程自身
+After=network.target desktop-agent.service
+Wants=desktop-agent.service
+
+[Service]
+Type=simple
+# 运行时参数（含健康探针 URL、重启命令）从 /etc/default/desktop-agent-guardian 读取
+EnvironmentFile=-/etc/default/desktop-agent-guardian
+# WorkingDirectory 必须是仓库根：python -m agent_core.xxx 靠 cwd 加入 sys.path 才能找到 agent_core 包
+WorkingDirectory=/opt/desktop-agent
+ExecStart=/opt/desktop-agent/.venv/bin/python -m agent_core.guardian_daemon
+# 恢复时执行的重启命令（值含空格必须加引号）；主服务用 systemd 管理
+Environment="SELF_HEAL_RESTART_CMD=systemctl restart desktop-agent"
+# 健康探针默认 http://127.0.0.1:8899/health，可在 /etc/default/desktop-agent-guardian 覆盖
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
@@ -788,17 +826,90 @@ WantedBy=multi-user.target
 ```bash
 systemctl daemon-reload
 systemctl enable desktop-agent
-systemctl restart desktop-agent
-systemctl status desktop-agent
+systemctl enable desktop-agent-guardian
+systemctl restart desktop-agent desktop-agent-guardian
+systemctl status desktop-agent desktop-agent-guardian
 ```
 
 查看日志：
 
 ```bash
 journalctl -u desktop-agent -f
+journalctl -u desktop-agent-guardian -f
 ```
 
 公网部署建议放在 HTTPS 反向代理后，并设置强密码和固定 `DESKTOP_AGENT_AUTH_SECRET`。
+
+---
+
+## 系统守护与自愈
+
+Moss Agent 提供 Guardian 守护进程，实现 boot 自愈、健康巡检和崩溃自动重启。采用**双进程双 unit** 架构：
+
+- `desktop-agent.service`：主服务 unit，负责运行 FastAPI 后端
+- `desktop-agent-guardian.service`：守护进程 unit，负责健康巡检与自愈编排
+
+### 架构
+
+```text
+systemd
+ ├─ desktop-agent.service (主服务)
+ │    └─ agent_core/main.py
+ └─ desktop-agent-guardian.service (守护进程)
+      └─ agent_core/guardian_daemon.py
+           ├─ 定期探活 /health
+           ├─ 检测到异常时执行 SELF_HEAL_RESTART_CMD
+           └─ 启动时自检常见问题并修复
+```
+
+### 核心特性
+
+- **Boot 自愈**：服务启动时自动检测并修复常见问题
+- **健康巡检**：定期访问主服务 `/health` 接口，确认服务存活
+- **崩溃自动重启**：主服务异常退出后，由 systemd 自动拉起；守护进程可执行额外重启命令
+- **配置外置**：健康探针 URL、重启命令等通过 `/etc/default/desktop-agent-guardian` 覆盖，无需修改 unit 文件
+- **双 unit 协作**：主服务 unit 负责自身 `Restart=always`，守护进程 unit 负责更高层级的巡检与编排
+
+### 配置覆盖
+
+在 `/etc/default/desktop-agent-guardian` 中可覆盖：
+
+```bash
+# 健康探针 URL（默认 http://127.0.0.1:8899/health）
+SELF_HEAL_HEALTH_URL=http://127.0.0.1:8080/health
+
+# 自愈重启命令（默认 systemctl restart desktop-agent）
+SELF_HEAL_RESTART_CMD="systemctl restart desktop-agent"
+```
+
+主服务路径配置写在 `/etc/default/desktop-agent`：
+
+```bash
+DA_HOME=/srv/desktop-agent
+DA_PYTHON=/srv/desktop-agent/.venv/bin/python
+```
+
+### 管理命令
+
+```bash
+# 查看主服务状态
+systemctl status desktop-agent
+
+# 查看守护进程状态
+systemctl status desktop-agent-guardian
+
+# 重启主服务
+systemctl restart desktop-agent
+
+# 重启守护进程
+systemctl restart desktop-agent-guardian
+
+# 查看主服务日志
+journalctl -u desktop-agent -f
+
+# 查看守护进程日志
+journalctl -u desktop-agent-guardian -f
+```
 
 ---
 
