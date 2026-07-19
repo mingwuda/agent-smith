@@ -89,7 +89,9 @@ Moss Agent 是一个本地/私有部署的桌面 AI 工作台。它基于 FastAP
 ```bash
 git clone https://gitee.com/mingwuda/desktop-agent.git
 cd desktop-agent
-pip install -r requirements.txt
+python3 -m venv .venv
+.venv/bin/python -m pip install --upgrade pip setuptools wheel
+.venv/bin/python -m pip install -r requirements.txt
 ./start.sh
 ```
 
@@ -105,12 +107,13 @@ http://127.0.0.1:8899/
 
 ```bash
 cd agent_core
-python main.py
+.venv/bin/python main.py
 ```
 
 Windows 可执行：
 
 ```cmd
+.venv\Scripts\python.exe -m pip install -r requirements.txt
 start.cmd
 ```
 
