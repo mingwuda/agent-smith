@@ -1,0 +1,21 @@
+[Unit]
+Description=Desktop Agent 主服务（Moss Agent）
+After=network.target
+
+[Service]
+Type=simple
+# ↓↓↓ 必改：指向项目根目录与运行主 app 的同一解释器
+WorkingDirectory=/opt/desktop-agent
+ExecStart=/opt/desktop-agent/.venv/bin/python agent_core/main.py
+# 崩溃自动拉起，比 nohup 更稳；守护进程（guardian）也依赖此 unit 名做 Restart
+Restart=always
+RestartSec=5
+# 配置开关在此注入（按需取消注释；不配置则按 config.yaml / 默认值）
+# Environment=AGENT_SELF_EVOLUTION=1
+# Environment=AGENT_SELF_HEALING=1
+# Environment=AGENT_SELF_HEALING_INTERVAL=600
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

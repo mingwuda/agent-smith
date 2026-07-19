@@ -176,18 +176,34 @@ def _approval_gate(self, candidate) -> bool:
 
 决策（已确认）：**`boot 自愈`始终开启**（纯 stdlib、零成本、只保护"能不能启动"）；**`apply 闸门`仅由后续进化代码（P3）调用**。
 
-### 4.2 两层职责
+进程模型决策（2026-07-19 追加）：自愈采用**混合架构**——主 app 内保留一层**进程内 boot 快路径**（`guardian.py`，最精准、零新设施）；同时新增一个**独立守护进程作为控制面**，承载运行时巡检（§4.6）、boot 恢复编排、审计（§4.7）、升级人工等"聪明"逻辑。守护进程自身由 systemd 监管（避免它自己挂了无人管），与主 app 由 systemd 管的"物理存活"分工清晰：**systemd=物理存活（进程死→拉起），守护进程=逻辑健康+自愈编排**。
+
+### 4.2 拓扑：控制面（守护进程） + 执行面（主 app）
+
+```
+systemd (物理存活: 进程死→拉起)
+  ├─ 主 app (执行面): init_agent 启动 + /health 探针 + 进程内 boot 快路径(guardian.py)
+  └─ 守护进程 guardian-daemon (控制面): 运行时巡检 + boot 恢复编排 + 审计 + 升级人工
+        ↑ 观察: /health 探针 + tail agent.log + 读 UsageTracker
+        ↓ 修复: 改产物文件(manifest/.generated 隔离) + 触发重启(经 systemd)
+```
+
+- **执行面（主 app）**：保持现有 `init_agent()` 启动；新增 `/health` 端点报告 agent 是否就绪 / `.boot_ok` 是否存在；保留 `agent_core/guardian.py` 的 `self_heal_on_boot` 作为**进程内 boot 快路径**（直接 `try: init_agent()` 拿到异常对象、同进程就地回退、无需重启，精度最高）。
+- **控制面（守护进程）**：拥有所有自愈**决策**。主 app 在超时内未变健康 → 它接管做 LIFO 回退 + 触发重启；平时跑巡检、写审计、升级人工。所有"聪明的"逻辑（诊断/编排/审计/审批）集中于此，主 app 保持"笨"，新 healer 只加在守护进程里 → 扩展性最佳。
+
+### 4.2.1 两层职责（机制层面）
 
 **① Apply 闸门（预防，进化产物落地前）**
 进化产物（SKILL.md / config 补丁 / prompt 覆盖）生效前，先过一层纯静态校验——**不调 LLM、零成本、快**：
 - SKILL.md：frontmatter YAML 可解析 + 必填字段（`name`/`description`）齐全 + 用 `skills/loader.py` 同样方式 dry-parse 不报错。
 - config 补丁：只含已知 `AgentConfig` 字段、类型正确、套用后 `load()` 仍成功。
 - 先写 `.staging` 再 dry-验证，PASS 才落盘并记 manifest；FAIL 直接拒绝，**永不应用**。
+- 由**控制面**（P3 自改写落盘前）调用；执行面的 `guardian.validate_artifact` 提供基础版实现。
 
-**② Boot 自愈（恢复，启动失败时）**
-在 `main.py:103 lifespan` 里包住 `init_agent()`（含 skills 加载）：
-- 成功 → 标 `.boot_ok`、记 manifest 哈希、正常服务。
-- 抛异常 → 读 `skills/.generated/manifest.json`（LIFO）→ 把**最近一次**进化产物移入 `skills/.quarantine/`（保留待查、**不删**，可人工回看）→ 重试 `init_agent()` → 循环回退直到 manifest 空 → 仍失败则移除全部 `.generated/` 再试一次 → 还失败：服务存活但 `agent=None`，记 FATAL 等人工。
+**② Boot 自愈（恢复，启动失败时）—— 双实现**
+- **执行面快路径（已实现）**：`main.py:103 lifespan` 包住 `init_agent()`，异常对象就地捕获、同进程 LIFO 回退，**不动进程**。最精准、零新设施。
+- **控制面兜底（待实现）**：守护进程探测到主 app 在超时内未报告健康 → 由守护进程操作 `skills/.generated/manifest.json`（LIFO 回退）+ 移动产物到 `skills/.quarantine/` + 经 systemd 重启主 app。覆盖"执行面快路径未捕获 / 主进程硬死"的情况。
+- 两者用同一套回退原语（`guardian.record_evolution` 登记的 manifest、`quarantine_*` 隔离函数、`_boot_ok` 标记），语义一致。
 
 ### 4.3 关键设计约束（ponytail 视角）
 - **守护层自身绝不能成为启动失败源**：只用纯 stdlib（`shutil`/`json`/`traceback`），不 import 任何业务模块、不调 LLM。挂得越轻越保命。
@@ -196,15 +212,21 @@ def _approval_gate(self, candidate) -> bool:
 - **回退可逆**：产物进 `quarantine/` 而非删除，人工可审计、可恢复。
 
 ### 4.4 落点
-- 新模块 `agent_core/guardian.py`（纯 stdlib）暴露：
-  - `validate_artifact(kind, content) -> bool`（apply 闸门，P1 为 inert 占位，P3 填实）
-  - `self_heal_on_boot(boot_fn) -> agent | None`（boot 自愈，P1 做实）
-  - `record_evolution(manifest_entry)`（记录进化产物清单）
-- `main.py:103 lifespan` 把 `init_agent()` 包进 `guardian.self_heal_on_boot(...)`；现有"首次请求重试"逻辑升级为"重试 + 回退"。
-- 状态文件：`skills/.generated/manifest.json`、`skills/.quarantine/`、`config.json.bak`、`.boot_ok`。
+- **执行面**：模块 `agent_core/guardian.py`（纯 stdlib）暴露：
+  - `validate_artifact(kind, content) -> bool`（apply 闸门基础版，P3 由控制面调用）
+  - `self_heal_on_boot(boot_fn) -> bool`（**进程内 boot 快路径**，已实现）
+  - `record_evolution(manifest_entry)` / `quarantine_*` / `_hash_manifest`（回退原语，控制面复用）
+  - `main.py:103 lifespan` 把 `init_agent()` 包进 `guardian.self_heal_on_boot(...)`（已实现）。
+- **控制面（守护进程，待实现）**：新模块 `agent_core/guardian_daemon.py`（或独立入口）：
+  - `_patrol_loop()`（运行时巡检，见 §4.6）、`_check_health()`（调主 app `/health`）、`_orchestrate_boot_recovery()`（manifest LIFO 回退 + 触发 systemd 重启）、`_write_audit()`（§4.7）。
+  - 被 systemd 监管（新增 unit 文件）；自身崩溃由 systemd 拉起。
+  - 观察手段：HTTP `GET /api/system/health`（需新增，见 §4.4.1）、`tail` `logger.py` 的 `agent.log`、`monitoring/usage_tracker.py` 的 SQLite 遥测。
+- 状态文件：`skills/.generated/manifest.json`、`skills/.quarantine/`、`config.json.bak`、`.boot_ok`（执行面写，控制面读+操作）。
+- **§4.4.1 健康探针（执行面）**：复用**已有的** `api/routes/monitoring.py:165 GET /health`（该端点已对 `deps.py:128` 白名单公开、无需鉴权），扩展返回字段为 `{status, agent_ready, boot_ok, model, provider, ...}`（`agent_ready` = agent 已初始化；`boot_ok` = `_app_base_dir()/.boot_ok` 存在）。**注意**：不要另在 `system.py` 加同名 `/health`，会与 monitoring 的重复注册冲突——直接扩展既有端点。守护进程与控制面巡检都依赖这两个字段。
 
 ### 4.5 测试 `tests/test_guardian.py`
 - 放一个畸形 SKILL.md 进 `.generated/` + 写 manifest → 包 `init_agent()` 启动 → 断言**成功启动**且坏技能进了 `quarantine/`。
+- **实现状态（2026-07-19）**：已落地。`agent_core/guardian.py` 为纯 stdlib（不 import 业务模块、不调 LLM），`self_heal_on_boot` 已接进 `main.py:103 lifespan`，路径由 main 注入（`skills/.generated`、`skills/.quarantine`、`_app_base_dir()/.boot_ok`）。`tests/test_guardian.py` **6 passed**（LIFO 回退恢复 / 整体隔离 generated 恢复 / 全失败返回 False 不写 boot_ok / skill frontmatter 校验 / config_patch 未知字段拒绝 / record_evolution LIFO）。`validate_artifact`（apply 闸门）P1 提供可用基础版但**未接调用方**，待 P3 自改写启用。
 - apply 闸门拒绝非法 frontmatter 的 SKILL.md（返回 FAIL，未落盘）。
 - config 补丁含未知字段 → 拒绝。
 
@@ -217,10 +239,10 @@ def _approval_gate(self, candidate) -> bool:
 - **文本日志** `agent.log`（`logger.py:32 TimedRotatingFileHandler` 写，按时间滚动归档）：tail 最近 N 行，抓 `ERROR`/`CRITICAL`/`Traceback` 与异常类型聚类 → 定性信号（栈信息、根因线索）。
 - 两者互补：遥测给"发生了什么、频率多少"，日志给"为什么"。
 
-#### 4.6.2 调度（复用 `main.py:124` 后台任务范式）
-- 在 `main.py:103 lifespan` 里 `asyncio.create_task(_patrol_loop(config))`，与现有 `_load_mcp_tools_background` 同构。
-- 循环体：`while True: await _run_patrol(); await asyncio.sleep(interval)`，`interval` 取自新增配置 `self_healing_interval_seconds`（默认 600=10min）。
-- **自愈任务自身必须自吞异常**：整轮 `try/except`，任何错误只记日志、绝不抛回事件循环（守护层不能成为新的不稳定源）。
+#### 4.6.2 调度（由守护进程承载，不再放在主 app 内）
+- 巡检循环运行在**守护进程**（`guardian_daemon.py`）内：`while True: await _run_patrol(); await asyncio.sleep(interval)`，`interval` 取自配置 `self_healing_interval_seconds`（默认 600=10min）。
+- **不再**在 `main.py:103 lifespan` 里 `create_task` 巡检——那是进程内方案，已改为守护进程模型。主 app 只负责 `/health` 探针与执行自愈动作。
+- **自检任务自身必须自吞异常**：整轮 `try/except`，任何错误只记日志、绝不抛（守护层不能成为新的不稳定源）；守护进程本身由 systemd 监管拉起。
 
 #### 4.6.3 分析器（两阶段，省钱）
 - **Stage 1 启发式（零 LLM，每轮必跑）**：对遥测+日志套规则，命中才进 Stage 2。例：
@@ -249,9 +271,9 @@ def _approval_gate(self, candidate) -> bool:
 - **隔离**：与记忆/反馈同套按用户隔离机制；巡检是全局运维任务，作用于进程级，不串用户会话状态。
 
 #### 4.6.6 落点
-- 新模块 `agent_core/patrol.py`：`_patrol_loop(config)`、`_run_patrol()`、`analyze(telemetry, logs)`、`HEALERS` 注册表、`heal(finding)`。
+- 巡检逻辑模块 `agent_core/patrol.py`：`_patrol_loop(config)`、`_run_patrol()`、`analyze(telemetry, logs)`、`HEALERS` 注册表、`heal(finding)`。**由守护进程 `guardian_daemon.py` 调用**，不挂在主 app 内。
 - 复用：`monitoring/usage_tracker.py`（遥测查询）、`logger.py` 的 log 路径、`guardian.quarantine_*`（坏技能隔离）、`agent.reload_skills()`、记忆注入链路。
-- `main.py:103 lifespan` 加 `asyncio.create_task(_patrol_loop(config))`。
+- 守护进程经 `GET /health`（§4.4.1，monitoring 端点扩展 `agent_ready`/`boot_ok`）判断主 app 是否健康、是否需触发 boot 恢复编排。
 - `config.py` 加 `self_healing_interval_seconds` + `enable_self_healing`（含 env_map/save/to_api_dict）。
 
 #### 4.6.7 测试 `tests/test_patrol.py`
@@ -259,6 +281,20 @@ def _approval_gate(self, candidate) -> bool:
 - `quarantine_bad_skill`：给定一个报错技能 → 断言进 `quarantine/` 且 `reload_skills` 被调用。
 - 高风险 healer（如 revert_config_patch）在 `_approval_gate` 返回 `False` 时不执行、只 `escalate_to_human`（断言未改 config、产生告警记录）。
 - 巡检循环 `try/except` 自吞：mock 一个 healer 抛异常 → 断言循环继续、进程未崩。
+
+### 4.8 守护进程（控制面）实现状态（2026-07-19）
+
+**已实现骨架（最小可跑控制面）**：
+- 新增 `agent_core/guardian_daemon.py`（独立进程，纯 stdlib + 复用 `guardian`/`config`）：`check_health`(urllib 探针)、`scan_log_for_errors`(轻量日志启发式)、`orchestrate_boot_recovery`(复用 `guardian.roll_back_latest` LIFO 回退 + `trigger_restart`)、`run_patrol`(单轮)、`patrol_loop`(常驻循环)、`main`(`--once`/`--health-url`/`--restart-cmd`/`--interval` 参数)。观察永远执行；**动作受 `enable_self_healing` 门控**（关时仅记录不改动）。`trigger_restart` 仅在配置了 `SELF_HEAL_RESTART_CMD` 时才执行重启，默认只记录——安全默认。
+- `guardian.py` 新增公开原语 `roll_back_latest(manifest_path, quarantine_dir)`（一次 LIFO 回退，供进程外控制面复用）。
+- 健康端点复用既有 `api/routes/monitoring.py:165 GET /health`，扩展返回 `agent_ready` + `boot_ok`（**未新建设 system.py 同名路由，避免重复注册冲突**）；该端点已在 `deps.py:128` 白名单公开。
+- `config.py` 加 `enable_self_healing` + `self_healing_interval_seconds`(默认 600)，含 env_map/save/to_api_dict；`system.py` SettingsRequest/save/env 同步。
+- 新增 `packaging/linux/desktop-agent-guardian.service`：systemd 监管守护进程自身（`Restart=always`），并注入 `SELF_HEAL_HEALTH_URL`/`SELF_HEAL_RESTART_CMD`。
+- `tests/test_guardian_daemon.py` **6 passed**（LIFO 回退 / 空 manifest / 探针不可达 / 探针解析 / 开启自愈恢复 / 观察模式不动文件）。全量回归 27 passed（含 boot 自愈 6、自进化 4、loop_guard 11）。
+
+**未做（后续轮次）**：
+- 完整巡检分析器（§4.6.3 两阶段 LLM）、healers 注册表（§4.6.4）、审计写入（§4.7）、升级人工 UI。当前 `run_patrol` 仅做"健康探测 + 轻量日志扫描 +（开启时）boot 恢复编排"，是骨架而非完整巡逻。
+- 守护进程与主 app 的实际联调（需重启服务加载新代码，并配置 systemd unit + 重启命令）。
 
 ### 4.7 进化审计视图（管理员可观测，跨层）
 
@@ -282,7 +318,7 @@ def _approval_gate(self, candidate) -> bool:
   - `artifacts` TEXT（JSON 数组：产物路径/key，如 `skills/.quarantine/foo.md`、`config.json.bak`、`_avoid_<hash>`）
   - `outcome` TEXT（`auto_fixed` | `escalated` | `auto_reverted` | `pending` | `approved`）
   - `actor` TEXT（`auto` | `admin`）
-- **单一写入点**：所有进化相关代码（patrol healers、feedback 处理、guardian 回退、P3 技能生成）在动作发生时调用 `audit.log(...)` 写一条。不散落。
+- **单一写入点**：所有进化相关动作在发生时调用 `audit.log(...)` 写一条。在**混合架构**下，这些动作主要发生在**控制面（守护进程）**——patrol healers、boot 恢复编排、P3 技能生成由守护进程执行并写审计；执行面（主 app）仅 feedback 处理、进程内 boot 快路径回退在本地发生时写审计（经同一 `audit_store` 单例）。不散落。
 
 #### 4.7.3 管理端 API（复用 `api/routes/` 结构与鉴权）
 新增 `api/routes/admin_evolution.py`（或并入 `system.py`，其已有 `/users/me` 与角色概念）：
@@ -327,7 +363,8 @@ def _approval_gate(self, candidate) -> bool:
 3. **设计存档**：本设计落为仓库根目录 `DESIGN.md`。
 4. **落地方式**：后端优先，前端 👍/👎 按钮后续单独补。
 5. **反思模型**：优先用 `review_model`（config:97-98），未配则回退主模型（P1 接受）。
-6. **运行时巡检自愈**（用户新增要求）：守护层扩展出"运行时一半"——定时读 `agent.log` + `UsageTracker` 遥测，启发式+（异常时）LLM 分析，自动自愈或升级人工。复用 `main.py:124` 后台任务范式 + `guardian` 隔离机制，新增 `enable_self_healing` 开关默认关，高风险动作过 `_approval_gate`（当前恒 False，仅升级人工）。详见 §4.6。
+6. **运行时巡检自愈**（用户新增要求）：守护层扩展出"运行时一半"——定时读 `agent.log` + `UsageTracker` 遥测，启发式+（异常时）LLM 分析，自动自愈或升级人工。**承载方改为独立守护进程（`guardian_daemon.py`，控制面）**，不再放主 app 内；主 app 仅提供 `/health` 探针与执行自愈动作。新增 `enable_self_healing` 开关默认关，高风险动作过 `_approval_gate`（当前恒 False，仅升级人工）。详见 §4.6。
+7. **进程模型（用户新增要求）**：自愈采用**混合架构**——主 app 保留进程内 boot 快路径（`guardian.py`，最精准、零新设施），新增独立守护进程作**控制面**承载巡检/编排/审计/升级；守护进程由 systemd 监管，与 systemd 的"物理存活"分工清晰。详见 §4.1/§4.2/§4.4。
 7. **进化审计视图（管理员可观测）**（用户新增要求）：巡检发现的坑 / 修复的问题 / 改动内容 / 产物，要能让管理员在一个地方看到。新增统一 `EvolutionAuditStore`（SQLite，复用 `usage_tracker.py` 范式），覆盖 patrol/feedback/guardian/skill_gen 全部事件，带 `before/after` diff + `artifacts` 产物链接；管理端 API `GET /admin/evolution/audit` 等，admin 角色鉴权。详见 §4.7。
 
 ---
@@ -364,6 +401,11 @@ def _approval_gate(self, candidate) -> bool:
 | main.py | `init_agent` | 229 |
 | logger.py | `TimedRotatingFileHandler` / `agent.log` 路径 | 32 / 121 |
 | monitoring/usage_tracker.py | `UsageTracker` / `record_model_call` / `record_tool_call` | 17 / 116 / 153 |
-| agent_core/patrol.py | `_patrol_loop` / `analyze` / `HEALERS`（新增模块） | — |
-| agent_core/evolution/audit_store.py | `EvolutionAuditStore.audit`（新增模块，复用 usage_tracker SQLite 范式） | — |
+| agent_core/guardian.py | `self_heal_on_boot`（执行面快路径，已实现）/ `validate_artifact` / `record_evolution` / `quarantine_*` | 108 / 182 / 167 |
+| main.py | `lifespan` 包 `guardian.self_heal_on_boot` | 103 |
+| agent_core/guardian_daemon.py | `_patrol_loop` / `_check_health` / `_orchestrate_boot_recovery` / `_write_audit`（**控制面，新增进程**） | — |
+| api/routes/monitoring.py | `GET /health`（既有端点，扩展 `agent_ready`/`boot_ok` 字段，供控制面探测） | 165 |
+| agent_core/guardian_daemon.py | `_patrol_loop` / `run_patrol` / `check_health` / `orchestrate_boot_recovery`（**控制面，新增进程**） | — |
+| agent_core/patrol.py | `_patrol_loop` / `analyze` / `HEALERS`（**由守护进程调用**） | — |
+| agent_core/evolution/audit_store.py | `EvolutionAuditStore.audit`（新增模块，复用 usage_tracker SQLite 范式；控制面为主写入方） | — |
 | api/routes/admin_evolution.py | `GET /admin/evolution/audit` 等管理端审计端点（新增） | — |

@@ -182,6 +182,13 @@ def health():
     result = {
         "status": "ok" if initialized else "error",
     }
+    # 守护进程控制面依赖这两个字段判断健康（与 agent_core/guardian_daemon.py 对齐）
+    result["agent_ready"] = initialized
+    try:
+        from main import _app_base_dir
+        result["boot_ok"] = (_app_base_dir() / ".boot_ok").exists()
+    except Exception:
+        result["boot_ok"] = False
     if cfg:
         result["model"] = cfg.model
         result["provider"] = cfg.active_provider

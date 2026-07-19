@@ -1,0 +1,32 @@
+[Unit]
+Description=Desktop Agent 守护进程（控制面：巡检与自愈编排）
+# 依赖主服务先起来；主服务挂了由它自己的 unit 拉起，本单元只管守护进程自身
+# 注意：desktop-agent.service 是下方新增的主服务 unit（可选）。
+#       若你用 start.sh 而非 systemd 管理主服务，可删除这一行 After/Wants，
+#       并把下方 SELF_HEAL_RESTART_CMD 改成 start.sh 的重启命令。
+After=network.target desktop-agent.service
+Wants=desktop-agent.service
+
+[Service]
+Type=simple
+# ↓↓↓ 必改 1：指向运行主 app 的同一解释器（项目 .venv 里的 python）
+#       例如：/opt/desktop-agent/.venv/bin/python
+#       或 macOS 本地：/Users/mingo/.workbuddy/binaries/python/versions/3.13.12/bin/python3
+WorkingDirectory=/opt/desktop-agent
+# ↓↓↓ 必改 2：把 <PYTHON> 替换成上面的真实解释器路径（否则 ExecStart 字面执行 <PYTHON> 必崩）
+ExecStart=<PYTHON> -m agent_core.guardian_daemon
+# ↓↓↓ 必改 3：恢复时执行的重启命令，二选一：
+#   主服务用 systemd（已配 desktop-agent.service）：systemctl restart desktop-agent
+#   主服务用 start.sh 起的：/opt/desktop-agent/start.sh restart
+#   留空则只记录不重启（最安全，但失去自动恢复能力）
+Environment=SELF_HEAL_RESTART_CMD=systemctl restart desktop-agent
+# 健康探针 URL（若主 app 部署在反向代理后带 /api 前缀，改成完整地址如 http://127.0.0.1:8899/api/system/health）
+Environment=SELF_HEAL_HEALTH_URL=http://127.0.0.1:8899/health
+Restart=always
+RestartSec=5
+# 守护进程自身崩了由 systemd 拉起，确保"控制面"常驻
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -42,3 +42,8 @@ procs.txt
 # 本地生成的工作区视频/项目产物（避免再次污染仓库）
 my-first-video/
 my-first-video-midnight/
+
+# 守护层运行时产物（由运行期生成，不入库，避免污染远端自愈状态清单）
+.boot_ok
+skills/.generated/
+skills/.quarantine/

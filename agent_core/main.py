@@ -53,6 +53,10 @@ def _apply_pending_update_at_boot():
 _apply_pending_update_at_boot()
 
 
+# 系统守护层（纯标准库，不依赖业务模块）：启动自愈 + 进化产物隔离
+import guardian
+
+
 from config import AgentConfig
 from agent import DesktopAgent
 from tools import (
@@ -105,11 +109,19 @@ async def lifespan(app):
     _init_default_users()
     # 保存主事件循环引用，供 sync 线程调度 async 任务
     app.state.main_loop = asyncio.get_running_loop()
-    # 启动时直接初始化 Agent，不再延迟到首次请求
+    # 启动时直接初始化 Agent，由系统守护层包住（启动自愈：
+    # 失败则按 LIFO 回退最近进化产物到隔离区并重试，最终失败服务仍存活）
     try:
-        init_agent()
+        guardian.self_heal_on_boot(
+            init_agent,
+            generated_dir=_app_base_dir() / "skills" / ".generated",
+            manifest_path=_app_base_dir() / "skills" / ".generated" / "manifest.json",
+            quarantine_dir=_app_base_dir() / "skills" / ".quarantine",
+            boot_ok_marker=_app_base_dir() / ".boot_ok",
+        )
     except Exception:
-        logger.exception("Agent 启动时初始化失败，将在首次请求时重试")
+        # 双保险：守护层自身若出意外，仍依赖请求期兜底（routes/agent.py 中的 init_agent 重试）
+        logger.exception("Agent 启动自愈异常，将依赖首次请求重试兜底")
 
     # 后台检查更新（不阻塞启动）
     try:

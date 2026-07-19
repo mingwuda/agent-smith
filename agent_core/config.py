@@ -112,6 +112,8 @@ class AgentConfig:
     recursion_limit: int = 60
     enable_loop_guard: bool = True  # 防循环检测（关闭后交由用户手动终止任务）
     enable_self_evolution: bool = False  # 自进化（反馈捕获+失败反思+负向注入），默认关
+    enable_self_healing: bool = False  # 守护进程运行时巡检自愈（控制面），默认关
+    self_healing_interval_seconds: int = 600  # 巡检周期，默认 10min
     api_max_retries: int = 3
     api_timeout_seconds: float = 120.0
     # LLM 空闲看门狗：模型调用开始后，超过这么多秒没有产出首个 token（或块间停顿过久）即判超时
@@ -216,6 +218,8 @@ class AgentConfig:
             "AGENT_RECURSION_LIMIT": ("recursion_limit", int),
             "AGENT_ENABLE_LOOP_GUARD": ("enable_loop_guard", _env_bool),
             "AGENT_SELF_EVOLUTION": ("enable_self_evolution", _env_bool),
+            "AGENT_SELF_HEALING": ("enable_self_healing", _env_bool),
+            "AGENT_SELF_HEALING_INTERVAL": ("self_healing_interval_seconds", int),
             "AGENT_API_MAX_RETRIES": ("api_max_retries", int),
             "AGENT_API_TIMEOUT_SECONDS": ("api_timeout_seconds", float),
             "AGENT_LLM_IDLE_TIMEOUT_SECONDS": ("llm_idle_timeout_seconds", float),
@@ -366,6 +370,8 @@ class AgentConfig:
             "recursion_limit": self.recursion_limit,
             "enable_loop_guard": self.enable_loop_guard,
             "enable_self_evolution": self.enable_self_evolution,
+            "enable_self_healing": self.enable_self_healing,
+            "self_healing_interval_seconds": self.self_healing_interval_seconds,
             "api_max_retries": self.api_max_retries,
             "api_timeout_seconds": self.api_timeout_seconds,
             "llm_idle_timeout_seconds": self.llm_idle_timeout_seconds,
@@ -415,6 +421,8 @@ class AgentConfig:
             "recursion_limit": self.recursion_limit,
             "enable_loop_guard": self.enable_loop_guard,
             "enable_self_evolution": self.enable_self_evolution,
+            "enable_self_healing": self.enable_self_healing,
+            "self_healing_interval_seconds": self.self_healing_interval_seconds,
             "api_max_retries": self.api_max_retries,
             "api_timeout_seconds": self.api_timeout_seconds,
             "llm_idle_timeout_seconds": self.llm_idle_timeout_seconds,
