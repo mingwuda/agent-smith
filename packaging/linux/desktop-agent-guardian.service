@@ -10,10 +10,13 @@ Type=simple
 # 运行时参数（含健康探针 URL、重启命令）从 /etc/default/desktop-agent-guardian 读取
 # （该文件可选，缺失不报错；默认值见下方 Environment= 与 daemon 代码）
 EnvironmentFile=-/etc/default/desktop-agent-guardian
+# WorkingDirectory 必须是仓库根：python -m agent_core.xxx 靠 cwd 加入 sys.path 才能找到 agent_core 包。
+# 用固定绝对路径（systemd 不支持 ${VAR} 展开）；relocate 时用下方 drop-in 覆盖，不要改本文件。
+WorkingDirectory=/opt/desktop-agent
 # Python 解释器用绝对路径：本机 systemd 不支持 ${VAR:-默认值} 展开，故写死默认路径。
 # 若装到其它位置，请用 systemd drop-in 覆盖（不要改本文件）：
 #   mkdir -p /etc/systemd/system/desktop-agent-guardian.service.d
-#   printf '[Service]\nExecStart=\nExecStart=/你的路径/.venv/bin/python -m agent_core.guardian_daemon\n' \
+#   printf '[Service]\nWorkingDirectory=/你的路径\nExecStart=\nExecStart=/你的路径/.venv/bin/python -m agent_core.guardian_daemon\n' \
 #     > /etc/systemd/system/desktop-agent-guardian.service.d/override.conf
 #   systemctl daemon-reload && systemctl restart desktop-agent-guardian
 ExecStart=/opt/desktop-agent/.venv/bin/python -m agent_core.guardian_daemon
