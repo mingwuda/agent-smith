@@ -145,6 +145,8 @@ def run_patrol(
             summary["acted"] = True
         else:
             logger.info("[守护] 主 app 不健康（观察模式，未开启自愈，仅记录）: %s", health)
+    else:
+        logger.info("[守护] 健康巡检通过: %s", health)
 
     # 2) 日志扫描（轻量启发式；完整分析/自愈器在 §4.6 后续阶段）
     errors = scan_log_for_errors(Path(paths["log_file"]), tail_lines=log_tail)
