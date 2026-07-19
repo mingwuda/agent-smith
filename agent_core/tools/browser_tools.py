@@ -16,6 +16,7 @@ import random
 import re
 import threading
 import time
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Optional
 
@@ -122,8 +123,8 @@ _playwright = None
 _pages: dict[str, "Page"] = {}
 _contexts: dict[str, "BrowserContext"] = {}
 
-# 工作区（用于保存截图）
-_workspace: Optional[Path] = None
+# 工作区（用于保存截图，ContextVar：每个 async 请求各自独立）
+_workspace_ctx: ContextVar[Optional[Path]] = ContextVar("browser_tools_workspace", default=None)
 
 # 进程退出时清理浏览器资源
 import atexit
@@ -131,17 +132,17 @@ atexit.register(_stop_browser_loop)
 
 
 def set_workspace(path: Path):
-    global _workspace
-    _workspace = path.expanduser().resolve()
+    _workspace_ctx.set(path.expanduser().resolve())
     # 工作区变更时清理过期截图
     _cleanup_expired_screenshots()
 
 
 def _cleanup_expired_screenshots():
     """清理超过保留天数的截图文件（与日志滚动策略一致，默认 7 天）。"""
-    if not _workspace:
+    _ws = _workspace_ctx.get()
+    if not _ws:
         return
-    screenshot_dir = _workspace / ".browser_screenshots"
+    screenshot_dir = _ws / ".browser_screenshots"
     if not screenshot_dir.is_dir():
         return
     cutoff = time.time() - SCREENSHOT_RETENTION_DAYS * 86400
@@ -282,9 +283,10 @@ def _cleanup_screenshots(thread_id: str):
     """清理指定会话的所有截图文件"""
     global _session_screenshot_tokens
     tokens = _session_screenshot_tokens.pop(thread_id, set())
-    if not tokens or not _workspace:
+    _ws = _workspace_ctx.get()
+    if not tokens or not _ws:
         return
-    screenshot_dir = _workspace / ".browser_screenshots"
+    screenshot_dir = _ws / ".browser_screenshots"
     removed = 0
     for token in tokens:
         fpath = screenshot_dir / f"{token}.png"
@@ -302,8 +304,9 @@ async def _save_screenshot(page) -> dict:
     """截取当前页面截图并保存到工作区（异步版本）"""
     timestamp = int(time.time())
     screenshot_path = None
-    if _workspace:
-        screenshot_dir = _workspace / ".browser_screenshots"
+    _ws = _workspace_ctx.get()
+    if _ws:
+        screenshot_dir = _ws / ".browser_screenshots"
         screenshot_dir.mkdir(parents=True, exist_ok=True)
         screenshot_path = screenshot_dir / f"screenshot_{timestamp}.png"
 
@@ -1279,8 +1282,9 @@ def browser_captcha_recognize(config: RunnableConfig, source: str = "page") -> s
 
             # 3. 保存截图到工作区，方便 Agent 查看识别的是什么图片
             img_token = ""
-            if _workspace:
-                screenshot_dir = _workspace / ".browser_screenshots"
+            _ws = _workspace_ctx.get()
+            if _ws:
+                screenshot_dir = _ws / ".browser_screenshots"
                 screenshot_dir.mkdir(parents=True, exist_ok=True)
                 ts = int(time.time())
                 cap_path = screenshot_dir / f"captcha_{ts}.png"
@@ -1678,8 +1682,9 @@ def browser_captcha_scan_grid(config: RunnableConfig, grid_rows: int = 9, grid_c
 
             # 保存截图
             timestamp = int(time.time())
-            if _workspace:
-                screenshot_dir = _workspace / ".browser_screenshots"
+            _ws = _workspace_ctx.get()
+            if _ws:
+                screenshot_dir = _ws / ".browser_screenshots"
                 screenshot_dir.mkdir(parents=True, exist_ok=True)
                 screenshot_path = screenshot_dir / f"screenshot_grid_{timestamp}.png"
                 screenshot_path.write_bytes(png_data)

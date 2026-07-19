@@ -81,11 +81,9 @@ async def list_project_sessions(project_id: str, request: Request):
 
 
 @router.put("/projects/{project_id}/sessions/{session_id}")
-async def assign_session_to_project(project_id: str, session_id: str):
+async def assign_session_to_project(project_id: str, session_id: str, request: Request):
     """将某个会话归属于指定项目"""
-    # 先验证项目存在
-    from services.auth import get_user_id_from_request  # 延迟避免循环导入
-    uid = "default"
+    uid = getattr(request.state, "user_id", "default")
     proj = session_store.get_project(uid, project_id)
     if not proj:
         raise HTTPException(status_code=404, detail="目标项目不存在")

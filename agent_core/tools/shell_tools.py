@@ -11,17 +11,17 @@ import sys
 import threading
 import time
 from collections import defaultdict
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Optional
 from langchain_core.tools import tool
 
-# ── 工作区路径（用于限制文件操作范围）──
-_workspace: Optional[Path] = None
+# ── 工作区路径（ContextVar：每个 async 请求各自独立）──
+_workspace_ctx: ContextVar[Optional[Path]] = ContextVar("shell_tools_workspace", default=None)
 
 
 def set_workspace(path: Path):
-    global _workspace
-    _workspace = path.expanduser().resolve()
+    _workspace_ctx.set(path.expanduser().resolve())
 
 
 # ── 安全配置 ──
@@ -257,8 +257,9 @@ def run_shell(command: str, timeout: int = _DEFAULT_TIMEOUT) -> str:
 
     # ── 记录执行前文件元数据快照（仅工作区，用于变更检测）──
     before_files: dict[str, tuple] = {}
-    if _workspace and _workspace.is_dir():
-        before_files = _snapshot_meta(_workspace)
+    _ws = _workspace_ctx.get()
+    if _ws and _ws.is_dir():
+        before_files = _snapshot_meta(_ws)
 
     # ── 执行 ──
     raw_bytes = b""
@@ -274,7 +275,7 @@ def run_shell(command: str, timeout: int = _DEFAULT_TIMEOUT) -> str:
             shell_cmd + [cmd],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            cwd=str(_workspace) if _workspace else None,
+            cwd=str(_ws) if _ws else None,
         )
 
         def _reader():
@@ -308,8 +309,8 @@ def run_shell(command: str, timeout: int = _DEFAULT_TIMEOUT) -> str:
 
     # ── 对比工作区文件变更（基于 mtime/size，不读取文件内容）──
     workspace_changes = ""
-    if _workspace and _workspace.is_dir() and raw_output.strip():
-        after_files = _snapshot_meta(_workspace)
+    if _ws and _ws.is_dir() and raw_output.strip():
+        after_files = _snapshot_meta(_ws)
         changed: list[str] = []
         for rel, meta in after_files.items():
             if rel not in before_files:

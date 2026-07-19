@@ -12,12 +12,13 @@ import mmap
 import os
 import re
 from collections import defaultdict
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Optional
 from langchain_core.tools import tool
 
-# 工作区由调用方注入
-_workspace: Optional[Path] = None
+# 工作区由调用方注入（ContextVar：每个 async 请求/任务各自独立，避免并发串目录）
+_workspace_ctx: ContextVar[Optional[Path]] = ContextVar("file_tools_workspace", default=None)
 MAX_FILE_RETURN_CHARS = 20000
 FILE_HEAD_CHARS = 8000
 FILE_TAIL_CHARS = 8000
@@ -80,14 +81,13 @@ def _get_lines_cached(path: Path) -> list[str]:
 
 
 def set_workspace(path: Path):
-    global _workspace
-    _workspace = path.expanduser().resolve()
-    _workspace.mkdir(parents=True, exist_ok=True)
+    _workspace_ctx.set(path.expanduser().resolve())
+    _workspace_ctx.get().mkdir(parents=True, exist_ok=True)
 
 
 def resolve_workspace() -> Path:
     """返回当前真实工作区路径（供其他模块引用）"""
-    return _workspace or Path.home() / "agent_workspace"
+    return _workspace_ctx.get() or Path.home() / "agent_workspace"
 
 
 def _generate_diff(file_path: Path, new_content: str, old_content_override: Optional[str] = None) -> str:
@@ -179,7 +179,8 @@ def _diff_payload(added: int, removed: int, diff: list[dict]) -> str:
 
 
 def _resolve(path: str, allow_outside: bool = False) -> Path:
-    workspace = (_workspace or Path.home() / "agent_workspace").expanduser().resolve()
+    _ws = _workspace_ctx.get()
+    workspace = (_ws or Path.home() / "agent_workspace").expanduser().resolve()
     raw = Path(path or ".").expanduser()
     target = raw if raw.is_absolute() else workspace / raw
     target = target.resolve(strict=False)
@@ -194,8 +195,8 @@ def _resolve(path: str, allow_outside: bool = False) -> Path:
         return target
     # 检查是否在允许写入的白名单路径中
     allowed_prefixes = []
-    if _workspace:
-        project_root = _workspace.parent
+    if _ws:
+        project_root = _ws.parent
         if (project_root / "skills").is_dir():
             allowed_prefixes.append(project_root / "skills")
         if (project_root / "agent_core" / "samples").is_dir():
@@ -222,7 +223,8 @@ def _path_error(exc: ValueError) -> str:
 
 
 def _display_path(path: Path) -> str:
-    workspace = (_workspace or Path.home() / "agent_workspace").expanduser().resolve()
+    _ws = _workspace_ctx.get()
+    workspace = (_ws or Path.home() / "agent_workspace").expanduser().resolve()
     try:
         return path.resolve(strict=False).relative_to(workspace).as_posix()
     except ValueError:
@@ -671,7 +673,7 @@ def search_files(pattern: str, path: str = "") -> str:
 @tool
 def get_workspace_path() -> str:
     """返回当前工作区目录的绝对路径"""
-    return str(_workspace or Path.home() / "agent_workspace")
+    return str(_workspace_ctx.get() or Path.home() / "agent_workspace")
 
 
 TOOLS = [

@@ -51,7 +51,8 @@ def get_screenshot(token: str = "", path: str = "", request: Request = None):
         path: 截图文件的绝对路径（兼容旧版）
     """
     uid = _get_current_user(request)
-    from tools.browser_tools import _workspace as browser_workspace
+    from tools.browser_tools import _workspace_ctx as browser_workspace_ctx
+    browser_workspace = browser_workspace_ctx.get()
     
     # 优先使用 token 查找（基于文件名的确定性方案）
     if token:

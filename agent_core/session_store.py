@@ -486,8 +486,51 @@ def create_project(user_id: str, name: str, directory_path: str = "") -> dict:
     }
 
 
+def _migrate_default_projects(uid: str) -> int:
+    """将 default 用户的项目一次性迁移到真实用户（修复 request.state.user_id 未赋值导致数据写入 default 的历史问题）。
+
+    仅当目标用户项目表为空且 default 有数据时执行；迁移完成后写标记文件防止重复。
+    返回迁移的项目数。
+    """
+    if uid == "default":
+        return 0
+    # 标记文件：每个用户一个，存在即表示已迁移过
+    mark_file = _db_path(uid).parent / ".migrated_from_default"
+    if mark_file.exists():
+        return 0
+    try:
+        with _connect(uid) as target:
+            existing = target.execute("SELECT COUNT(*) FROM projects").fetchone()[0]
+            if existing > 0:
+                mark_file.touch(exist_ok=True)  # 已有项目无需迁移，也记标记避免反复检查
+                return 0
+        with _connect("default") as source:
+            rows = source.execute(
+                "SELECT id, name, directory_path, created_at, updated_at FROM projects"
+            ).fetchall()
+            if not rows:
+                return 0
+        with _connect(uid) as target:
+            for r in rows:
+                target.execute(
+                    "INSERT OR IGNORE INTO projects (id, name, directory_path, created_at, updated_at) VALUES (?,?,?,?,?)",
+                    (r["id"], r["name"], r["directory_path"], r["created_at"], r["updated_at"]),
+                )
+        mark_file.touch(exist_ok=True)
+        import logging
+        logging.getLogger(__name__).info(
+            "[migration] 已从 default 迁移 %d 个项目到 user=%s", len(rows), uid
+        )
+        return len(rows)
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning("[migration] 项目迁移失败，忽略", exc_info=True)
+        return 0
+
+
 def list_projects(user_id: str = "default") -> list[dict]:
     """列出所有项目（含每个项目的会话数）"""
+    _migrate_default_projects(user_id)  # ponytail: 一次性自动迁移历史数据
     with _connect(user_id) as conn:
         rows = conn.execute(
             """

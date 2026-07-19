@@ -1,4 +1,5 @@
 """Git repository inspection tools."""
+from contextvars import ContextVar
 from pathlib import Path
 import os
 import shlex
@@ -8,7 +9,7 @@ from typing import Optional
 from langchain_core.tools import tool
 
 
-_workspace: Optional[Path] = None
+_workspace_ctx: ContextVar[Optional[Path]] = ContextVar("git_tools_workspace", default=None)
 
 _ALLOWED_SUBCOMMANDS = {
     "add",
@@ -33,12 +34,11 @@ _TIMEOUT_SECONDS = 20
 
 
 def set_workspace(path: Path):
-    global _workspace
-    _workspace = path.expanduser().resolve()
+    _workspace_ctx.set(path.expanduser().resolve())
 
 
 def _workspace_root() -> Path:
-    return (_workspace or Path.home() / "agent_workspace").expanduser().resolve()
+    return (_workspace_ctx.get() or Path.home() / "agent_workspace").expanduser().resolve()
 
 
 def _resolve_repo(path: str = "") -> Path:
