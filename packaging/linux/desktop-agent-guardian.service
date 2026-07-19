@@ -22,7 +22,7 @@ ExecStart=${DA_PYTHON:-/opt/desktop-agent/.venv/bin/python} -m agent_core.guardi
 #   主服务用 systemd（已配 desktop-agent.service）：systemctl restart desktop-agent
 #   主服务用 start.sh 起的：/opt/desktop-agent/start.sh restart
 #   留空则只记录不重启（最安全，但失去自动恢复能力）
-Environment=SELF_HEAL_RESTART_CMD=systemctl restart desktop-agent
+Environment="SELF_HEAL_RESTART_CMD=systemctl restart desktop-agent"
 # 健康探针 URL：默认 http://127.0.0.1:8899/health（见 guardian_daemon.py 默认值）。
 # 若主 app 监听其它端口（如本机 8080），在 /etc/default/desktop-agent-guardian 写一行覆盖即可：
 #   SELF_HEAL_HEALTH_URL=http://127.0.0.1:8080/health
