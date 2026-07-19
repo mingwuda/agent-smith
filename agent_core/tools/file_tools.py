@@ -32,13 +32,12 @@ _line_cache: dict[str, tuple[list[str], float]] = {}
 LINE_CACHE_TTL = 2.0  # 秒
 
 # ── 工作区外编辑权限（按用户隔离） ──
-_current_user: str = "default"
+_current_user_ctx: ContextVar[str] = ContextVar("file_tools_user", default="default")
 _outside_auths: dict[str, list[str]] = defaultdict(list)
 
 
 def set_current_user(uid: str) -> None:
-    global _current_user
-    _current_user = uid
+    _current_user_ctx.set(uid)
 
 
 def add_outside_auth(uid: str, path_prefix: str) -> None:
@@ -55,7 +54,7 @@ def add_outside_auth(uid: str, path_prefix: str) -> None:
 def is_path_permitted(target: Path) -> bool:
     """检查目标路径是否在授权白名单中。"""
     target_str = target.as_posix()
-    for prefix in _outside_auths.get(_current_user, []):
+    for prefix in _outside_auths.get(_current_user_ctx.get(), []):
         if target_str.startswith(prefix):
             return True
     return False

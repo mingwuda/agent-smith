@@ -146,13 +146,12 @@ _HIGH_RISK_PATTERNS: list[tuple[str, str]] = [
 
 # 已确认（用户点「确认执行」）的高危命令，按用户隔离，进程内有效。
 _approved_commands: dict[str, set[str]] = defaultdict(set)
-_current_user: str = "default"
+_current_user_ctx: ContextVar[str] = ContextVar("shell_tools_user", default="default")
 
 
 def set_current_user(uid: str) -> None:
     """设置当前执行上下文的用户（用于按用户隔离已确认命令）。"""
-    global _current_user
-    _current_user = uid
+    _current_user_ctx.set(uid)
 
 
 def add_approved_command(uid: str, command: str) -> None:
@@ -246,7 +245,7 @@ def run_shell(command: str, timeout: int = _DEFAULT_TIMEOUT) -> str:
     # 命中高危模式且未获当前用户确认时，绝不执行，仅返回确认标记；
     # 前端据此弹出「确认执行」按钮，用户确认后命令进入已确认集合，代理再次调用才放行。
     risky, risk_reason = _is_command_high_risk(cmd)
-    if risky and not _is_command_approved(_current_user, command):
+    if risky and not _is_command_approved(_current_user_ctx.get(), command):
         return f"__CONFIRM_NEEDED__::{risk_reason}::__CMD__::{command}"
 
     # ── 超时上限 ──
