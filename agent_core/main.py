@@ -146,11 +146,15 @@ app.add_middleware(
 
 # ---------- 认证 middleware ----------
 
-from api.deps import AUTH_COOKIE_NAME, _auth_exempt_path, _is_authenticated, _wants_html
+from api.deps import AUTH_COOKIE_NAME, _auth_exempt_path, _get_current_user, _is_authenticated, _wants_html
 
 @app.middleware("http")
 async def require_login(request: Request, call_next):
     if _auth_exempt_path(request.url.path) or _is_authenticated(request):
+        # ponytail: 把登录用户名挂到 request.state.user_id，供 files/projects 等
+        # 接口按 uid 隔离工作目录与项目库。此前从未赋值，导致这些接口全部落到
+        # "default" 共享目录，多用户互相看到对方文件/项目（串目录）。
+        request.state.user_id = _get_current_user(request)
         return await call_next(request)
     if _wants_html(request):
         return Response(status_code=302, headers={"Location": "/login"})
