@@ -91,7 +91,10 @@ async function loadSessionMessages(sessionId, source, options = {}) {
         const role = msg.role === 'user' ? 'user' : 'bot';
         const content = msg.content || '';
         const parsed = role === 'user' ? parseTextFilesFromContent(content) : null;
-        const msgIndex = idx;
+        // ponytail: 必须用后端返回的绝对 index（real_index），不能用 forEach 的 idx。
+        // 因为 lite 接口按 offset=-20 取的是“最后 20 条”，idx 是窗口内相对序号，
+        // 后端 delete_message 却按 ORDER BY id ASC 的绝对位置解释 —— 用 idx 会删错消息。
+        const msgIndex = msg.index != null ? msg.index : idx;
 
         if (msg.role === 'user' && msg.content) {
           // 只存纯文本，排除含图片/文本文件的消息（避免把 base64 或文件正文塞进历史）
