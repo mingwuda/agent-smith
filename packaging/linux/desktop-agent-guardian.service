@@ -7,17 +7,21 @@ Wants=desktop-agent.service
 
 [Service]
 Type=simple
-# 安装路径/参数从环境变量读取，未配置时使用下方默认值。
-# 覆盖方式：把变量写进 /etc/default/desktop-agent-guardian（本 unit 自动加载）
-#   echo 'DA_PYTHON=/srv/desktop-agent/.venv/bin/python'   > /etc/default/desktop-agent-guardian
-#   echo 'SELF_HEAL_HEALTH_URL=http://127.0.0.1:8080/health' >> /etc/default/desktop-agent-guardian
+# 运行时参数（含健康探针 URL、重启命令）从 /etc/default/desktop-agent-guardian 读取
+# （该文件可选，缺失不报错；默认值见下方 Environment= 与 daemon 代码）
 EnvironmentFile=-/etc/default/desktop-agent-guardian
-# 注意：WorkingDirectory 不支持 ${ENV} 展开，故省略；daemon 不依赖 cwd（路径靠 __file__ 推导）
-ExecStart=${DA_PYTHON:-/opt/desktop-agent/.venv/bin/python} -m agent_core.guardian_daemon
+# Python 解释器用绝对路径：本机 systemd 不支持 ${VAR:-默认值} 展开，故写死默认路径。
+# 若装到其它位置，请用 systemd drop-in 覆盖（不要改本文件）：
+#   mkdir -p /etc/systemd/system/desktop-agent-guardian.service.d
+#   printf '[Service]\nExecStart=\nExecStart=/你的路径/.venv/bin/python -m agent_core.guardian_daemon\n' \
+#     > /etc/systemd/system/desktop-agent-guardian.service.d/override.conf
+#   systemctl daemon-reload && systemctl restart desktop-agent-guardian
+ExecStart=/opt/desktop-agent/.venv/bin/python -m agent_core.guardian_daemon
 # 恢复时执行的重启命令（值含空格必须加引号）；主服务用 systemd 管理：systemctl restart desktop-agent
 Environment="SELF_HEAL_RESTART_CMD=systemctl restart desktop-agent"
 # 健康探针 URL 默认 http://127.0.0.1:8899/health（见 guardian_daemon.py 默认值）。
-# 若主 app 监听其它端口（如本机 8080），在 /etc/default/desktop-agent-guardian 写一行覆盖即可。
+# 若主 app 监听其它端口（如本机 8080），在 /etc/default/desktop-agent-guardian 写一行覆盖即可：
+#   SELF_HEAL_HEALTH_URL=http://127.0.0.1:8080/health
 Restart=always
 RestartSec=5
 # 守护进程自身崩了由 systemd 拉起，确保"控制面"常驻
