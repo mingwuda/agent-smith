@@ -2,31 +2,22 @@
 Description=Desktop Agent 守护进程（控制面：巡检与自愈编排）
 # 依赖主服务先起来；主服务挂了由它自己的 unit 拉起，本单元只管守护进程自身
 # 注意：desktop-agent.service 是主服务 unit（远端已存在，由它管理主服务）。
-#       若主服务改用 start.sh 管理，可删除这一行 After/Wants，
-#       并把下方 SELF_HEAL_RESTART_CMD 改成 start.sh 的重启命令。
 After=network.target desktop-agent.service
 Wants=desktop-agent.service
 
 [Service]
 Type=simple
-# 安装路径从环境变量读取，未配置时使用下方默认值（${VAR:-默认值}）。
-# 两种覆盖方式任选其一：
-#   方式 A（推荐）：把变量写进 /etc/default/desktop-agent-guardian，本 unit 自动加载
-#       echo 'DA_HOME=/srv/desktop-agent' > /etc/default/desktop-agent-guardian
-#       echo 'DA_PYTHON=/srv/desktop-agent/.venv/bin/python' >> /etc/default/desktop-agent-guardian
-#   方式 B：直接在下方用 Environment= 改默认值（效果同上）
+# 安装路径/参数从环境变量读取，未配置时使用下方默认值。
+# 覆盖方式：把变量写进 /etc/default/desktop-agent-guardian（本 unit 自动加载）
+#   echo 'DA_PYTHON=/srv/desktop-agent/.venv/bin/python'   > /etc/default/desktop-agent-guardian
+#   echo 'SELF_HEAL_HEALTH_URL=http://127.0.0.1:8080/health' >> /etc/default/desktop-agent-guardian
 EnvironmentFile=-/etc/default/desktop-agent-guardian
-WorkingDirectory=${DA_HOME:-/opt/desktop-agent}
+# 注意：WorkingDirectory 不支持 ${ENV} 展开，故省略；daemon 不依赖 cwd（路径靠 __file__ 推导）
 ExecStart=${DA_PYTHON:-/opt/desktop-agent/.venv/bin/python} -m agent_core.guardian_daemon
-# 恢复时执行的重启命令，二选一：
-#   主服务用 systemd（已配 desktop-agent.service）：systemctl restart desktop-agent
-#   主服务用 start.sh 起的：/opt/desktop-agent/start.sh restart
-#   留空则只记录不重启（最安全，但失去自动恢复能力）
+# 恢复时执行的重启命令（值含空格必须加引号）；主服务用 systemd 管理：systemctl restart desktop-agent
 Environment="SELF_HEAL_RESTART_CMD=systemctl restart desktop-agent"
-# 健康探针 URL：默认 http://127.0.0.1:8899/health（见 guardian_daemon.py 默认值）。
-# 若主 app 监听其它端口（如本机 8080），在 /etc/default/desktop-agent-guardian 写一行覆盖即可：
-#   SELF_HEAL_HEALTH_URL=http://127.0.0.1:8080/health
-# （该文件由上方 EnvironmentFile=- 加载，存在时优先于 daemon 内部默认值）
+# 健康探针 URL 默认 http://127.0.0.1:8899/health（见 guardian_daemon.py 默认值）。
+# 若主 app 监听其它端口（如本机 8080），在 /etc/default/desktop-agent-guardian 写一行覆盖即可。
 Restart=always
 RestartSec=5
 # 守护进程自身崩了由 systemd 拉起，确保"控制面"常驻
