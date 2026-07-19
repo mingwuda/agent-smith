@@ -209,6 +209,8 @@ async function openFileBrowser(projectId) {
   const p = projectsCache.find(x => x.id === projectId);
   currentProjectDir = (p && p.directory_path) ? p.directory_path : '';
   currentProjectId = projectId;
+  _isChangesView = false;
+  _resetChangesBtn();
 
   const listEl = document.getElementById('project-list');
   const fbEl = document.getElementById('file-browser-panel');
@@ -238,6 +240,7 @@ function exitFileBrowser() {
   const btn = document.getElementById('fb-changes-btn');
   if (btn) btn.classList.remove('active');
   _updateChangesBadge(0);
+  _resetChangesBtn();
 }
 
 function refreshFileBrowser() {
@@ -631,6 +634,7 @@ function openCommitDialog() {
 function closeCommitDialog() {
   const m = document.getElementById('commit-modal');
   if (m) m.remove();
+  _resetChangesBtn();
 }
 
 async function commitGenerate() {

@@ -3,6 +3,7 @@ import asyncio
 import hashlib
 import json
 import re
+import time
 import uuid
 from pathlib import Path
 from typing import Any, Optional
@@ -22,12 +23,14 @@ from services.agent_service import (
     _resolve_user,
     _apply_session_workspace,
     _async_reflect,
+    _reflect_from_feedback,
     _strip_screenshot_urls,
 )
 from logger import set_log_context, get_logger
 from config import AgentConfig
 from agent import DesktopAgent
 import session_store
+from memory.local_memory import get_memory
 
 logger = get_logger(__name__)
 
@@ -370,9 +373,31 @@ async def run_agent_stream(req: RunRequest, request: Request):
             yield f"data: {json.dumps({'type': 'done', 'content': err_msg}, ensure_ascii=False)}\n\n"
         yield "data: [DONE]\n\n"
         # 后台反思
-        asyncio.create_task(_async_reflect(uid, req.message, collected_steps, final_content or ""))
+        asyncio.create_task(_async_reflect(uid, req.message, collected_steps, final_content or "", outcome="error" if error_content else "success"))
     
     return StreamingResponse(
         event_stream(), media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
     )
+
+
+class FeedbackRequest(BaseModel):
+    rating: int = 0  # -1 | 0 | 1
+    correction: Optional[str] = None
+
+
+@router.post("/sessions/{session_id}/feedback")
+async def submit_session_feedback(session_id: str, req: FeedbackRequest, request: Request):
+    """收集用户对某轮结果的反馈（👍/👎 + 纠错），存入长期记忆并触发反思。"""
+    uid = _resolve_user(request)
+    session = session_store.get_session(uid, session_id)
+    if session is None:
+        raise HTTPException(404, "会话不存在或无权访问")
+    rating = max(-1, min(1, int(req.rating)))
+    correction = (req.correction or "").strip()
+    mem = get_memory(uid)
+    mem.set(f"_feedback_{session_id}_{int(time.time())}", {"rating": rating, "correction": correction})
+    # 仅在自进化开关开启时，根据纠错触发偏好/踩坑反思（_reflect_from_feedback 内部再判一次开关）
+    if correction:
+        asyncio.create_task(_reflect_from_feedback(uid, session_id, rating, correction))
+    return {"ok": True}

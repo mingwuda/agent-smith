@@ -213,18 +213,66 @@ def _reload_mcp_in_thread(workspace: str):
         traceback.print_exc()
 
 
-async def _async_reflect(uid: str, user_message: str, steps: list[dict], result: str):
-    """后台任务反思，总结可复用模式并存入长期记忆。"""
+async def _async_reflect(uid: str, user_message: str, steps: list[dict], result: str, outcome: str = "success"):
+    """后台任务反思，总结可复用模式/踩坑并存入长期记忆。
+
+    outcome="success"：成功路径（既有行为，始终启用，存储为 technique）。
+    outcome="error"：失败路径（新能力，仅在 enable_self_evolution 开启时记录 pitfall）。
+    reflection 现在为结构化 dict {t, v}（向后兼容旧纯字符串读取）。
+    """
     try:
         from main import agent
         if not agent:
             return
-        reflection = await agent.reflect_on_task(user_message, steps, result)
-        if reflection:
-            key = f"_learned_{hashlib.md5(reflection.encode()).hexdigest()[:12]}"
-            mem = get_memory(uid)
-            existing = mem.get(key)
-            if existing is None:  # 不覆盖已有记录
-                mem.set(key, reflection)
+        reflection = await agent.reflect_on_task(user_message, steps, result, outcome=outcome)
+        if not reflection:
+            return
+        # 新类型（踩坑/偏好）仅在自进化开关开启时落盘，避免回归既有行为
+        if reflection.get("t") in ("pitfall", "preference") and not agent.config.enable_self_evolution:
+            return
+        t = reflection.get("t", "technique")
+        prefix = "_avoid_" if t == "pitfall" else "_learned_"
+        key = f"{prefix}{hashlib.md5((reflection.get('v', '') + t).encode()).hexdigest()[:12]}"
+        mem = get_memory(uid)
+        if mem.get(key) is None:  # 不覆盖已有记录
+            mem.set(key, reflection)
+    except Exception:
+        pass
+
+
+async def _reflect_from_feedback(uid: str, session_id: str, rating: int, correction: str):
+    """根据用户反馈触发一次反思，产出 preference / pitfall 记忆。
+
+    仅在 enable_self_evolution 开启时生效（自进化新能力）。
+    """
+    try:
+        from main import agent
+        if not agent or not agent.config.enable_self_evolution:
+            return
+        session = session_store.get_session(uid, session_id)
+        messages = (session or {}).get("messages", [])
+        user_msg = ""
+        assistant_content = ""
+        for m in reversed(messages):
+            role = m.get("role")
+            content = m.get("content", "")
+            if role == "user" and not user_msg:
+                user_msg = content
+            elif role == "assistant" and not assistant_content:
+                assistant_content = content
+            if user_msg and assistant_content:
+                break
+        reflection = await agent.reflect_on_task(
+            user_msg, steps=[], result=assistant_content or "",
+            outcome="feedback", feedback=correction or "",
+        )
+        if not reflection:
+            return
+        t = reflection.get("t", "preference")
+        prefix = "_avoid_" if t == "pitfall" else "_learned_"
+        key = f"{prefix}{hashlib.md5((reflection.get('v', '') + t).encode()).hexdigest()[:12]}"
+        mem = get_memory(uid)
+        if mem.get(key) is None:
+            mem.set(key, reflection)
     except Exception:
         pass

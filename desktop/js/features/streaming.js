@@ -144,6 +144,13 @@ async function send() {
   isLoading = true;
   userStoppedCurrentRun = false;
   currentAbortController = new AbortController();
+  // 前端总超时：兜底保护，避免后端/网络异常导致 fetch 永久挂起（后端已有 90s 空闲看门狗 + 重试，这里给更长的上限）
+  let fetchTimedOut = false;
+  const fetchTimeoutMs = 600000;
+  const fetchTimeout = setTimeout(() => {
+    fetchTimedOut = true;
+    if (currentAbortController) currentAbortController.abort();
+  }, fetchTimeoutMs);
   setSendButtonRunning(true);
   streamingActive = true;
   showTyping();
@@ -303,7 +310,13 @@ async function send() {
     
   } catch (e) {
     console.error('[SSE] stream error:', e.name, e.message, 'streamingActive:', streamingActive, 'gotTerminalEvent:', gotTerminalEvent);
-    if (e.name === 'AbortError' || userStoppedCurrentRun) {
+    if (fetchTimedOut && streamingActive && !gotTerminalEvent) {
+      // 前端总超时触发的中止：明确告知用户，并保留已收到的内容
+      document.querySelectorAll('.tool-status-dot.running').forEach(d => {
+        d.className = 'tool-status-dot error';
+      });
+      addMessage(t('responseTimeout'), 'system');
+    } else if (e.name === 'AbortError' || userStoppedCurrentRun) {
       if (currentBotMsgEl && currentFinalContent) {
         currentBotMsgEl.classList.remove('streaming-final');
       }
@@ -321,6 +334,7 @@ async function send() {
     }
   } finally {
     stopStreamIdleWatch();
+    clearTimeout(fetchTimeout);
     closePythonProgress();
     hideTyping();
     // 清理耗时定时器
@@ -1096,6 +1110,13 @@ function handleStreamEvent(data) {
       if (!data.has_tool_calls) {
         hideProgressLine();
       }
+      break;
+
+    case 'llm_retry':
+      // 模型响应超时，已自动重试（仅重发 LLM 调用，不重跑工具）——界面上明确提示
+      markStreamActivity();
+      showProgressLine(t('modelRetrying', { attempt: data.attempt, max: (data.max || 1) }));
+      addMessage(t('modelRetryingNote', { attempt: data.attempt, max: (data.max || 1) }), 'system');
       break;
 
     case 'model_switch':

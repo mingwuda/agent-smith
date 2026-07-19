@@ -30,6 +30,9 @@ class UsageTracker:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
+        # WAL + 忙等待：避免流式循环里的同步写入因锁竞争阻塞事件循环或抛 "database is locked"
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=5000")
         try:
             self._init_db(conn)
             yield conn
@@ -45,6 +48,8 @@ class UsageTracker:
         if conn is None:
             conn = sqlite3.connect(self.db_path)
             conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=5000")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS usage_records (

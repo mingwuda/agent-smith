@@ -28,6 +28,7 @@ class SettingsRequest(BaseModel):
     base_url: str = ""
     recursion_limit: int = 60
     enable_loop_guard: bool = True
+    enable_self_evolution: bool = False
     api_max_retries: int = 3
     api_timeout_seconds: float = 120.0
     api_host_ips: str = ""
@@ -121,6 +122,7 @@ def save_settings(req: SettingsRequest, request: Request):
     )
     cfg.recursion_limit = max(1, int(req.recursion_limit or 60))
     cfg.enable_loop_guard = bool(req.enable_loop_guard)
+    cfg.enable_self_evolution = bool(req.enable_self_evolution)
     cfg.api_max_retries = max(0, int(req.api_max_retries or 0))
     cfg.api_timeout_seconds = max(60.0, float(req.api_timeout_seconds or 120.0))
     cfg.api_host_ips = req.api_host_ips or cfg.api_host_ips
@@ -148,6 +150,7 @@ def save_settings(req: SettingsRequest, request: Request):
     os.environ["LLM_PROVIDER"] = cfg.active_provider
     os.environ["AGENT_RECURSION_LIMIT"] = str(cfg.recursion_limit)
     os.environ["AGENT_ENABLE_LOOP_GUARD"] = "1" if cfg.enable_loop_guard else "0"
+    os.environ["AGENT_SELF_EVOLUTION"] = "1" if cfg.enable_self_evolution else "0"
     os.environ["AGENT_API_MAX_RETRIES"] = str(cfg.api_max_retries)
     os.environ["AGENT_API_TIMEOUT_SECONDS"] = str(cfg.api_timeout_seconds)
     if cfg.api_host_ips:

@@ -1,17 +1,19 @@
 """桌面 AI 智能体核心"""
 import asyncio
+import contextvars
 import json
 import os
 import socket
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import AsyncGenerator, Optional
+from typing import Any, AsyncGenerator, Optional
 from urllib.parse import urlparse
 
 from langchain_anthropic import ChatAnthropic
 from langchain_openai import ChatOpenAI
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, SystemMessage
+from langchain_core.runnables import Runnable
 from langgraph.prebuilt import create_react_agent
 from langgraph.checkpoint.memory import MemorySaver
 
@@ -564,6 +566,107 @@ def _truncate_args(args: object, max_len: int = 80) -> str:
     return text[:max_len] + "…" if len(text) > max_len else text
 
 
+# 每个并发请求独立的「LLM 空闲超时重试」通知队列（用 ContextVar 隔离，避免多会话互相污染）
+_retry_notifications_ctx: contextvars.ContextVar[list] = contextvars.ContextVar("retry_notifications", default=list)
+
+
+def _on_llm_idle_retry(attempt: int, reason: str):
+    """把 LLM 空闲超时重试事件记录到当前请求的队列，供 stream_run 转成 SSE 告知前端。"""
+    try:
+        _retry_notifications_ctx.get().append({"attempt": attempt, "reason": reason})
+    except Exception:
+        pass
+
+
+async def _astream_with_idle_timeout(agen, idle_timeout: float):
+    """包装异步生成器：若首块或任意相邻两块之间的间隔超过 idle_timeout，抛出 asyncio.TimeoutError。"""
+    try:
+        first = await asyncio.wait_for(agen.__anext__(), timeout=idle_timeout)
+    except StopAsyncIteration:
+        return
+    yield first
+    while True:
+        try:
+            chunk = await asyncio.wait_for(agen.__anext__(), timeout=idle_timeout)
+        except StopAsyncIteration:
+            return
+        yield chunk
+
+
+class RetryableLLM(Runnable):
+    """包裹 chat model：当一次 LLM 调用在 idle_timeout 内未产出首个 token（或块间停顿过久）时，
+    快速失败并**就地**重试该次模型调用——不重启整个 LangGraph 节点，已执行的工具结果会被保留。
+
+    - 重试次数由 max_idle_retries 控制（默认 1）。
+    - 每次重试通过 on_retry 回调上报，供上层转成 SSE 事件告知前端。
+    - 非超时的其它异常直接上抛（连接级错误交给 LangChain 自带的 max_retries 处理）。
+    """
+
+    def __init__(self, llm, idle_timeout: float = 90.0, max_idle_retries: int = 1, on_retry=None):
+        self.llm = llm
+        self.idle_timeout = idle_timeout
+        self.max_idle_retries = max_idle_retries
+        self.on_retry = on_retry
+
+    def bind_tools(self, tools, **kwargs):
+        return RetryableLLM(
+            llm=self.llm.bind_tools(tools, **kwargs),
+            idle_timeout=self.idle_timeout,
+            max_idle_retries=self.max_idle_retries,
+            on_retry=self.on_retry,
+        )
+
+    async def astream(self, input, config=None, **kwargs):
+        for attempt in range(self.max_idle_retries + 1):
+            agen = None
+            try:
+                agen = self.llm.astream(input, config=config, **kwargs)
+                async for chunk in _astream_with_idle_timeout(agen, self.idle_timeout):
+                    yield chunk
+                return
+            except asyncio.TimeoutError:
+                # 空闲超时：上报 + 清理挂起的连接 + 退避后重试（若还有次数）
+                if self.on_retry and attempt < self.max_idle_retries:
+                    try:
+                        self.on_retry(attempt + 1, "idle_timeout")
+                    except Exception:
+                        pass
+                if agen is not None:
+                    try:
+                        await agen.aclose()
+                    except Exception:
+                        pass
+                if attempt < self.max_idle_retries:
+                    await asyncio.sleep(min(2 ** attempt, 5))
+                    continue
+                raise
+            except Exception:
+                # 非超时异常：清理后上抛（连接错误由 LangChain 自带的 max_retries 兜底）
+                if agen is not None:
+                    try:
+                        await agen.aclose()
+                    except Exception:
+                        pass
+                raise
+
+    async def ainvoke(self, input, config=None, **kwargs):
+        # 统一走 astream，使「空闲超时 + 重试」逻辑只写在一处
+        chunks = []
+        async for chunk in self.astream(input, config=config, **kwargs):
+            chunks.append(chunk)
+        if not chunks:
+            raise ValueError("LLM 未返回任何内容")
+        merged = chunks[0]
+        for c in chunks[1:]:
+            merged = merged + c
+        return merged
+
+    def invoke(self, input, config=None, **kwargs):
+        # 同步路径：直接透传到底层模型（流式/异步路径才走空闲超时 + 重试）。
+        # LangGraph 的流式节点只调用 ainvoke，故此处无需重试逻辑。
+        return self.llm.invoke(input, config=config, **kwargs)
+
+
 class DesktopAgent:
     """桌面 AI 智能体"""
     
@@ -682,8 +785,17 @@ class DesktopAgent:
         )
 
     def _create_graph(self, model_override: str = ""):
+        llm = self._build_llm(model_override)
+        # 包裹「首 token 空闲看门狗 + 仅重发 LLM 调用」的健壮层：
+        # 模型卡住时快速失败并重试，不动已执行的工具，也不重跑整轮。
+        llm = RetryableLLM(
+            llm,
+            idle_timeout=self.config.llm_idle_timeout_seconds,
+            max_idle_retries=self.config.llm_idle_max_retries,
+            on_retry=_on_llm_idle_retry,
+        )
         return create_react_agent(
-            self._build_llm(model_override),
+            llm,
             self.tools,
             prompt=self._build_system_prompt(),
             checkpointer=self.memory,
@@ -724,7 +836,7 @@ class DesktopAgent:
         try:
             patterns = self._load_learned_patterns()
             if patterns:
-                prompt += "\n\n## 从过往任务中学到的经验\n" + patterns
+                prompt += "\n\n" + patterns
         except Exception:
             pass
 
@@ -732,7 +844,13 @@ class DesktopAgent:
 
     def _load_learned_patterns(self) -> str:
         """从长期记忆中读取经验模式，用于注入系统提示。
-        自动遗忘超过 3 天的旧经验，避免记忆膨胀。"""
+        自动遗忘超过 10 天的旧经验，避免记忆膨胀。
+
+        支持两种存储格式（向后兼容）：
+        - 旧：_learned_<hash> = "关键词|一句话"（纯字符串）
+        - 新：_learned_<hash> = {"t": "technique"|"preference", "v": "..."}
+              _avoid_<hash>  = {"t": "pitfall", "v": "不要 X"}
+        """
         if not self._user_id:
             return ""
         from memory.local_memory import get_memory, user_manager
@@ -744,12 +862,22 @@ class DesktopAgent:
         now = time.time()
         ttl_seconds = 10 * 24 * 3600  # 10 天
         learned = []
+        avoid = []
         deleted_count = 0
+
+        def extract_value(val) -> str:
+            if isinstance(val, dict):
+                return str(val.get("v", "")).strip()
+            if isinstance(val, str):
+                return val.strip()
+            return ""
 
         for entry in items:
             key = entry.get("key", "")
             val = entry.get("value", "")
-            if not (key.startswith("_learned_") and isinstance(val, str) and val.strip()):
+            if not (key.startswith("_learned_") or key.startswith("_avoid_")):
+                continue
+            if not isinstance(val, (str, dict)):
                 continue
 
             # 检查文件修改时间
@@ -770,12 +898,23 @@ class DesktopAgent:
                 deleted_count += 1
                 continue
 
-            learned.append(f"- {val.strip()}")
+            text = extract_value(val)
+            if not text:
+                continue
+            if key.startswith("_avoid_"):
+                avoid.append(f"- 不要 {text}")
+            else:
+                learned.append(f"- {text}")
 
         if deleted_count:
             logger.info("[记忆] 自动清理了 %d 条过期学习经验", deleted_count)
 
-        return "\n".join(learned) if learned else ""
+        sections = []
+        if learned:
+            sections.append("## 从过往任务中学到的经验\n" + "\n".join(learned))
+        if avoid:
+            sections.append("## 历史踩坑与用户纠正（务必避免）\n" + "\n".join(avoid))
+        return "\n\n".join(sections)
 
     async def chat_sync(self, message: str, attachments: Optional[list[dict]] = None, thread_id: str = "") -> str:
         """同步聊天：运行 agent 并收集完整的流式回复文本。
@@ -807,11 +946,19 @@ class DesktopAgent:
         user_message: str,
         steps: list[dict],
         final_result: str,
-    ) -> Optional[str]:
-        """任务完成后反思，总结可复用的模式经验。无工具调用或无有价值模式时返回 None。"""
-        # 只对涉及工具调用的任务反思
+        outcome: str = "success",
+        feedback: Optional[str] = None,
+    ) -> Optional[dict]:
+        """任务完成后反思，总结可复用模式 / 用户偏好 / 踩坑。返回 {t, v} 或 None。
+
+        t ∈ {technique, preference, pitfall}：
+        - technique：可复用的工作流/模式（成功且值得记）
+        - preference：用户明确表达的个人偏好
+        - pitfall：踩过的坑 / 不要再做的事
+        """
+        # 成功路径保持原有行为：只对涉及工具调用的任务反思
         tool_steps = [s for s in steps if s.get("type") == "tool_start"]
-        if not tool_steps:
+        if not tool_steps and outcome == "success":
             return None
 
         tool_summary = "\n".join(
@@ -819,28 +966,76 @@ class DesktopAgent:
             for s in tool_steps
         )
 
-        prompt = (
-            "你是一个 AI 助手，刚刚完成了一个多步骤任务。请回顾执行过程，总结可复用的经验。\n\n"
-            f"## 用户需求\n{user_message[:300]}\n\n"
-            f"## 工具调用过程\n{tool_summary}\n\n"
-            f"## 最终结果\n{final_result[:500]}\n\n"
-            "请用 20 字以内总结这个任务中是否有可复用的模式、工作流或经验教训。\n"
-            "- 如果有用且可复用的模式，回复格式：关键词|一句话总结\n"
-            "  例如：zip分析|用户上传zip后先解压再逐文件分析\n"
-            "- 如果只是普通的问答或一次性工具调用，回复：无需记录"
-        )
+        # 失败 / 用户反馈：走根因 / 纠正分支
+        if outcome == "error" or feedback:
+            if outcome == "error":
+                instruction = (
+                    "这个任务执行失败了。请分析根因，总结一条「不要再这样做」的踩坑经验。\n"
+                    "回复格式：一句话（20 字以内），说明「不要 X」或「应改 Y」。\n"
+                    "若无法总结出有用教训，回复：无需记录"
+                )
+            else:
+                instruction = (
+                    "用户对刚才的结果给出了反馈/纠正。请归纳其中反映的用户偏好或可复用纠正。\n"
+                    "若属于个人偏好，回复格式：偏好|一句话\n"
+                    "若属于「不要再这样做」的纠正，回复格式：不要|一句话\n"
+                    "若只是随意评价无明确偏好，回复：无需记录"
+                )
+            context = (
+                f"## 用户需求\n{user_message[:300]}\n\n"
+                f"## 工具调用过程\n{tool_summary or '（无工具调用）'}\n\n"
+                f"## 最终结果\n{final_result[:500]}\n\n"
+                f"## 用户反馈\n{(feedback or '')[:500]}\n\n"
+                f"{instruction}"
+            )
+        else:
+            context = (
+                "你是一个 AI 助手，刚刚完成了一个多步骤任务。请回顾执行过程，总结可复用的经验。\n\n"
+                f"## 用户需求\n{user_message[:300]}\n\n"
+                f"## 工具调用过程\n{tool_summary}\n\n"
+                f"## 最终结果\n{final_result[:500]}\n\n"
+                "请用 20 字以内总结这个任务中是否有可复用的模式、工作流或经验教训。\n"
+                "- 如果有用且可复用的模式，回复格式：关键词|一句话总结\n"
+                "  例如：zip分析|用户上传zip后先解压再逐文件分析\n"
+                "- 如果只是普通的问答或一次性工具调用，回复：无需记录"
+            )
 
-        llm = self._build_llm()
-        # 用较短超时，避免阻塞后续请求
-        llm.request_timeout = 15
+        # 优先用审核模型（与主模型解耦、控成本）；未配置则回退主模型
+        llm = self._build_review_llm() or self._build_llm()
+        llm.request_timeout = 15  # 短超时，绝不阻塞主流程
         try:
-            resp = await llm.ainvoke([HumanMessage(content=prompt)])
+            resp = await llm.ainvoke([HumanMessage(content=context)])
             text = str(resp.content).strip()
             if not text or "无需记录" in text:
                 return None
-            return text
+            return self._classify_reflection(text, outcome=outcome, feedback=feedback)
         except Exception:
             return None
+
+    def _classify_reflection(self, text: str, outcome: str, feedback: Optional[str]) -> dict:
+        """把反思文本归类成结构化 {t, v}（纯函数，便于单测）。"""
+        # ponytail: 反馈分支用显式前缀（偏好| / 不要|）区分类型；其余按 outcome 兜底。
+        if feedback:
+            if text.startswith("不要"):
+                v = text.split("|", 1)[-1].strip() or text
+                return {"t": "pitfall", "v": v}
+            if text.startswith("偏好"):
+                v = text.split("|", 1)[-1].strip() or text
+                return {"t": "preference", "v": v}
+            return {"t": "preference", "v": text}
+        if outcome == "error":
+            return {"t": "pitfall", "v": text}
+        return {"t": "technique", "v": text}
+
+    # ── 自进化惰性基建（P3/P4 填实，当前不激活）──
+    def maybe_generate_skill(self, pattern: dict) -> Optional[str]:
+        # ponytail: P3 占位——高价值 technique 起草 SKILL.md 并 reload_skills()。
+        # 当前不激活：需 enable_self_evolution + 审批闸 + 沙箱验证才允许写技能。
+        return None
+
+    def _approval_gate(self, candidate: Any) -> bool:
+        # ponytail: P3/P4 占位——人工审批/沙箱校验，当前恒 False（不激活）。
+        return False
 
     def _record_model_usage(self, input_tokens: int, output_tokens: int, cached_tokens: int = 0, source: str = "llm", thread_id: str = "", real_output_hint: int = 0):
         if input_tokens <= 0 and output_tokens <= 0:
@@ -992,6 +1187,8 @@ class DesktopAgent:
         config = self._run_config(tid)
         # 取可用 graph：model_override 时重建，缺失时惰性重建（见 _get_graph）
         graph = self._get_graph(model_override)
+        # 为本请求建立独立的 LLM 重试通知队列（非流式调用也会走 RetryableLLM）
+        _retry_notif_token = _retry_notifications_ctx.set([])
         input_messages = []
         thread_key = self._thread_key(tid)
         await self._repair_checkpoint_tool_history(config, graph)
@@ -1069,6 +1266,11 @@ class DesktopAgent:
                 release_browser_page(thread_key)
             except Exception:
                 pass
+            # 复位本请求的 LLM 重试通知队列（避免 ContextVar 泄漏到其它请求）
+            try:
+                _retry_notifications_ctx.reset(_retry_notif_token)
+            except Exception:
+                pass
 
     async def _stream_events_with_heartbeat(
         self,
@@ -1141,6 +1343,9 @@ class DesktopAgent:
         run_config = self._run_config(tid)
         # 取可用 graph：model_override 时重建，缺失时惰性重建（见 _get_graph）
         graph = self._get_graph(model_override)
+        # 为本请求建立独立的 LLM 重试通知队列（并发安全：每个会话各自隔离）
+        _retry_notif_list: list = []
+        _retry_notif_token = _retry_notifications_ctx.set(_retry_notif_list)
         input_messages = []
         thread_key = self._thread_key(tid)
         await self._repair_checkpoint_tool_history(run_config, graph)
@@ -1199,6 +1404,16 @@ class DesktopAgent:
             )
             await self._compact_checkpoint_if_needed(run_config)
             async for event in self._stream_events_with_heartbeat(graph, input_data, run_config):
+                # 把 RetryableLLM 上报的「空闲超时重试」事件转成 SSE，提示前端正在重试
+                if _retry_notif_list:
+                    for _note in _retry_notif_list:
+                        yield _sse({
+                            "type": "llm_retry",
+                            "attempt": _note["attempt"],
+                            "reason": _note["reason"],
+                            "max": self.config.llm_idle_max_retries,
+                        })
+                    _retry_notif_list.clear()
                 if event.get("_heartbeat"):
                     now = time.time()
                     # 发送所有正在运行的工具进度
@@ -1664,6 +1879,11 @@ class DesktopAgent:
                 subagent_capsules = []
         
         finally:
+            # 复位本请求的 LLM 重试通知队列（避免 ContextVar 泄漏到其它请求）
+            try:
+                _retry_notifications_ctx.reset(_retry_notif_token)
+            except Exception:
+                pass
             logger.info(
                 "[stream_run] 结束: tid=%s, thread_key=%s, tool_steps=%d, cancelled=%s, loop_guard=%s, final_len=%d, usage_recorded=%s",
                 tid, thread_key, step_count, cancelled, loop_guard_triggered,

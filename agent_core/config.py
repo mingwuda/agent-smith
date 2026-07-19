@@ -111,8 +111,13 @@ class AgentConfig:
     max_cost_per_day: float = 5.0
     recursion_limit: int = 60
     enable_loop_guard: bool = True  # 防循环检测（关闭后交由用户手动终止任务）
+    enable_self_evolution: bool = False  # 自进化（反馈捕获+失败反思+负向注入），默认关
     api_max_retries: int = 3
     api_timeout_seconds: float = 120.0
+    # LLM 空闲看门狗：模型调用开始后，超过这么多秒没有产出首个 token（或块间停顿过久）即判超时
+    llm_idle_timeout_seconds: float = 90.0
+    # 空闲超时后的重试次数（仅就地重发 LLM 调用，不重启图/重跑工具；0 表示不重试）
+    llm_idle_max_retries: int = 1
     api_host_ips: str = ""
     context_window_tokens: int = 0
     tavily_search_enabled: bool = False
@@ -210,8 +215,11 @@ class AgentConfig:
             "MAX_COST_PER_DAY": ("max_cost_per_day", float),
             "AGENT_RECURSION_LIMIT": ("recursion_limit", int),
             "AGENT_ENABLE_LOOP_GUARD": ("enable_loop_guard", _env_bool),
+            "AGENT_SELF_EVOLUTION": ("enable_self_evolution", _env_bool),
             "AGENT_API_MAX_RETRIES": ("api_max_retries", int),
             "AGENT_API_TIMEOUT_SECONDS": ("api_timeout_seconds", float),
+            "AGENT_LLM_IDLE_TIMEOUT_SECONDS": ("llm_idle_timeout_seconds", float),
+            "AGENT_LLM_IDLE_MAX_RETRIES": ("llm_idle_max_retries", int),
             "AGENT_API_HOST_IPS": ("api_host_ips", str),
             "AGENT_CONTEXT_WINDOW_TOKENS": ("context_window_tokens", int),
             "TAVILY_SEARCH_ENABLED": ("tavily_search_enabled", _env_bool),
@@ -357,8 +365,11 @@ class AgentConfig:
             "max_cost_per_day": self.max_cost_per_day,
             "recursion_limit": self.recursion_limit,
             "enable_loop_guard": self.enable_loop_guard,
+            "enable_self_evolution": self.enable_self_evolution,
             "api_max_retries": self.api_max_retries,
             "api_timeout_seconds": self.api_timeout_seconds,
+            "llm_idle_timeout_seconds": self.llm_idle_timeout_seconds,
+            "llm_idle_max_retries": self.llm_idle_max_retries,
             "api_host_ips": self.api_host_ips,
             "context_window_tokens": self.context_window_tokens,
             "tavily_search_enabled": self.tavily_search_enabled,
@@ -403,8 +414,11 @@ class AgentConfig:
             "max_cost_per_day": self.max_cost_per_day,
             "recursion_limit": self.recursion_limit,
             "enable_loop_guard": self.enable_loop_guard,
+            "enable_self_evolution": self.enable_self_evolution,
             "api_max_retries": self.api_max_retries,
             "api_timeout_seconds": self.api_timeout_seconds,
+            "llm_idle_timeout_seconds": self.llm_idle_timeout_seconds,
+            "llm_idle_max_retries": self.llm_idle_max_retries,
             "api_host_ips": self.api_host_ips,
             "context_window_tokens": self.context_window_tokens,
             "tavily_search_enabled": bool(self.tavily_search_enabled),
