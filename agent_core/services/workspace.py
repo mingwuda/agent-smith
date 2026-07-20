@@ -20,6 +20,9 @@ from session_store import add_message, get_session, create_session, rename_sessi
 
 
 def _workspace_for_user(uid: str) -> Path:
+    # 微信 Bot 用户默认使用全局工作区，不按 uid 分子目录
+    if uid.startswith("wechat_"):
+        return user_manager.WORKSPACE_BASE
     return Path(user_manager.user_workspace(uid)).expanduser().resolve()
 
 

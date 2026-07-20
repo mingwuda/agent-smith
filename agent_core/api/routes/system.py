@@ -1,5 +1,6 @@
 """系统路由（设置、用户管理、UI）"""
 import os
+import sys
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
@@ -17,6 +18,11 @@ from logger import get_logger
 logger = get_logger(__name__)
 
 router = APIRouter(tags=["system"])
+
+
+class RestartResponse(BaseModel):
+    status: str
+    message: str
 
 
 class SettingsRequest(BaseModel):
@@ -251,3 +257,32 @@ def get_my_user(request: Request):
         # 首次登录时自动创建用户
         user = user_manager.create_user(uid, uid)
     return user
+
+
+@router.post("/system/restart", response_model=RestartResponse)
+def restart_backend(request: Request):
+    """重启后端服务（仅管理员）"""
+    _require_admin(request)
+    try:
+        # 通过退出进程让外部监管（systemd / guardian / 启动脚本）完成重启
+        # 先返回响应，再异步退出，避免连接被重置导致前端拿不到结果
+        import threading
+
+        def _do_exit():
+            try:
+                import time
+                time.sleep(0.3)
+            except Exception:
+                pass
+            try:
+                sys.exit(0)
+            except SystemExit:
+                raise
+            except Exception:
+                os._exit(0)
+
+        threading.Thread(target=_do_exit, daemon=True).start()
+        return RestartResponse(status="ok", message="后端正在重启，请稍候...")
+    except Exception as e:
+        logger.exception("重启后端失败")
+        raise HTTPException(500, f"重启失败: {str(e)}")

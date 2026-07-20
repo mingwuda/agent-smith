@@ -266,6 +266,8 @@ function openSettings() {
   document.getElementById('save-feedback').textContent = '';
   document.getElementById('save-feedback').className = 'save-feedback';
   document.getElementById('save-settings-btn').disabled = false;
+  const restartBtn = document.getElementById('restart-backend-btn');
+  if (restartBtn) restartBtn.disabled = false;
   
   // 加载当前配置
   fetch('/settings').then(r => r.json()).then(data => {
@@ -338,6 +340,47 @@ async function saveSettings() {
     feedback.className = 'save-feedback err';
     btn.disabled = false;
   }
+}
+
+async function restartBackend() {
+  if (!isAdmin) return;
+  const btn = document.getElementById('restart-backend-btn');
+  if (!btn || btn.disabled) return;
+  btn.disabled = true;
+  showToast(t('restartingBackend'), '');
+  try {
+    const res = await fetch('/system/restart', { method: 'POST' });
+    const data = await res.json();
+    if (data.status !== 'ok') {
+      throw new Error(data.message || t('restartBackendFailed'));
+    }
+  } catch (e) {
+    showToast('⚠️ ' + (e.message || t('restartBackendFailed')), 'error');
+    if (btn) btn.disabled = false;
+    return;
+  }
+  // 后端正在退出，等待其恢复
+  let recovered = false;
+  for (let i = 0; i < 30; i++) {
+    await new Promise(r => setTimeout(r, 1000));
+    try {
+      const health = await fetch('/health');
+      if (health.ok) {
+        recovered = true;
+        break;
+      }
+    } catch {
+      // 仍在重启中
+    }
+  }
+  if (recovered) {
+    showToast('✅ ' + t('restartBackendSuccess'), 'success');
+    await checkHealth();
+    await loadSettingsForSwitcher();
+  } else {
+    showToast('⚠️ ' + (currentLanguage === 'en' ? 'Backend did not recover in time' : '后端未在预期时间内恢复'), 'error');
+  }
+  if (btn) btn.disabled = false;
 }
 
 async function quickSwitchProvider(providerId) {

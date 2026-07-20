@@ -197,6 +197,26 @@ def _resolve_session_ref(wechat_uid: str, token: str, menu: Optional[dict]) -> O
     return None
 
 
+def _resolve_project_ref(wechat_uid: str, token: str, menu: Optional[dict]) -> Optional[str]:
+    """将 /project 的参数解析为真实 project_id。
+
+    - token 为数字 → 优先用 /projects 时缓存的序号映射，否则回退到当前列表顺序
+    - 非数字 → 当作原始 project_id（需真实存在）
+    - 无法解析返回 None
+    """
+    if token.isdigit():
+        n = int(token)
+        if menu and str(n) in menu:
+            return menu[str(n)]
+        projects = session_store.list_projects(wechat_uid)
+        if 1 <= n <= len(projects):
+            return projects[n - 1]["id"]
+        return None
+    if session_store.get_project(wechat_uid, token):
+        return token
+    return None
+
+
 class WeChatBot:
     """微信 iLink Bot API 客户端（按用户隔离）"""
 
@@ -214,6 +234,10 @@ class WeChatBot:
         self._wechat_sessions: dict[str, str] = {}  # wx_user_id → current session_id
         # /list 时缓存「序号 → sessionId」映射，供 /switch /delete 按序号解析（见 _resolve_session_arg）
         self._wechat_session_menu: dict[str, dict[str, str]] = {}
+        # 当前选中的项目（key=from_user），影响 /new 和 /sessions 的归属
+        self._wechat_current_project: dict[str, str] = {}
+        # /projects 时缓存「序号 → project_id」映射，供 /project 按序号解析
+        self._wechat_project_menu: dict[str, dict[str, str]] = {}
         # 暂存用户最近发送的图片（key=from_user），等待后续文本合并为图文消息
         # 值: {"data": dict, "time": float}，5 分钟后自动清理
         self._pending_images: dict[str, dict] = {}
@@ -625,18 +649,36 @@ class WeChatBot:
 
     # ── 消息处理 ──────────────────────────────────
 
-    def _build_session_list_text(self, wechat_uid: str, from_user: str) -> str:
+    def _build_session_list_text(self, wechat_uid: str, from_user: str, project_id: str = "") -> str:
         """构建带序号的会话清单文本，并刷新 from_user 的序号映射缓存。
 
-        供 /list 与 /delete 复用。无会话时返回提示并清空缓存。
+        供 /list、/sessions 与 /delete 复用。无会话时返回提示并清空缓存。
+        project_id 为空时列出全部会话；否则只列出该项目下的会话。
         """
-        all_sessions = session_store.list_sessions(wechat_uid)
+        if project_id == "__unassigned__":
+            all_sessions = session_store.list_sessions_unassigned(wechat_uid)
+        elif project_id:
+            all_sessions = session_store.list_sessions_by_project(wechat_uid, project_id)
+        else:
+            all_sessions = session_store.list_sessions(wechat_uid)
         if not all_sessions:
-            # 清空缓存，避免陈旧序号残留
             self._wechat_session_menu.pop(from_user, None)
-            return "📭 暂无会话。发送 /new 创建新会话。"
+            scope = "该项目" if project_id else "当前"
+            return f"📭 {scope}暂无会话。发送 /new 创建新会话。"
         menu: dict[str, str] = {}
-        lines = [f"📋 共有 {len(all_sessions)} 个会话（用序号切换/删除）："]
+        # 预加载项目映射，用于显示项目名
+        project_names: dict[str, str] = {}
+        if not project_id:
+            try:
+                for p in session_store.list_projects(wechat_uid):
+                    project_names[p["id"]] = p["name"]
+            except Exception:
+                pass
+        lines = []
+        if project_id:
+            lines.append(f"📋 项目会话（用序号切换/删除）：")
+        else:
+            lines.append(f"📋 共有 {len(all_sessions)} 个会话（用序号切换/删除）：")
         for i, s in enumerate(all_sessions, 1):
             sid = s["id"]
             menu[str(i)] = sid
@@ -649,8 +691,29 @@ class WeChatBot:
                         last_user_msg = m.get("content", "")[:50]
                         break
             marker = "→ " if sid == self._wechat_sessions.get(from_user) else "  "
-            lines.append(f"{marker}{i}. {sid}: {last_user_msg or '(空)'}")
+            tag = ""
+            pid = (s.get("project_id") or "").strip()
+            if pid and pid != project_id:
+                tag = f" [{project_names.get(pid, pid[:8])}]"
+            lines.append(f"{marker}{i}. {sid}: {last_user_msg or '(空)'}{tag}")
         self._wechat_session_menu[from_user] = menu
+        return "\n".join(lines)
+
+    def _build_project_list_text(self, wechat_uid: str, from_user: str) -> str:
+        """构建带序号的项目清单文本，并刷新 from_user 的项目序号映射缓存。"""
+        projects = session_store.list_projects(wechat_uid)
+        if not projects:
+            self._wechat_project_menu.pop(from_user, None)
+            return "📭 暂无项目。发送 /projects 查看，或通过 Web 端创建项目。"
+        menu: dict[str, str] = {}
+        lines = [f"📁 共有 {len(projects)} 个项目（用序号切换）："]
+        for i, p in enumerate(projects, 1):
+            pid = p["id"]
+            menu[str(i)] = pid
+            marker = "→ " if pid == self._wechat_current_project.get(from_user) else "  "
+            scope = p.get("directory_path") or "默认工作区"
+            lines.append(f"{marker}{i}. {p['name']} ({pid[:8]}) — {scope}")
+        self._wechat_project_menu[from_user] = menu
         return "\n".join(lines)
 
     async def _handle_message(self, msg: dict):
@@ -747,14 +810,17 @@ class WeChatBot:
         if text.strip() == "/new":
             logger.debug("[微信Bot:%s] 触发 /new 命令", self.user_id)
             new_sid = uuid.uuid4().hex[:8]
+            current_pid = self._wechat_current_project.get(from_user, "")
             session_store.create_session(
                 wechat_uid, title="新会话", session_id=new_sid,
+                project_id=current_pid or None,
             )
             self._wechat_sessions[from_user] = new_sid
             # 会话列表已变化，序号映射失效
             self._wechat_session_menu.pop(from_user, None)
-            await self.send_message(from_user, context_token, "✅ 已创建新会话，可以开始新的对话了")
-            logger.info("[微信Bot:%s] 用户 %s 创建新会话 %s", self.user_id, from_user[:16], new_sid)
+            scope = f"（项目 {current_pid[:8]}）" if current_pid else ""
+            await self.send_message(from_user, context_token, f"✅ 已创建新会话{scope}，可以开始新的对话了")
+            logger.info("[微信Bot:%s] 用户 %s 创建新会话 %s project=%s", self.user_id, from_user[:16], new_sid, current_pid)
             return
 
         # ── /list 命令：列出所有会话（带序号，供 /switch /delete 按序号操作）──
@@ -832,6 +898,53 @@ class WeChatBot:
                         self.user_id, from_user[:16], deleted_sids, invalid, skipped, failed)
             return
 
+        # ── /projects 命令：列出所有项目 ──
+        if text.strip() == "/projects":
+            proj_text = self._build_project_list_text(wechat_uid, from_user)
+            await self.send_message(from_user, context_token, proj_text)
+            return
+
+        # ── /project 命令：切换到某项目（后续 /new 将归到该项目）──
+        if text.strip().startswith("/project "):
+            arg = text.strip()[len("/project "):].strip()
+            if not arg:
+                await self.send_message(from_user, context_token, "❌ 请指定项目序号或 ID，格式：/project &lt;序号|projectId&gt;")
+                return
+            target_pid = _resolve_project_ref(wechat_uid, arg, self._wechat_project_menu.get(from_user))
+            if target_pid is None:
+                await self.send_message(from_user, context_token, f"❌ 项目 {arg} 无效。发送 /projects 查看可用项目。")
+                return
+            proj = session_store.get_project(wechat_uid, target_pid)
+            if not proj:
+                await self.send_message(from_user, context_token, f"❌ 项目 {target_pid} 不存在。发送 /projects 查看可用项目。")
+                return
+            self._wechat_current_project[from_user] = target_pid
+            # 项目上下文已变，会话序号映射失效
+            self._wechat_session_menu.pop(from_user, None)
+            await self.send_message(from_user, context_token, f"✅ 已切换到项目 {proj['name']} ({target_pid[:8]})，后续 /new 将归到该项目")
+            logger.info("[微信Bot:%s] 用户 %s 切换到项目 %s", self.user_id, from_user[:16], target_pid)
+            return
+
+        # ── /unproject 命令：取消当前项目绑定，回到未归属状态 ──
+        if text.strip() == "/unproject":
+            current = self._wechat_current_project.pop(from_user, None)
+            self._wechat_session_menu.pop(from_user, None)
+            if current:
+                await self.send_message(from_user, context_token, "✅ 已取消项目绑定，后续 /new 将创建未归属会话")
+            else:
+                await self.send_message(from_user, context_token, "ℹ️ 当前未绑定任何项目")
+            return
+
+        # ── /sessions 命令：列出当前项目的会话（无项目时列出未归属会话）──
+        if text.strip() == "/sessions":
+            current_pid = self._wechat_current_project.get(from_user, "")
+            list_text = self._build_session_list_text(
+                wechat_uid, from_user,
+                project_id=current_pid if current_pid else "__unassigned__",
+            )
+            await self.send_message(from_user, context_token, list_text)
+            return
+
         # ── 会话管理 ──
         # 用户发起了真正的对话，会话列表可能已变化，序号映射失效
         self._wechat_session_menu.pop(from_user, None)
@@ -841,11 +954,13 @@ class WeChatBot:
             session_id = hashlib.md5(from_user.encode()).hexdigest()[:8]
             self._wechat_sessions[from_user] = session_id
             session = session_store.get_session(wechat_uid, session_id)
+            current_pid = self._wechat_current_project.get(from_user, "")
             if session is None:
                 session = session_store.create_session(
                     wechat_uid,
                     title=text[:20],
                     session_id=session_id,
+                    project_id=current_pid or None,
                 )
 
         # ── 检查是否有暂存的图片，合并为图文消息 ──
@@ -884,6 +999,13 @@ class WeChatBot:
 
         # 发送"正在输入"状态
         await self.send_typing(from_user, context_token)
+
+        # 根据当前会话/项目设置工作目录，保证 agent 与工具使用同一 cwd
+        try:
+            from agent_core.services.agent_service import _apply_session_workspace
+            _apply_session_workspace(wechat_uid, session_id, self._wechat_current_project.get(from_user, ""))
+        except Exception:
+            pass
 
         # 为当前会话设置独立的 agent 线程（显式传入，避免并发时覆盖共享的 _thread_id）
         # 调用 agent 获取完整回复（支持图文消息）
