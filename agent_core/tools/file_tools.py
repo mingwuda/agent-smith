@@ -634,8 +634,17 @@ def delete_file(path: str) -> str:
 
 
 @tool
-def search_files(pattern: str, path: str = "") -> str:
-    """递归搜索匹配的文件名（支持通配符如 *.py, *test*）。path 可为绝对路径。"""
+def search_files(pattern: str, path: str = "", content: bool = False) -> str:
+    """递归搜索文件名或文件内容。
+
+    参数:
+      - pattern: 搜索模式。content=False 时按文件名 glob 匹配（如 *.py, *test*）；
+        content=True 时按文件内容关键词匹配。
+      - path: 搜索目录，默认为当前工作区。
+      - content: 是否搜索文件内容而非文件名。
+
+    返回: 匹配结果列表，包含文件路径和匹配行信息。
+    """
     try:
         target = _resolve(path, allow_outside=True)
     except ValueError as exc:
@@ -644,29 +653,108 @@ def search_files(pattern: str, path: str = "") -> str:
         return f"❌ 目录不存在: {path or '/'}"
 
     display_root = target
-    # Python 3.13+ 的 pathlib rglob 不支持非相对模式（以 / 或 ../ 开头）
-    cleaned_pattern = pattern
-    for prefix in ["/", "./", "../"]:
-        while cleaned_pattern.startswith(prefix):
-            cleaned_pattern = cleaned_pattern[len(prefix):]
-    matches = list(target.rglob(cleaned_pattern))
-    if not matches:
-        return f"未找到匹配 '{pattern}' 的文件"
 
-    lines = []
-    for f in matches[:50]:
-        resolved = f.resolve(strict=False)
+    if not content:
+        # ── 文件名搜索（原有行为） ──
+        cleaned_pattern = pattern
+        for prefix in ["/", "./", "../"]:
+            while cleaned_pattern.startswith(prefix):
+                cleaned_pattern = cleaned_pattern[len(prefix):]
+        matches = list(target.rglob(cleaned_pattern))
+        if not matches:
+            return f"未找到匹配 '{pattern}' 的文件"
+
+        lines = []
+        for f in matches[:50]:
+            resolved = f.resolve(strict=False)
+            try:
+                rel = resolved.relative_to(display_root)
+            except ValueError:
+                rel = resolved
+            size = _fmt_size(f.stat().st_size) if f.is_file() else ""
+            lines.append(f"  {rel}  {size}")
+
+        if len(matches) > 50:
+            lines.append(f"  ... 还有 {len(matches) - 50} 个匹配")
+
+        return f"找到 {len(matches)} 个匹配:\n" + "\n".join(lines)
+
+    # ── 内容搜索（新增） ──
+    import subprocess
+    import shutil
+
+    if not pattern.strip():
+        return "❌ 内容搜索需要提供非空关键词"
+
+    grep = shutil.which("grep")
+    if not grep:
+        return "❌ 当前环境缺少 grep，无法执行内容搜索"
+
+    # 排除目录：避免搜索虚拟环境、依赖包、缓存等
+    exclude_dirs = [
+        ".venv", "node_modules", "__pycache__", ".git",
+        ".idea", ".vscode", "dist", "build", ".egg-info",
+    ]
+    cmd = [
+        grep,
+        "-riIn",                # 递归、忽略大小写、显示行号、二进制文件当文本处理
+        "--binary-files=without-match",  # 跳过二进制文件
+        "--exclude-dir=.venv",
+        "--exclude-dir=node_modules",
+        "--exclude-dir=__pycache__",
+        "--exclude-dir=.git",
+        "--exclude-dir=.idea",
+        "--exclude-dir=.vscode",
+        "--exclude-dir=dist",
+        "--exclude-dir=build",
+        "--exclude-dir=.egg-info",
+        pattern,
+        str(target),
+    ]
+
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired:
+        return "❌ 内容搜索超时（30 秒）"
+    except Exception as e:
+        return f"❌ 内容搜索失败: {e}"
+
+    stdout = proc.stdout.strip()
+    if not stdout:
+        return f"未找到包含 '{pattern}' 的文件内容"
+
+    # 格式化输出：文件路径:行号:内容
+    lines = stdout.splitlines()
+    # 按文件聚合，每个文件最多展示 10 条匹配
+    file_hits: dict[str, list[str]] = {}
+    for line in lines:
+        if ":" not in line:
+            continue
+        file_path, rest = line.split(":", 1)
         try:
-            rel = resolved.relative_to(display_root)
+            lineno, _ = rest.split(":", 1)
         except ValueError:
-            rel = resolved
-        size = _fmt_size(f.stat().st_size) if f.is_file() else ""
-        lines.append(f"  {rel}  {size}")
+            lineno = "?"
+        rel = _display_path(Path(file_path))
+        if rel not in file_hits:
+            file_hits[rel] = []
+        if len(file_hits[rel]) < 10:
+            file_hits[rel].append(f"  {rel}:{lineno}: {rest}")
 
-    if len(matches) > 50:
-        lines.append(f"  ... 还有 {len(matches) - 50} 个匹配")
+    display = []
+    total_files = len(file_hits)
+    for rel, hits in file_hits.items():
+        display.extend(hits)
+        if len(hits) >= 10:
+            display.append(f"  ... {rel} 还有更多匹配")
 
-    return f"找到 {len(matches)} 个匹配:\n" + "\n".join(lines)
+    header = f"找到 {total_files} 个文件包含 '{pattern}'（共 {len(lines)} 处匹配）:\n"
+    return header + "\n".join(display[:100])
 
 
 @tool
