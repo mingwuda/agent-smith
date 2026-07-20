@@ -266,6 +266,7 @@ def restart_backend(request: Request):
     try:
         # 通过退出进程让外部监管（systemd / guardian / 启动脚本）完成重启
         # 先返回响应，再异步退出，避免连接被重置导致前端拿不到结果
+        logger.info("收到重启请求，将在 0.3 秒后退出进程")
         import threading
 
         def _do_exit():
@@ -274,12 +275,7 @@ def restart_backend(request: Request):
                 time.sleep(0.3)
             except Exception:
                 pass
-            try:
-                sys.exit(0)
-            except SystemExit:
-                raise
-            except Exception:
-                os._exit(0)
+            os._exit(0)
 
         threading.Thread(target=_do_exit, daemon=True).start()
         return RestartResponse(status="ok", message="后端正在重启，请稍候...")
