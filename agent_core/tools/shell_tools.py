@@ -338,7 +338,8 @@ def _truncate(text: str) -> str:
     if len(text) <= _MAX_OUTPUT_CHARS:
         return text
     return (
-        f"[输出过长，共 {len(text)} 字符，仅显示头尾]\n\n"
+        f"⚠️ 输出过长（共 {len(text)} 字符），上下文仅保留头尾各 {_HEAD_CHARS} 字符。\n"
+        f"关键信息（如错误堆栈末尾、退出码）通常位于结尾部分。\n\n"
         f"--- 开头 {_HEAD_CHARS} 字符 ---\n"
         f"{text[:_HEAD_CHARS]}\n\n"
         f"--- 结尾 {_TAIL_CHARS} 字符 ---\n"
