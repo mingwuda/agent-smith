@@ -221,11 +221,12 @@ def _path_error(exc: ValueError) -> str:
     return f"❌ {exc}"
 
 
-def _display_path(path: Path) -> str:
+def _display_path(path: Path, display_root: Optional[Path] = None) -> str:
     _ws = _workspace_ctx.get()
     workspace = (_ws or Path.home() / "agent_workspace").expanduser().resolve()
+    base = (display_root or workspace).resolve(strict=False)
     try:
-        return path.resolve(strict=False).relative_to(workspace).as_posix()
+        return path.resolve(strict=False).relative_to(base).as_posix()
     except ValueError:
         return str(path)
 
@@ -649,8 +650,23 @@ def search_files(pattern: str, path: str = "", content: bool = False) -> str:
         target = _resolve(path, allow_outside=True)
     except ValueError as exc:
         return _path_error(exc)
+
+    # ── 单文件搜索 ──
+    if target.is_file():
+        if not content:
+            # 文件名搜索：检查文件名是否匹配 pattern
+            import fnmatch
+            if fnmatch.fnmatch(target.name, pattern):
+                size = _fmt_size(target.stat().st_size)
+                return f"找到 1 个匹配:\n  {target.name}  {size}"
+            return f"未找到匹配 '{pattern}' 的文件"
+
+        # 内容搜索：直接在单文件上 grep
+        return _grep_file_content(pattern, target, display_root=target.parent)
+
+    # ── 目录搜索 ──
     if not target.is_dir():
-        return f"❌ 目录不存在: {path or '/'}"
+        return f"❌ 路径不存在或不是目录: {path or '/'}"
 
     display_root = target
 
@@ -679,7 +695,49 @@ def search_files(pattern: str, path: str = "", content: bool = False) -> str:
 
         return f"找到 {len(matches)} 个匹配:\n" + "\n".join(lines)
 
-    # ── 内容搜索（新增） ──
+    # ── 内容搜索（目录） ──
+    return _grep_dir_content(pattern, target, display_root)
+
+
+def _grep_file_content(pattern: str, file_path: Path, display_root: Path) -> str:
+    """在单个文件上执行内容搜索。支持扩展正则（如 a|b）；失败时回退到字面量搜索。"""
+    if not pattern.strip():
+        return "❌ 内容搜索需要提供非空关键词"
+
+    try:
+        text = file_path.read_text(encoding="utf-8", errors="replace")
+    except Exception as e:
+        return f"❌ 读取文件失败: {e}"
+
+    lines = text.splitlines()
+    regex = None
+    try:
+        regex = re.compile(pattern, re.IGNORECASE)
+    except re.error:
+        regex = None
+
+    matches = []
+    for idx, line in enumerate(lines, start=1):
+        hit = False
+        if regex is not None:
+            hit = bool(regex.search(line))
+        else:
+            hit = pattern.lower() in line.lower()
+        if hit:
+            rel = _display_path(file_path, display_root)
+            matches.append(f"  {rel}:{idx}: {line}")
+            if len(matches) >= 10:
+                break
+
+    if not matches:
+        return f"未找到包含 '{pattern}' 的文件内容"
+
+    header = f"找到 1 个文件包含 '{pattern}'（共 {len(matches)} 处匹配，仅展示前 10 条）:\n"
+    return header + "\n".join(matches)
+
+
+def _grep_dir_content(pattern: str, target: Path, display_root: Path) -> str:
+    """在目录上执行递归内容搜索。"""
     import subprocess
     import shutil
 
@@ -690,15 +748,10 @@ def search_files(pattern: str, path: str = "", content: bool = False) -> str:
     if not grep:
         return "❌ 当前环境缺少 grep，无法执行内容搜索"
 
-    # 排除目录：避免搜索虚拟环境、依赖包、缓存等
-    exclude_dirs = [
-        ".venv", "node_modules", "__pycache__", ".git",
-        ".idea", ".vscode", "dist", "build", ".egg-info",
-    ]
     cmd = [
         grep,
-        "-riIn",                # 递归、忽略大小写、显示行号、二进制文件当文本处理
-        "--binary-files=without-match",  # 跳过二进制文件
+        "-riIn",
+        "--binary-files=without-match",
         "--exclude-dir=.venv",
         "--exclude-dir=node_modules",
         "--exclude-dir=__pycache__",
@@ -728,9 +781,7 @@ def search_files(pattern: str, path: str = "", content: bool = False) -> str:
     if not stdout:
         return f"未找到包含 '{pattern}' 的文件内容"
 
-    # 格式化输出：文件路径:行号:内容
     lines = stdout.splitlines()
-    # 按文件聚合，每个文件最多展示 10 条匹配
     file_hits: dict[str, list[str]] = {}
     for line in lines:
         if ":" not in line:
@@ -740,7 +791,7 @@ def search_files(pattern: str, path: str = "", content: bool = False) -> str:
             lineno, _ = rest.split(":", 1)
         except ValueError:
             lineno = "?"
-        rel = _display_path(Path(file_path))
+        rel = _display_path(Path(file_path), display_root)
         if rel not in file_hits:
             file_hits[rel] = []
         if len(file_hits[rel]) < 10:

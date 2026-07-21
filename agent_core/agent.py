@@ -478,17 +478,34 @@ def _drop_dangling_tool_call_messages(messages: list) -> tuple[list, bool]:
     return result, changed
 
 
+def _recent_round_user_indexes(messages: list[dict], round_count: int = 5) -> set[int]:
+    """计算最近 N 轮对话对应的 user 消息索引集合。
+
+    一轮对话从一条 user 消息开始，到下一个 user 消息之前结束。
+    只保留最近 `round_count` 条 user 消息的索引，用于决定是否保留历史图片。
+    """
+    if round_count <= 0:
+        return set()
+
+    user_indexes = [idx for idx, msg in enumerate(messages) if msg.get("role") == "user"]
+    if len(user_indexes) <= round_count:
+        return set(user_indexes)
+
+    return set(user_indexes[-round_count:])
+
+
 def session_messages_to_langchain(messages: list[dict]) -> list:
     """Convert persisted chat messages into LangChain messages.
     保留用户消息中的图片，让 LLM 能在后续轮次中看到历史图片。
     """
     converted = []
-    for msg in messages:
+    keep_image_user_indexes = _recent_round_user_indexes(messages, round_count=5)
+    for idx, msg in enumerate(messages):
         role = msg.get("role")
         content = msg.get("content") or ""
         images = msg.get("images") or []
         if role == "user":
-            if images:
+            if images and idx in keep_image_user_indexes:
                 # 多模态：图片 + 文本
                 multimodal = []
                 for url in images:
@@ -1309,6 +1326,10 @@ class DesktopAgent:
                         event = event_task.result()
                     except StopAsyncIteration:
                         return
+                    except Exception as exc:
+                        logger.warning("[stream_events] 事件消费异常: %s", exc, exc_info=True)
+                        yield {"_stream_event_error": str(exc)}
+                        continue
                     yield event
                     event_task = asyncio.create_task(event_iter.__anext__())
         finally:
@@ -1414,6 +1435,18 @@ class DesktopAgent:
                             "max": self.config.llm_idle_max_retries,
                         })
                     _retry_notif_list.clear()
+                if event.get("_stream_event_error"):
+                    yield _sse({
+                        "type": "tool_result",
+                        "tool": "_stream_events",
+                        "step": step_count,
+                        "result": f"❌ 工具事件流异常: {event['_stream_event_error']}",
+                        "result_full": "",
+                        "error": True,
+                        "diff": None,
+                        "diff_file_path": "",
+                    })
+                    continue
                 if event.get("_heartbeat"):
                     now = time.time()
                     # 发送所有正在运行的工具进度
