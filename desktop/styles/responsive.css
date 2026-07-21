@@ -20,7 +20,7 @@
     #header .right { gap:4px; }
     #status-text { display:none; }
     #sidebar-toggle { font-size:18px; padding:2px; }
-    #status-dot { width:6px; height:6px; flex-shrink:0; }
+    #status-dot { width:6px; height:6px; flex-shrink:0; cursor:pointer; }
     #input-area { padding:8px 10px 14px; }
     #composer { padding:4px 6px; border-radius:12px; }
     .modal { width:95vw; padding:16px; }

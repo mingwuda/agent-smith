@@ -3,6 +3,7 @@ import asyncio
 import contextvars
 import json
 import os
+import re
 import socket
 import time
 from datetime import datetime
@@ -101,6 +102,66 @@ def _loop_guard_message(reason: str, calls: list[dict], recursion_limit: int) ->
         f"- 当前最大推理步数：{recursion_limit}\n\n"
         "建议把任务拆得更具体一些，或直接指定要检查的文件/关键词后重试。"
     )
+
+
+# ponytail: 场景化 system prompt 按需注入，避免把所有场景指令常驻上下文。
+_SCENE_PROMPTS = {
+    "coding": (
+        "## 编程场景\n"
+        "- 优先使用项目已有依赖和工具，不要引入新依赖。\n"
+        "- 代码改动后先做语法检查再重启服务。\n"
+        "- 遵循项目现有风格和架构，不做过度设计。"
+    ),
+    "browser": (
+        "## 浏览器自动化场景\n"
+        "- 优先使用 browser_ 系列工具操作页面。\n"
+        "- 遇到验证码先识别再处理，不要盲目重试。\n"
+        "- 操作前先确认页面状态和元素可见性。"
+    ),
+    "ppt": (
+        "## PPT 制作场景\n"
+        "- 使用 Node.js + PptxGenJS 生成 .pptx 文件。\n"
+        "- 先确认主题和幻灯片内容，再调用脚本。\n"
+        "- 输出文件保存在 reports/ 目录。"
+    ),
+    "article": (
+        "## 文章写作场景\n"
+        "- 先明确文章类型、受众和字数要求。\n"
+        "- 结构化输出：标题 -> 大纲 -> 正文 -> 总结。\n"
+        "- 避免空洞套话，给出具体可执行的内容。"
+    ),
+    "image": (
+        "## 图片生成场景\n"
+        "- 使用英文编写详细 prompt（主体+场景+风格+光照+构图+质量）。\n"
+        "- 默认尺寸 1024x768，竖屏用 1024x1536。\n"
+        "- 图片以 URL 形式返回，直接展示给用户。"
+    ),
+    "analysis": (
+        "## 分析验证场景\n"
+        "- 先看数据/日志/代码，不要凭印象下结论。\n"
+        "- 区分事实、推测、待验证项，结论必须附带证据来源。\n"
+        "- 涉及统计/趋势/对比时，先确认口径和样本范围。"
+    ),
+}
+
+
+def _detect_scene(message: str) -> str:
+    if not message:
+        return ""
+    msg = message.lower()
+    if any(k in msg for k in ["代码", "编程", "coding", "实现", "开发", "修复bug", "重构", "python", "javascript"]):
+        return "coding"
+    if any(k in msg for k in ["浏览器", "网页", "browser", "自动化", "打开网站", "截图"]):
+        return "browser"
+    if any(k in msg for k in ["ppt", "演示文稿", "powerpoint", "pptx", "幻灯片"]):
+        return "ppt"
+    if any(k in msg for k in ["文章", "写作", "blog", "写一篇", "文案"]):
+        return "article"
+    if any(k in msg for k in ["图片", "画图", "image", "生成图片", "插画"]) or re.search(r'画.*图', msg) or re.search(r'生成.*图', msg):
+        return "image"
+    if any(k in msg for k in ["分析", "验证", "检查", "审查", "review", "debug", "测试", "调研", "数据", "统计", "为什么", "原因", "排查"]):
+        return "analysis"
+    return ""
 
 
 # ponytail: 循环检测纯逻辑抽到 loop_guard.py（stdlib-only，便于单测），
@@ -701,6 +762,8 @@ class DesktopAgent:
         self._current_workspace = ""  # 当前会话/项目实际工作目录，用于动态修正系统提示
         self._hydrated_threads: set[str] = set()
         self._ctx_token_sizes: dict[str, int] = {}  # run_id(12位) -> 真实上下文 token 估算，用于 LLM_END 对比网关虚高
+        self._agents_md_cache = ""
+        self._agents_md_mtime = 0.0
 
     def set_user(self, user_id: str):
         """切换当前用户"""
@@ -835,11 +898,18 @@ class DesktopAgent:
             + "- 遇到\u201c今天/昨日/今年/最新/current/latest/recent\u201d等相对时间时，必须以这里的日期为准。\n"
         )
 
-        # ── 注入项目根目录的 AGENTS.md（如果存在）──
+        # ── 注入项目根目录的 AGENTS.md（如果存在，带缓存）──
         try:
             agents_md_path = Path(__file__).resolve().parent.parent / "AGENTS.md"
             if agents_md_path.exists():
-                agents_content = agents_md_path.read_text(encoding="utf-8").strip()
+                mtime = agents_md_path.stat().st_mtime
+                if self._agents_md_cache and self._agents_md_mtime == mtime:
+                    agents_content = self._agents_md_cache
+                else:
+                    agents_content = agents_md_path.read_text(encoding="utf-8").strip()
+                    if agents_content:
+                        self._agents_md_cache = agents_content
+                        self._agents_md_mtime = mtime
                 if agents_content:
                     prompt += "\n\n" + agents_content
         except Exception:
@@ -925,6 +995,24 @@ class DesktopAgent:
 
         if deleted_count:
             logger.info("[记忆] 自动清理了 %d 条过期学习经验", deleted_count)
+
+        # ── 限制 learnings 数量与长度，避免 system prompt 膨胀 ──
+        MAX_LEARNED = 3
+        MAX_AVOID = 3
+        MAX_ITEM_CHARS = 100
+
+        def _shorten(items: list[str], limit: int) -> list[str]:
+            out = []
+            for text in items:
+                if len(text) > MAX_ITEM_CHARS:
+                    text = text[:MAX_ITEM_CHARS] + "..."
+                out.append(text)
+                if len(out) >= limit:
+                    break
+            return out
+
+        learned = _shorten(learned, MAX_LEARNED)
+        avoid = _shorten(avoid, MAX_AVOID)
 
         sections = []
         if learned:
@@ -1215,6 +1303,17 @@ class DesktopAgent:
         current_content = _human_content(message, attachments)
         input_messages.append(HumanMessage(content=current_content))
 
+        # ── 按场景注入专项指导（仅在命中时插入 SystemMessage，不污染基础 prompt）──
+        scene = _detect_scene(message)
+        if scene:
+            scene_prompt = _SCENE_PROMPTS.get(scene)
+            if scene_prompt:
+                input_messages.insert(0, SystemMessage(content=scene_prompt))
+                logger.info(
+                    "[场景注入] tid=%s 命中场景: %s",
+                    tid, scene,
+                )
+
         logger.info(
             "[run] 开始: tid=%s, thread_key=%s, model=%s, message_len=%d",
             tid, thread_key, model_override or self.config.model, len(message),
@@ -1374,6 +1473,18 @@ class DesktopAgent:
         if thread_key not in self._hydrated_threads:
             input_messages = compact_history_messages(session_messages_to_langchain(history or []), self.config)
         input_messages.append(HumanMessage(content=_human_content(message, attachments)))
+
+        # ── 按场景注入专项指导（仅在命中时插入 SystemMessage，不污染基础 prompt）──
+        scene = _detect_scene(message)
+        if scene:
+            scene_prompt = _SCENE_PROMPTS.get(scene)
+            if scene_prompt:
+                input_messages.insert(0, SystemMessage(content=scene_prompt))
+                logger.info(
+                    "[场景注入] tid=%s 命中场景: %s",
+                    tid, scene,
+                )
+
         # ── 按需注入命中的技能完整指令（命中触发，避免把全部技能塞进 system prompt）──
         # system prompt 里只放精简目录（name+描述+触发词）；当用户输入命中某技能触发词/名称时，
         # 才把该技能的完整工作流注入到当前用户消息末尾，仅本轮生效。
@@ -1977,6 +2088,12 @@ class DesktopAgent:
     
     def switch_thread(self, thread_id: str):
         self._thread_id = thread_id
+
+    def reload_skills(self):
+        """热加载技能 -> 重建 system prompt"""
+        count = self.registry.reload()
+        self._rebuild_graph()
+        return count
     
     def reload_skills(self):
         """热加载技能 -> 重建 system prompt"""

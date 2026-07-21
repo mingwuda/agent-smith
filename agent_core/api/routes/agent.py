@@ -329,6 +329,15 @@ async def run_agent_stream(req: RunRequest, request: Request):
             len(error_content),
             forwarded_terminal_event,
         )
+        # ponytail: 诊断“本轮已结束，但未生成正文”的根因，不改变业务逻辑
+        logger.info(
+            "[run/stream] 终判前: final_content=%r, error_content=%r, forwarded_terminal=%s, artifact_paths=%d, steps=%d",
+            bool(final_content),
+            bool(error_content),
+            forwarded_terminal_event,
+            len(artifact_paths),
+            len(collected_steps or []),
+        )
         try:
             final_content = final_content or ""
             if final_content:
