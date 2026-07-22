@@ -260,8 +260,40 @@ class WeChatBot:
                     logger.warning("[微信Bot] token 迁移失败: %s", e)
 
         self._load_token()
+        self._load_current_project()
 
     # ── 鉴权 ──────────────────────────────────────
+
+    def _load_current_project(self):
+        """从磁盘恢复用户当前选中的项目（服务重启后不丢失）"""
+        path = Path(self.data_dir) / "current_project.json"
+        if path.exists():
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                self._wechat_current_project = data.get("current_projects", {})
+            except Exception:
+                pass
+
+    def _save_current_project(self):
+        """持久化当前项目映射到磁盘"""
+        path = Path(self.data_dir) / "current_project.json"
+        try:
+            path.write_text(
+                json.dumps({"current_projects": self._wechat_current_project}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
+
+    def _load_token(self):
+        path = Path(self.data_dir) / "token.json"
+        if path.exists():
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                self.bot_token = data.get("bot_token")
+                self.bot_base_url = data.get("base_url") or ""
+            except Exception:
+                pass
 
     def _auth_headers(self) -> dict:
         uin = base64.b64encode(
@@ -919,6 +951,7 @@ class WeChatBot:
                 await self.send_message(from_user, context_token, f"❌ 项目 {target_pid} 不存在。发送 /projects 查看可用项目。")
                 return
             self._wechat_current_project[from_user] = target_pid
+            self._save_current_project()
             # 项目上下文已变，会话序号映射失效
             self._wechat_session_menu.pop(from_user, None)
             await self.send_message(from_user, context_token, f"✅ 已切换到项目 {proj['name']} ({target_pid[:8]})，后续 /new 将归到该项目")
@@ -928,6 +961,7 @@ class WeChatBot:
         # ── /unproject 命令：取消当前项目绑定，回到未归属状态 ──
         if text.strip() == "/unproject":
             current = self._wechat_current_project.pop(from_user, None)
+            self._save_current_project()
             self._wechat_session_menu.pop(from_user, None)
             if current:
                 await self.send_message(from_user, context_token, "✅ 已取消项目绑定，后续 /new 将创建未归属会话")
@@ -1169,6 +1203,12 @@ class WeChatBot:
 
             try:
                 msgs = await self.poll_messages()
+                # 收到消息后立即批量发送「正在输入」，不等 _handle_message 解析，提升感知响应速度
+                for msg in msgs:
+                    from_user = msg.get("from_user_id", "")
+                    context_token = msg.get("context_token", "")
+                    if from_user and context_token:
+                        asyncio.create_task(self.send_typing(from_user, context_token))
                 for msg in msgs:
                     if not self._running:
                         break

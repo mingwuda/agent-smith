@@ -318,12 +318,12 @@ def get_session_lite(user_id: str, session_id: str, limit: int = 20, offset: int
                 # 助手消息：只保留 content 和是否有 steps/todo 的标记
                 content_text = parsed.get("content", "") or ""
                 # ponytail: lite 已排除 steps/todo 等重负载，最终正文本身很轻，
-                # 直接返回全文（仅对极端长文本兜底截断），避免历史卡片只显示 200 字让人误以为"输出丢失"。
-                # 这里不再 [:200]，详情接口仍返回完整内容。
-                msg_meta["content"] = content_text[:4000]
+                # 直接返回全文，避免历史卡片显示截断内容让人误以为"输出丢失"。
+                # 详情接口同样返回完整内容。
+                msg_meta["content"] = content_text
                 msg_meta["has_steps"] = bool(parsed.get("steps"))
                 msg_meta["has_todo"] = bool(parsed.get("todo_list"))
-                # 保留 content_preview 用于占位显示
+                # 保留 content_preview 用于占位显示（侧边栏等场景）
                 msg_meta["content_preview"] = content_text[:120]
             messages.append(msg_meta)
 

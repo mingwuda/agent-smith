@@ -145,21 +145,22 @@ def _apply_session_workspace(uid: str, session_id: str, project_id: str = ""):
     effective = ws or str(_workspace_for_user(uid))
     try:
         ws_path = Path(effective).expanduser().resolve()
-        if ws_path.is_dir():
-            file_tools.set_workspace(ws_path)
-            shell_tools.set_workspace(ws_path)
-            browser_tools.set_workspace(ws_path)
-            try:
-                git_tools.set_workspace(ws_path)
-            except Exception:
-                pass
-            # 同步当前工作目录给 Agent（用于动态修正系统提示里的工作区路径）
-            try:
-                from main import agent
-                if agent:
-                    agent.set_workspace(str(ws_path))
-            except Exception:
-                pass
+        # 即使目录不存在也设置工作目录（保证 system_prompt 与工具 cwd 一致）
+        # 工具调用时若目录不存在会自行报错，但 agent 必须知道当前会话的预期工作区
+        file_tools.set_workspace(ws_path)
+        shell_tools.set_workspace(ws_path)
+        browser_tools.set_workspace(ws_path)
+        try:
+            git_tools.set_workspace(ws_path)
+        except Exception:
+            pass
+        # 同步当前工作目录给 Agent（用于动态修正系统提示里的工作区路径）
+        try:
+            from main import agent
+            if agent:
+                agent.set_workspace(str(ws_path))
+        except Exception:
+            pass
     except Exception:
         pass
     # 触发会话级 MCP 重载（后台线程执行，不阻塞当前请求）
