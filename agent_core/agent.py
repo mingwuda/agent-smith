@@ -1428,7 +1428,10 @@ class DesktopAgent:
                     except Exception as exc:
                         logger.warning("[stream_events] 事件消费异常: %s", exc, exc_info=True)
                         yield {"_stream_event_error": str(exc)}
-                        continue
+                        # 事件流已处于错误态, 重建 task 会立即再次抛同一异常,
+                        # 若用 continue 会陷入无限循环(每轮对同一个已失败 task 调 .result() 反复抛异常)。
+                        # 改为 return: 仅产出一次错误事件, 让消费端 async for 自然结束。
+                        return
                     yield event
                     event_task = asyncio.create_task(event_iter.__anext__())
         finally:
@@ -2089,12 +2092,6 @@ class DesktopAgent:
     def switch_thread(self, thread_id: str):
         self._thread_id = thread_id
 
-    def reload_skills(self):
-        """热加载技能 -> 重建 system prompt"""
-        count = self.registry.reload()
-        self._rebuild_graph()
-        return count
-    
     def reload_skills(self):
         """热加载技能 -> 重建 system prompt"""
         count = self.registry.reload()
