@@ -254,33 +254,64 @@ function refreshFileBrowser() {
   checkUnpushedCommits();
 }
 
+function toggleFbMoreMenu() {
+  const menu = document.getElementById('fb-more-menu');
+  if (!menu) return;
+  const isOpen = menu.classList.contains('show');
+  menu.classList.toggle('show', !isOpen);
+  if (!isOpen) {
+    document.addEventListener('click', function closeMenu(e) {
+      const btn = document.getElementById('fb-more-btn');
+      if (btn && btn.contains(e.target)) return;
+      if (menu && menu.contains(e.target)) return;
+      menu.classList.remove('show');
+      document.removeEventListener('click', closeMenu);
+    });
+  }
+}
+
 async function checkUnpushedCommits() {
-  const btn = document.getElementById('fb-push-btn');
-  if (!btn) return;
+  const pushItem = document.getElementById('fb-menu-push');
+  const pullItem = document.getElementById('fb-menu-pull');
+  const pushBadge = pushItem ? pushItem.querySelector('.fb-badge') : null;
+  if (!pushItem || !pullItem) return;
   try {
     const qs = new URLSearchParams();
     if (currentProjectId) qs.set('project_id', currentProjectId);
     const res = await fetch('/files/unpushed-count?' + qs.toString());
-    if (!res.ok) return;
+    if (!res.ok) {
+      pushItem.style.display = 'none';
+      pullItem.style.display = 'none';
+      return;
+    }
     const data = await res.json();
     const count = data.unpushed_count || 0;
     if (count > 0) {
-      btn.style.display = '';
-      btn.title = '推送 ' + count + ' 个未推送提交';
+      pushItem.style.display = '';
+      if (pushBadge) { pushBadge.style.display = ''; pushBadge.textContent = count; }
+      pushItem.title = '推送 ' + count + ' 个未推送提交';
     } else if (count === -1) {
-      btn.style.display = '';
-      btn.title = '推送（未设置 upstream）';
+      pushItem.style.display = '';
+      if (pushBadge) pushBadge.style.display = 'none';
+      pushItem.title = '推送（未设置 upstream）';
     } else {
-      btn.style.display = 'none';
+      pushItem.style.display = 'none';
     }
-  } catch (_) {}
+    // 只要接口成功，说明是 git 仓库，显示 pull 菜单项
+    pullItem.style.display = '';
+    pullItem.title = '拉取远程代码';
+  } catch (_) {
+    if (pushItem) pushItem.style.display = 'none';
+    if (pullItem) pullItem.style.display = 'none';
+  }
 }
 
 async function pushUnpushedCommits() {
-  const btn = document.getElementById('fb-push-btn');
-  if (!btn || btn.disabled) return;
-  btn.disabled = true;
-  btn.textContent = '⏳';
+  const item = document.getElementById('fb-menu-push');
+  if (!item || item.disabled) return;
+  item.disabled = true;
+  const originalText = item.innerHTML;
+  item.innerHTML = '<span class="fb-menu-icon">⏳</span> 推送中...';
   try {
     const res = await fetch('/files/push', {
       method: 'POST',
@@ -297,10 +328,37 @@ async function pushUnpushedCommits() {
   } catch (e) {
     alert('推送失败：' + (e && e.message ? e.message : e));
   } finally {
-    if (btn) {
-      btn.disabled = false;
-      btn.textContent = '⬆️';
+    item.disabled = false;
+    item.innerHTML = originalText;
+  }
+}
+
+async function pullCommits() {
+  const item = document.getElementById('fb-menu-pull');
+  if (!item || item.disabled) return;
+  item.disabled = true;
+  const originalText = item.innerHTML;
+  item.innerHTML = '<span class="fb-menu-icon">⏳</span> 拉取中...';
+  try {
+    const res = await fetch('/files/pull', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project_id: currentProjectId || '' }),
+    });
+    const d = await res.json();
+    if (d.success) {
+      if (typeof showToast === 'function') showToast('✅ ' + (d.output || '拉取成功'));
+      // 拉取后刷新文件树和推送状态
+      refreshFileBrowser();
+      checkUnpushedCommits();
+    } else {
+      alert('拉取失败：\n' + (d.output || '未知错误'));
     }
+  } catch (e) {
+    alert('拉取失败：' + (e && e.message ? e.message : e));
+  } finally {
+    item.disabled = false;
+    item.innerHTML = originalText;
   }
 }
 
@@ -450,21 +508,9 @@ let _isChangesView = false;   // 当前是否在变更文件视图
 
 function toggleChangesView() {
   _isChangesView = !_isChangesView;
-  const btn = document.getElementById('fb-changes-btn');
-  if (btn) {
-    btn.classList.toggle('active', _isChangesView);
-    if (_isChangesView) {
-      // 进入变更视图：先加载数据，再根据是否有变更决定按钮行为
-      btn.title = '变更文件';
-      const iconNode = btn.childNodes[0];
-      if (iconNode && iconNode.nodeType === Node.TEXT_NODE) iconNode.textContent = '📝';
-      btn.onclick = toggleChangesView;
-    } else {
-      btn.title = '变更文件';
-      const iconNode = btn.childNodes[0];
-      if (iconNode && iconNode.nodeType === Node.TEXT_NODE) iconNode.textContent = '📝';
-      btn.onclick = toggleChangesView;
-    }
+  const menuItem = document.getElementById('fb-menu-changes');
+  if (menuItem) {
+    menuItem.classList.toggle('active', _isChangesView);
   }
   if (_isChangesView) {
     loadChangedFiles();
@@ -497,20 +543,16 @@ async function loadChangedFiles() {
     const data = await res.json();
     _updateChangesBadge(data.total_changes || 0);
     renderChangedFiles(data);
-    // 根据是否有变更，切换按钮行为
+    // 根据是否有变更，切换菜单项行为
     const hasChanges = (data.total_changes || 0) > 0;
-    const btn = document.getElementById('fb-changes-btn');
-    if (btn) {
+    const menuItem = document.getElementById('fb-menu-changes');
+    if (menuItem) {
       if (hasChanges) {
-        btn.title = '提交变更';
-        const iconNode = btn.childNodes[0];
-        if (iconNode && iconNode.nodeType === Node.TEXT_NODE) iconNode.textContent = '💾';
-        btn.onclick = openCommitDialog;
+        menuItem.title = '提交变更';
+        menuItem.onclick = openCommitDialog;
       } else {
-        btn.title = '变更文件';
-        const iconNode = btn.childNodes[0];
-        if (iconNode && iconNode.nodeType === Node.TEXT_NODE) iconNode.textContent = '📝';
-        btn.onclick = toggleChangesView;
+        menuItem.title = '变更文件';
+        menuItem.onclick = toggleChangesView;
       }
     }
   } catch (e) {
@@ -520,12 +562,10 @@ async function loadChangedFiles() {
 }
 
 function _resetChangesBtn() {
-  const btn = document.getElementById('fb-changes-btn');
-  if (!btn) return;
-  btn.title = '变更文件';
-  const iconNode = btn.childNodes[0];
-  if (iconNode && iconNode.nodeType === Node.TEXT_NODE) iconNode.textContent = '📝';
-  btn.onclick = toggleChangesView;
+  const menuItem = document.getElementById('fb-menu-changes');
+  if (!menuItem) return;
+  menuItem.title = '变更文件';
+  menuItem.onclick = toggleChangesView;
 }
 
 /** 更新变更按钮角标数字 */

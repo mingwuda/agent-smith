@@ -645,3 +645,31 @@ async def push_commits(request: Request, payload: dict = Body(...)):
     base = _resolve_repo_root(request, project_id)
     pushed, output = _push_at(str(base))
     return {"success": pushed, "output": output}
+
+
+@router.post("/files/pull")
+async def pull_commits(request: Request, payload: dict = Body(...)):
+    """拉取远程变更到当前分支（git pull）。"""
+    project_id = (payload or {}).get("project_id", "")
+    base = _resolve_repo_root(request, project_id)
+    # 先确认是 git 仓库
+    _, err, code = _git_rc(str(base), "rev-parse", "--is-inside-work-tree")
+    if code != 0:
+        return {"success": False, "output": err or "当前目录不是 Git 仓库"}
+    # 获取当前分支
+    branch, _, branch_code = _git_rc(str(base), "rev-parse", "--abbrev-ref", "HEAD")
+    if branch_code != 0 or not branch.strip():
+        return {"success": False, "output": "无法获取当前分支"}
+    # 检查是否有 upstream
+    upstream, _, up_code = _git_rc(str(base), "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
+    if up_code != 0 or not upstream.strip():
+        rem_out, _, rem_code = _git_rc(str(base), "remote", "get-url", "origin")
+        if rem_code != 0 or not rem_out.strip():
+            return {"success": False, "output": "未配置 origin 远程仓库，无法 pull（请先 git remote add origin <url>）"}
+        # 无 upstream 时自动设置 upstream 后 pull
+        pull_out, pull_err, pull_code = _git_rc(str(base), "pull", "-u", "origin", branch.strip(), timeout=60)
+    else:
+        pull_out, pull_err, pull_code = _git_rc(str(base), "pull", timeout=60)
+    if pull_code != 0:
+        return {"success": False, "output": pull_err or pull_out or "拉取失败"}
+    return {"success": True, "output": pull_out or pull_err or "已拉取最新代码"}
