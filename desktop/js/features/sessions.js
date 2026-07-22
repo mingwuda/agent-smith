@@ -521,6 +521,15 @@ async function reconstructStreamingSession(rt) {
   await loadSessionMessages(rt.sessionId, rt.source, { limit: 20, offset: -20 });
   // loadSessionMessages 内部已清空容器并渲染历史消息，且做了令牌校验防串会话
 
+  // ── 第一步后处理：移除最后一条 bot 消息的历史占位卡片 ──
+  // 原因: 历史加载对本轮 bot 响应创建了折叠的 agent-response.finished 卡片(内容可能被
+  // lite 接口截断至 4000 字符), 但接下来 beginRoundRender + 回放会用完整的 SSE 缓冲事件
+  // 重建一个全新的、内容完整的卡片。不删会导致: ①重复渲染(两个卡片) ②上面那个显示截断内容。
+  const allFinished = container.querySelectorAll('.agent-response.finished');
+  if (allFinished.length > 0) {
+    allFinished[allFinished.length - 1].remove();
+  }
+
   // ── 第二步：在历史消息之上，重建本轮流式输出卡片骨架 ──
   beginRoundRender(rt);
   rt.live = true;
