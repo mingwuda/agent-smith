@@ -61,10 +61,9 @@ function showGeneratingBadge(text = t('generating')) {
 }
 
 function removeGeneratingBadge() {
-  if (generatingBadgeEl) {
-    generatingBadgeEl.remove();
-    generatingBadgeEl = null;
-  }
+  // 清理所有残留的 generating-badge（多会话并发时每个会话可能各留下一个）
+  document.querySelectorAll('.generating-badge').forEach(el => el.remove());
+  generatingBadgeEl = null;
 }
 
 // ---------- 流式空闲监测 ----------
@@ -94,6 +93,8 @@ function stopStreamIdleWatch() {
     clearInterval(streamIdleTimer);
     streamIdleTimer = null;
   }
+  // 停止空闲监测时，顺手清理它可能已创建的 badge（避免多会话切换时残留堆积）
+  removeGeneratingBadge();
 }
 
 // ---------- Python 进度 ----------
