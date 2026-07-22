@@ -130,6 +130,8 @@ async function newSessionInProject(projectId) {
     currentSessionId = data.id;
     currentSessionSource = 'web';
     threadId = data.id;
+    // 标记新会话为可见渲染目标（同时把之前可见会话的 live 关掉，使其后台继续运行不渲染）
+    if (typeof setVisibleSessionKey === 'function') setVisibleSessionKey(data.id + '_web');
     // 作废任何仍在途的旧会话加载请求(防止其晚到回写上一会话内容)
     if (typeof _sessionLoadToken !== 'undefined') ++_sessionLoadToken;
     // 重置分页状态, 防止滚动监听器用旧会话的 sessionId 继续往上翻页加载旧消息

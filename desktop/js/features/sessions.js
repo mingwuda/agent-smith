@@ -57,6 +57,8 @@ async function loadSessions() {
     } else {
       renderSessionList(sessionsCache, currentSessionId);
     }
+    // 重建列表后，依据各会话 runtime 状态恢复「正在执行」指示器
+    updateRunIndicators();
   } catch {}
 }
 
@@ -445,30 +447,85 @@ function addBotMessageWithSteps(content, steps, todoList, elapsedMs) {
 async function switchSession(sessionId, source, forceLoad = false) {
   // 切换会话时退出文件浏览器视图（若有）
   if (typeof exitFileBrowser === 'function') exitFileBrowser();
+  source = source || 'web';
+  const targetKey = sessionId + '_' + source;
   if (sessionId === currentSessionId && source === currentSessionSource && !forceLoad) return;
+
+  // 先把「之前可见会话」的 live 关掉（它仍在后台跑的话继续累积事件，只是不再渲染到可见区）
+  setVisibleSessionKey(targetKey);
   currentSessionId = sessionId;
-  currentSessionSource = source || 'web';
+  currentSessionSource = source;
   threadId = sessionId;
+  // 切走时清理上一可见会话遗留的全局「思考中/生成中」指示器（它们不属于新会话）
+  if (typeof hideTyping === 'function') hideTyping();
+  if (typeof removeGeneratingBadge === 'function') removeGeneratingBadge();
 
   // 更新激活样式（同时兼容旧 .session-item 与新 .psession-item）
   document.querySelectorAll('.session-item, .psession-item').forEach(el => {
-    el.classList.toggle('active', el.dataset.key === _sessionKey({id: sessionId, source: currentSessionSource}));
+    el.classList.toggle('active', el.dataset.key === targetKey);
   });
 
   // 在选中的会话项上展示 loading 动画
-  const activeItem = document.querySelector('.session-item.active');
+  const activeItem = document.querySelector('.session-item.active, .psession-item.active');
   if (activeItem) activeItem.classList.add('loading');
 
   try {
-    // 加载该会话的历史消息（内部已立即清空旧消息）
-    await loadSessionMessages(sessionId, currentSessionSource, { limit: 20, offset: -20 });
-    refreshStats();
-    // 加载该会话的工作目录
-    loadWorkspaceDisplay();
+    const rt = sessionRuntimes.get(targetKey);
+    if (rt && rt.status === 'streaming') {
+      // ── 正在后台运行的会话：先加载历史消息，再重建实时画面并续接 ──
+      await reconstructStreamingSession(rt);
+    } else {
+      // 加载该会话的历史消息（内部已立即清空旧消息）
+      await loadSessionMessages(sessionId, source, { limit: 20, offset: -20 });
+      refreshStats();
+      // 加载该会话的工作目录
+      loadWorkspaceDisplay();
+    }
   } finally {
     // 无论成功失败都移除 loading 状态
     if (activeItem) activeItem.classList.remove('loading');
+    updateRunIndicators();
+    // 同步发送按钮 / 全局 streamingActive 到「当前可见会话」的真实状态
+    if (typeof syncStreamingActive === 'function') syncStreamingActive();
   }
+}
+
+// 依据各会话 runtime 状态，给侧边栏会话项加上/去掉「正在执行」指示器（spinner）
+function updateRunIndicators() {
+  document.querySelectorAll('.session-item, .psession-item').forEach(el => {
+    const rt = sessionRuntimes.get(el.dataset.key);
+    el.classList.toggle('running', !!(rt && rt.status === 'streaming'));
+  });
+}
+
+// 切回一个「正在后台运行」的会话：
+// 1. 先加载该会话的历史消息（之前的对话轮次）
+// 2. 再在历史消息之上重建本轮流式输出卡片骨架
+// 3. 回放已缓冲的 SSE 事件重建实时画面
+// 4. 继续接收该会话的实时事件（rt.live=true）
+async function reconstructStreamingSession(rt) {
+  const container = document.getElementById('messages');
+  // ── 第一步：加载历史消息（含之前所有对话轮次）──
+  await loadSessionMessages(rt.sessionId, rt.source, { limit: 20, offset: -20 });
+  // loadSessionMessages 内部已清空容器并渲染历史消息，且做了令牌校验防串会话
+
+  // ── 第二步：在历史消息之上，重建本轮流式输出卡片骨架 ──
+  beginRoundRender(rt);
+  rt.live = true;
+  // ── 第三步：回放缓冲事件 ──
+  // 但不设 _isReplaying，以便实时子连接（子代理 EventSource / Python 轮询）在需要时正常建立。
+  _isReconstructing = true;
+  try {
+    rt.events.forEach(ev => {
+      try { _restoreRoundState(rt); handleStreamEvent(ev); _saveRoundState(rt); } catch (e) { console.warn('[reconstruct] 跳过事件', ev.type, e.message); }
+    });
+  } finally {
+    _isReconstructing = false;
+  }
+  // 保证切回时自动跳到最新输出（用户明确要求的体验）
+  container.scrollTop = container.scrollHeight;
+  smartScroll(container);
+  // 之后的实时事件会在 send() 循环中因 rt.live===true 直接渲染进可见区
 }
 
 async function newSession() {
@@ -483,6 +540,8 @@ async function newSession() {
     currentSessionId = data.id;
     currentSessionSource = 'web';
     threadId = data.id;
+    // 标记新会话为可见渲染目标（同时把之前可见会话的 live 关掉，使其后台继续运行不渲染）
+    setVisibleSessionKey(data.id + '_web');
     // 作废任何仍在途的旧会话加载请求(防止其晚到回写上一会话内容)
     ++_sessionLoadToken;
     // 重置分页状态, 防止滚动监听器用旧会话的 sessionId 继续往上翻页加载旧消息

@@ -116,9 +116,11 @@ function closePythonProgress() {
 // ---------- 停止当前运行 ----------
 
 function stopCurrentRun() {
-  if (!isLoading || !currentAbortController) return;
+  // 只停止「当前可见会话」的运行（多会话并发时，其它后台会话不受影响）
+  const rt = sessionRuntimes.get(visibleSessionKey);
+  if (!rt || rt.status !== 'streaming' || !rt.controller) return;
   userStoppedCurrentRun = true;
-  currentAbortController.abort();
+  rt.controller.abort();
   addMessage(t('runStopRequested'), 'system');
   sendBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 16 16"><rect x="3" y="3" width="10" height="10" rx="2" fill="currentColor"/></svg>';
   sendBtn.disabled = true;
@@ -126,36 +128,43 @@ function stopCurrentRun() {
 
 // ---------- 核心 SSE 发送 ----------
 
-async function send() {
-  const text = input.value.trim();
-  const attachments = pendingAttachments.slice();
-  if ((!text && attachments.length === 0) || isLoading) return;
-  
-  addUserMessage(text, attachments);
-  // 推入输入历史
-  if (text) {
-    _msgHistory.push(text);
-    _msgHistoryIndex = -1;
-  }
-  input.value = '';
-  pendingAttachments = [];
-  renderAttachmentPreview();
-  resizeComposer();
-  isLoading = true;
-  userStoppedCurrentRun = false;
-  currentAbortController = new AbortController();
-  // 前端总超时：兜底保护，避免后端/网络异常导致 fetch 永久挂起（后端已有 90s 空闲看门狗 + 重试，这里给更长的上限）
-  let fetchTimedOut = false;
-  const fetchTimeoutMs = 600000;
-  const fetchTimeout = setTimeout(() => {
-    fetchTimedOut = true;
-    if (currentAbortController) currentAbortController.abort();
-  }, fetchTimeoutMs);
-  setSendButtonRunning(true);
-  streamingActive = true;
-  showTyping();
-  
-  // 初始化步骤容器和 bot 消息（三段式卡片）
+// 全局回合状态（handleStreamEvent 内部 80+ 处引用的 11 个隐式全局变量）。
+// 多会话并发时这些变量不能共享——每个会话必须各自持有一份快照，
+// 在渲染该会话事件前恢复、渲染后保存。
+function _saveRoundState(rt) {
+  rt._rs = rt._rs || {};
+  rt._rs.currentStepsEl = currentStepsEl;
+  rt._rs.currentBotMsgEl = currentBotMsgEl;
+  rt._rs.currentFinalContent = currentFinalContent;
+  rt._rs.totalSteps = totalSteps;
+  rt._rs.hasToolCalls = hasToolCalls;
+  rt._rs.generatingBadgeEl = generatingBadgeEl;
+  rt._rs._agentStartTime = _agentStartTime;
+  rt._rs._currentActiveLine = _currentActiveLine;
+  rt._rs._currentProgressLine = _currentProgressLine;
+  rt._rs._subagentToolStep = _subagentToolStep;
+  rt._rs._lastToolImageHtml = _lastToolImageHtml;
+}
+
+function _restoreRoundState(rt) {
+  if (!rt || !rt._rs) return;
+  currentStepsEl = rt._rs.currentStepsEl;
+  currentBotMsgEl = rt._rs.currentBotMsgEl;
+  currentFinalContent = rt._rs.currentFinalContent;
+  totalSteps = rt._rs.totalSteps;
+  hasToolCalls = rt._rs.hasToolCalls;
+  generatingBadgeEl = rt._rs.generatingBadgeEl;
+  _agentStartTime = rt._rs._agentStartTime;
+  _currentActiveLine = rt._rs._currentActiveLine;
+  _currentProgressLine = rt._rs._currentProgressLine;
+  _subagentToolStep = rt._rs._subagentToolStep;
+  _lastToolImageHtml = rt._rs._lastToolImageHtml;
+}
+
+// 创建新一轮「三段式」输出卡片骨架，并初始化本轮所需的全局回合状态。
+// 既被 send()（发起新请求）调用，也被 reconstructStreamingSession()（切回后台运行会话）调用，
+// 两者共用同一套骨架，保证可见区与后台缓冲重建出的画面结构一致。
+function beginRoundRender(rt) {
   currentStepsEl = null;
   currentBotMsgEl = null;
   currentFinalContent = '';
@@ -166,14 +175,12 @@ async function send() {
   _currentActiveLine = null;
   _currentProgressLine = null;
   _subagentToolStep = null;
+  _lastToolImageHtml = null;  // 清空上一轮残留的工具截图，避免串入本轮最终输出
 
-  // 用于挂载本轮卡片的消息容器
   const container = document.getElementById('messages');
-
-  // 创建新的 .agent-response 卡片作为本轮输出容器
   var responseCard = document.createElement('div');
   responseCard.className = 'agent-response';
-  responseCard.dataset.roundId = 'r-' + Date.now();
+  responseCard.dataset.roundId = 'r-' + Date.now() + '-' + (rt ? rt.key : 'x');
 
   // 第一行：头像 + 耗时
   var headerEl = document.createElement('div');
@@ -208,35 +215,96 @@ async function send() {
   _currentProgressLine = progressLineEl;
 
   container.appendChild(responseCard);
-
-  // 将 currentStepsEl 指向 bodyEl（向后兼容现有逻辑）
   currentStepsEl = bodyEl;
 
-  // 启动耗时计时器
-  if (_timerInterval) clearInterval(_timerInterval);
-  _timerInterval = setInterval(function() {
+  // 物理移除上一轮/上一会话的 todo 面板，避免跨会话泄漏
+  if (_currentTodoPanel && _currentTodoPanel.parentNode) {
+    _currentTodoPanel.remove();
+  }
+  _currentTodoPanel = null;
+
+  // 启动耗时计时器（挂在 runtime 上，避免多会话并发时互相清掉对方的定时器）
+  if (rt && rt._timerInterval) clearInterval(rt._timerInterval);
+  rt._timerInterval = setInterval(function() {
     var elapsed = Date.now() - _agentStartTime;
     var valEl = responseCard.querySelector('.agent-time-val');
     if (valEl) {
       valEl.textContent = formatElapsed(elapsed);
     }
   }, 500);
-  // 物理移除上一轮/上一会话的 todo 面板，避免跨会话泄漏
-  if (_currentTodoPanel && _currentTodoPanel.parentNode) {
-    _currentTodoPanel.remove();
+
+  // 把刚初始化的全局回合状态快照到 runtime（多会话并发隔离关键）
+  _saveRoundState(rt);
+
+  return responseCard;
+}
+
+// 根据「当前可见会话 runtime」的实际状态，派生全局 streamingActive / isLoading，并同步发送按钮。
+// 多会话并发时，这些全局量只代表「可见会话」的状态，而不是任意一个后台会话。
+function syncStreamingActive() {
+  const rt = sessionRuntimes.get(visibleSessionKey);
+  streamingActive = !!(rt && rt.status === 'streaming');
+  isLoading = streamingActive;
+  setSendButtonRunning(streamingActive);
+}
+
+async function send() {
+  const text = input.value.trim();
+  const attachments = pendingAttachments.slice();
+  if ((!text && attachments.length === 0)) return;
+
+  // 目标会话 = 当前可见会话（用户始终对正在看的会话发请求）
+  const targetSessionId = currentSessionId || threadId;
+  const targetSource = currentSessionSource || 'web';
+  const targetKey = visibleSessionKey || (targetSessionId + '_' + targetSource);
+  const rt = getOrCreateRuntime(targetSessionId, targetSource);
+  // 该会话仍在执行中：不重复发起（再次回车会走 stopCurrentRun 停止逻辑）
+  if (rt.status === 'streaming') return;
+
+  addUserMessage(text, attachments);
+  // 推入输入历史
+  if (text) {
+    _msgHistory.push(text);
+    _msgHistoryIndex = -1;
   }
-  _currentTodoPanel = null;  // 新任务重新创建 todo 面板
-  _lastToolImageHtml = null;  // ponytail: 清空上一轮残留的工具截图，避免串入本轮最终输出
+  input.value = '';
+  pendingAttachments = [];
+  renderAttachmentPreview();
+  resizeComposer();
+  userStoppedCurrentRun = false;
+  rt.status = 'streaming';
+  rt.controller = new AbortController();
+  rt.events = [];
+  rt.live = true;
+  setVisibleSessionKey(targetKey);
+  // 立即在侧边栏标记该会话为「正在执行」，显示 loading 图标（否则要等到 finally / 60s 刷新才会出现）
+  if (typeof updateRunIndicators === 'function') updateRunIndicators();
+  currentAbortController = rt.controller;  // 兼容旧引用
+  // 前端总超时：兜底保护，避免后端/网络异常导致 fetch 永久挂起（后端已有 90s 空闲看门狗 + 重试，这里给更长的上限）
+  let fetchTimedOut = false;
+  const fetchTimeoutMs = 600000;
+  const fetchTimeout = setTimeout(() => {
+    fetchTimedOut = true;
+    if (rt.controller) rt.controller.abort();
+  }, fetchTimeoutMs);
+  setSendButtonRunning(true);
+  streamingActive = true;
+  isLoading = true;
+  showTyping();
+
+  // 初始化本轮卡片骨架（同时被后台会话切回重建复用）
+  beginRoundRender(rt);
   startStreamIdleWatch();
   
   let streamDone = false;
   let gotTerminalEvent = false;
+  let endedWithError = false;
   
   try {
     const res = await fetch(`/run/stream`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      signal: currentAbortController.signal,
+      signal: rt.controller.signal,
       body: JSON.stringify({
         message: text,
         thread_id: threadId,
@@ -276,8 +344,14 @@ async function send() {
             continue;
           }
           if (data.type === 'done' || data.type === 'error') gotTerminalEvent = true;
-          markStreamActivity();
-          handleStreamEvent(data);
+          if (data.type === 'error') endedWithError = true;
+          rt.events.push(data);
+          // 后台会话(rt.live=false)也追踪 token 累积内容，确保合成的 done 事件有正确的最终输出
+          if (data.type === 'token' && !rt.live) {
+            rt._accumulatedContent = (rt._accumulatedContent || '') + (data.content || '');
+          }
+          // 仅当该会话是当前可见渲染目标时才渲染进 #messages
+          if (rt.live) { markStreamActivity(); _restoreRoundState(rt); handleStreamEvent(data); _saveRoundState(rt); }
         }
       }
       if (streamDone) break;
@@ -295,21 +369,31 @@ async function send() {
         data = null;
       }
       if (data && (data.type === 'done' || data.type === 'error')) gotTerminalEvent = true;
+      if (data && data.type === 'error') endedWithError = true;
       if (data) {
-        markStreamActivity();
-        handleStreamEvent(data);
+        rt.events.push(data);
+        // 后台会话也追踪 token 累积内容（同主循环）
+        if (data.type === 'token' && !rt.live) {
+          rt._accumulatedContent = (rt._accumulatedContent || '') + (data.content || '');
+        }
+        if (rt.live) { markStreamActivity(); _restoreRoundState(rt); handleStreamEvent(data); _saveRoundState(rt); }
       }
     }
 
     if (streamDone && !gotTerminalEvent) {
-      handleStreamEvent({
-        type: 'done',
-        content: currentFinalContent || t('taskEndedNoFinal'),
-      });
+      // 优先用该会话自己的累积内容(后台会话 rt._accumulatedContent), 其次才 fallback 到全局变量
+      const sessionFinal = (rt._accumulatedContent || currentFinalContent || '').trim();
+      const doneEv = { type: 'done', content: sessionFinal || t('taskEndedNoFinal') };
+      rt.events.push(doneEv);
+      if (rt.live) { _restoreRoundState(rt); handleStreamEvent(doneEv); _saveRoundState(rt); }
     }
     
   } catch (e) {
-    console.error('[SSE] stream error:', e.name, e.message, 'streamingActive:', streamingActive, 'gotTerminalEvent:', gotTerminalEvent);
+    console.error('[SSE] stream error:', e.name, e.message, 'live:', rt.live, 'streamingActive:', streamingActive, 'gotTerminalEvent:', gotTerminalEvent);
+    // 后台会话的异常不应污染「正在看的会话」：仅结束自身（spinner 在 finally 移除），不往可见区注入提示
+    if (!rt.live) {
+      return;
+    }
     if (fetchTimedOut && streamingActive && !gotTerminalEvent) {
       // 前端总超时触发的中止：明确告知用户，并保留已收到的内容
       document.querySelectorAll('.tool-status-dot.running').forEach(d => {
@@ -333,28 +417,34 @@ async function send() {
       });
     }
   } finally {
-    stopStreamIdleWatch();
     clearTimeout(fetchTimeout);
     closePythonProgress();
-    hideTyping();
-    // 清理耗时定时器
-    if (_timerInterval) { clearInterval(_timerInterval); _timerInterval = null; }
-    document.querySelectorAll('.thinking-step').forEach(el => el.remove());
-    removeGeneratingBadge();
-    // 兜底：清理页面上所有残留的"执行中"步骤状态
-    document.querySelectorAll('.tool-status-dot.running').forEach(d => {
-      d.className = 'tool-status-dot done';
-    });
-    // 隐藏执行中状态行和进度行（done 事件已处理最终输出）
-    if (_currentActiveLine) { _currentActiveLine.style.display = 'none'; }
-    if (_currentProgressLine) { _currentProgressLine.style.display = 'none'; }
-    streamingActive = false;
-    isLoading = false;
+    // 仅当该会话仍是可见渲染目标时，才清理可见区的「执行中」UI 状态，
+    // 否则会误伤正在看的另一个会话的画面（后台会话结束不应扰动可见区）。
+    if (rt.live) {
+      stopStreamIdleWatch();
+      hideTyping();
+      removeGeneratingBadge();
+      if (_timerInterval) { clearInterval(_timerInterval); _timerInterval = null; }
+      document.querySelectorAll('.thinking-step').forEach(el => el.remove());
+      document.querySelectorAll('.tool-status-dot.running').forEach(d => {
+        d.className = 'tool-status-dot done';
+      });
+      if (_currentActiveLine) { _currentActiveLine.style.display = 'none'; }
+      if (_currentProgressLine) { _currentProgressLine.style.display = 'none'; }
+      input.focus();
+    }
+    if (rt._timerInterval) { clearInterval(rt._timerInterval); rt._timerInterval = null; }
+    // 该会话本轮结束（成功/失败/中止都算结束，spinner 应消失）
+    rt.status = endedWithError ? 'error' : 'done';
+    rt.controller = null;
+    rt.live = false;
     currentAbortController = null;
-    setSendButtonRunning(false);
-    input.focus();
+    // 派生态：可见/加载态、运行指示器、侧边栏列表
+    syncStreamingActive();
+    updateRunIndicators();
     refreshStats();
-    loadSessions();
+    loadSessions().finally(updateRunIndicators);
   }
 }
 
@@ -1124,8 +1214,8 @@ function handleStreamEvent(data) {
       break;
     
     case 'token':
-      // 重放历史时跳过
-      if (_isReplaying) break;
+      // 重放历史时跳过；但「切回后台会话」的重建回放需要渲染 token（_isReconstructing 放开）
+      if (_isReplaying && !_isReconstructing) break;
       hideTyping();
       removeThinkingHint();
       removeGeneratingBadge();

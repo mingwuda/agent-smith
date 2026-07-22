@@ -683,6 +683,11 @@
   .psession-item .psi-del { opacity: 0; color: #8e8e93; cursor: pointer; font-size: 11px; padding: 0 2px; }
   .psession-item:hover .psi-del { opacity: 1; }
   .psession-item .psi-del:hover { color: #ff453a; }
+  /* 会话「正在执行」指示器：在元信息后显示旋转 spinner */
+  .psession-item.running .psi-meta::after {
+    content: ''; display:inline-block; width:9px; height:9px; margin-left:5px; vertical-align:middle;
+    border:2px solid #0a84ff; border-top-color:transparent; border-radius:50%; animation:spin .6s linear infinite;
+  }
   .project-new-session { display: flex; align-items: center; gap: 6px; padding: 6px 10px 8px 22px; cursor: pointer; font-size: 12px; color: #8e8e93; }
   .project-new-session:hover { color: #007aff; }
   .project-new-session-inline {

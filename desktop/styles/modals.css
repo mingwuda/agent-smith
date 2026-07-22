@@ -140,6 +140,11 @@
     border-radius:50%; animation:spin .6s linear infinite;
   }
   .session-item.loading .s-del { visibility:hidden; }
+  /* 会话「正在执行」指示器：在标题后显示旋转 spinner（与 .loading 的遮罩 spinner 区分位置，避免重叠） */
+  .session-item.running .s-title::after {
+    content: ''; display:inline-block; width:10px; height:10px; margin-left:6px; vertical-align:middle;
+    border:2px solid #0a84ff; border-top-color:transparent; border-radius:50%; animation:spin .6s linear infinite;
+  }
   .session-item .wechat-icon { font-size:13px; margin-right:4px; vertical-align:middle; }
 
   /* ═══ 数据库设置内部二级页签 ═══ */
