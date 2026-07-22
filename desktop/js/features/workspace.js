@@ -255,25 +255,36 @@ function refreshFileBrowser() {
 }
 
 async function checkUnpushedCommits() {
-  const btn = document.getElementById('fb-push-btn');
-  if (!btn) return;
+  const pushBtn = document.getElementById('fb-push-btn');
+  const pullBtn = document.getElementById('fb-pull-btn');
+  if (!pushBtn || !pullBtn) return;
   try {
     const qs = new URLSearchParams();
     if (currentProjectId) qs.set('project_id', currentProjectId);
     const res = await fetch('/files/unpushed-count?' + qs.toString());
-    if (!res.ok) return;
+    if (!res.ok) {
+      pushBtn.style.display = 'none';
+      pullBtn.style.display = 'none';
+      return;
+    }
     const data = await res.json();
     const count = data.unpushed_count || 0;
     if (count > 0) {
-      btn.style.display = '';
-      btn.title = '推送 ' + count + ' 个未推送提交';
+      pushBtn.style.display = '';
+      pushBtn.title = '推送 ' + count + ' 个未推送提交';
     } else if (count === -1) {
-      btn.style.display = '';
-      btn.title = '推送（未设置 upstream）';
+      pushBtn.style.display = '';
+      pushBtn.title = '推送（未设置 upstream）';
     } else {
-      btn.style.display = 'none';
+      pushBtn.style.display = 'none';
     }
-  } catch (_) {}
+    // 只要接口成功，说明是 git 仓库，显示 pull 按钮
+    pullBtn.style.display = '';
+    pullBtn.title = '拉取远程代码';
+  } catch (_) {
+    if (pushBtn) pushBtn.style.display = 'none';
+    if (pullBtn) pullBtn.style.display = 'none';
+  }
 }
 
 async function pushUnpushedCommits() {
@@ -300,6 +311,36 @@ async function pushUnpushedCommits() {
     if (btn) {
       btn.disabled = false;
       btn.textContent = '⬆️';
+    }
+  }
+}
+
+async function pullCommits() {
+  const btn = document.getElementById('fb-pull-btn');
+  if (!btn || btn.disabled) return;
+  btn.disabled = true;
+  btn.textContent = '⏳';
+  try {
+    const res = await fetch('/files/pull', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project_id: currentProjectId || '' }),
+    });
+    const d = await res.json();
+    if (d.success) {
+      if (typeof showToast === 'function') showToast('✅ ' + (d.output || '拉取成功'));
+      // 拉取后刷新文件树和推送状态
+      refreshFileBrowser();
+      checkUnpushedCommits();
+    } else {
+      alert('拉取失败：\n' + (d.output || '未知错误'));
+    }
+  } catch (e) {
+    alert('拉取失败：' + (e && e.message ? e.message : e));
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = '⬇️';
     }
   }
 }
