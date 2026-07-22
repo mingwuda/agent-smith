@@ -47,15 +47,19 @@
       <button class="fb-back" onclick="exitFileBrowser()">←</button>
       <div class="fb-path" id="fb-current-path"></div>
       <button class="fb-refresh" onclick="refreshFileBrowser()" title="刷新">⟳</button>
-      <button class="fb-changes-btn" id="fb-changes-btn" onclick="toggleChangesView()" title="变更文件">
-        📝<span class="fb-badge" id="fb-changes-badge" style="display:none;"></span>
-      </button>
-      <button class="fb-pull-btn" id="fb-pull-btn" onclick="pullCommits()" title="拉取代码" style="display:none;">
-        ⬇️
-      </button>
-      <button class="fb-push-btn" id="fb-push-btn" onclick="pushUnpushedCommits()" title="推送提交" style="display:none;">
-        ⬆️
-      </button>
+      <button class="fb-more-btn" id="fb-more-btn" onclick="toggleFbMoreMenu()" title="更多操作">▾</button>
+      <div class="fb-more-menu" id="fb-more-menu">
+        <button class="fb-menu-item" id="fb-menu-changes" onclick="toggleChangesView()" title="变更文件">
+          <span class="fb-menu-icon">📝</span> 变更文件
+          <span class="fb-badge" id="fb-changes-badge" style="display:none;"></span>
+        </button>
+        <button class="fb-menu-item" id="fb-menu-pull" onclick="pullCommits()" title="拉取代码">
+          <span class="fb-menu-icon">⬇️</span> 拉取代码
+        </button>
+        <button class="fb-menu-item" id="fb-menu-push" onclick="pushUnpushedCommits()" title="推送提交">
+          <span class="fb-menu-icon">⬆️</span> 推送提交
+        </button>
+      </div>
     </div>
     <div id="file-tree" class="file-tree"></div>
   </div>

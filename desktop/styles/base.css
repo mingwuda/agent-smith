@@ -699,18 +699,46 @@
   /* 文件浏览器模式 */
   .file-browser-panel { flex: 1; display: none; flex-direction: column; min-height: 0; background: #161618; }
   .file-browser-panel.show { display: flex; }
-  .fb-header { display: flex; align-items: center; gap: 6px; padding: 10px 12px; border-bottom: 1px solid #2c2c2e; flex: 0 0 auto; }
-  .fb-header .fb-back, .fb-header .fb-refresh, .fb-header .fb-changes-btn, .fb-header .fb-pull-btn, .fb-header .fb-push-btn { width: 26px; height: 26px; border: none; background: transparent; color: #8e8e93; cursor: pointer; border-radius: 6px; font-size: 14px; }
+  .fb-header { display: flex; align-items: center; gap: 6px; padding: 10px 12px; border-bottom: 1px solid #2c2c2e; flex: 0 0 auto; position: relative; }
+  .fb-header .fb-back, .fb-header .fb-refresh, .fb-header .fb-more-btn { width: 26px; height: 26px; border: none; background: transparent; color: #8e8e93; cursor: pointer; border-radius: 6px; font-size: 14px; }
   .fb-header .fb-back:hover, .fb-header .fb-refresh:hover { background: #2c2c2e; color: #f5f5f7; }
-  .fb-header .fb-pull-btn:hover { background: #2c2c2e; color: #0a84ff; }
-  .fb-header .fb-pull-btn:disabled { opacity: 0.6; cursor: wait; }
-  .fb-header .fb-push-btn:hover { background: #2c2c2e; color: #30d158; }
-  .fb-header .fb-push-btn:disabled { opacity: 0.6; cursor: wait; }
-  .fb-header .fb-changes-btn { position: relative; }
-  .fb-header .fb-changes-btn .fb-badge {
-    position: absolute; top: -4px; right: -6px;
+  .fb-header .fb-more-btn:hover { background: #2c2c2e; color: #f5f5f7; }
+
+  .fb-more-menu {
+    display: none;
+    position: absolute;
+    top: 100%;
+    right: 12px;
+    margin-top: 6px;
+    background: #1c1c1e;
+    border: 1px solid #2c2c2e;
+    border-radius: 10px;
+    padding: 6px;
+    min-width: 180px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    z-index: 1000;
+  }
+  .fb-more-menu.show { display: block; }
+  .fb-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 8px 10px;
+    border: none;
+    background: transparent;
+    color: #f5f5f7;
+    font-size: 13px;
+    cursor: pointer;
+    border-radius: 6px;
+    text-align: left;
+  }
+  .fb-menu-item:hover { background: #2c2c2e; }
+  .fb-menu-item .fb-menu-icon { width: 18px; text-align: center; }
+  .fb-menu-item .fb-badge {
+    margin-left: auto;
     min-width: 16px; height: 16px;
-    padding: 0 4px;
+    padding: 0 5px;
     background: #ff453a;
     color: #fff;
     font-size: 10px;
@@ -718,6 +746,7 @@
     line-height: 16px;
     text-align: center;
     border-radius: 8px;
+  }
     pointer-events: none;
     white-space: nowrap;
   }
