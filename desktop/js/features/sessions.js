@@ -5,6 +5,7 @@
 // ---------- 会话管理 ----------
 
 let currentSessionSource = '';  // 当前会话来源: "web" / "wechat" / ""
+let _sessionLoadToken = 0;      // 会话加载请求令牌: 单调递增, 仅最后一次 loadSessionMessages 可写回 DOM(防切/建会话时旧请求晚到回写)
 
 function _sessionKey(s) {
   return s.id + '_' + s.source;
@@ -61,6 +62,9 @@ async function loadSessions() {
 
 async function loadSessionMessages(sessionId, source, options = {}) {
   const container = document.getElementById('messages');
+  // ponytail: 请求令牌 —— 仅最后一次 loadSessionMessages 可写回 DOM,
+  // 防止切换/新建会话时仍“在途”的旧请求晚到回写, 把上一会话的消息塞进当前面板。
+  const myToken = ++_sessionLoadToken;
   // 立即清空旧消息，避免切换会话时短暂残留上一会话内容
   container.innerHTML = '';
   // 占位：加载中提示（居中、轻量，不阻断滚动）
@@ -75,11 +79,20 @@ async function loadSessionMessages(sessionId, source, options = {}) {
     const offset = options.offset != null ? options.offset : -20;
     const qs = source ? `?source=${encodeURIComponent(source)}&include=lite&limit=${limit}&offset=${offset}` : `?include=lite&limit=${limit}&offset=${offset}`;
     const res = await fetch(`/sessions/${sessionId}/messages/lite${qs}`);
+    // 若期间已发起更新的加载(切换/新建会话), 或当前会话已不是本次要加载的会话,
+    // 本次结果作废, 避免旧会话内容回写进新会话面板。
+    // 注意: newSession() 不调用本函数, 不会自增令牌, 故仅靠令牌守卫不够,
+    // 必须用 sessionId 硬校验当前会话。
+    if (myToken !== _sessionLoadToken) return;
+    if (sessionId !== currentSessionId || (source || 'web') !== (currentSessionSource || 'web')) return;
     // 无论成功失败都先移除加载提示
     const hint = document.getElementById('__session_loading_hint__');
     if (hint) hint.remove();
     if (res.ok) {
       const data = await res.json();
+      // 二次校验: json 解析期间可能又发生了更新的切换/新建
+      if (myToken !== _sessionLoadToken) return;
+      if (sessionId !== currentSessionId || (source || 'web') !== (currentSessionSource || 'web')) return;
       container.innerHTML = '';
       // 重建输入历史
       _msgHistory = [];
@@ -470,6 +483,10 @@ async function newSession() {
     currentSessionId = data.id;
     currentSessionSource = 'web';
     threadId = data.id;
+    // 作废任何仍在途的旧会话加载请求(防止其晚到回写上一会话内容)
+    ++_sessionLoadToken;
+    // 重置分页状态, 防止滚动监听器用旧会话的 sessionId 继续往上翻页加载旧消息
+    _sessionPageState = null;
     // 清空消息区域
     document.getElementById('messages').innerHTML = '';
     addMessage(t('newSessionReady'), 'system');

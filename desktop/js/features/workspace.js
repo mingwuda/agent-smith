@@ -130,6 +130,10 @@ async function newSessionInProject(projectId) {
     currentSessionId = data.id;
     currentSessionSource = 'web';
     threadId = data.id;
+    // 作废任何仍在途的旧会话加载请求(防止其晚到回写上一会话内容)
+    if (typeof _sessionLoadToken !== 'undefined') ++_sessionLoadToken;
+    // 重置分页状态, 防止滚动监听器用旧会话的 sessionId 继续往上翻页加载旧消息
+    if (typeof _sessionPageState !== 'undefined') _sessionPageState = null;
     const box = document.getElementById('messages');
     if (box) box.innerHTML = '';
     addMessage(t('newSessionReady') || '开始新对话', 'system');
