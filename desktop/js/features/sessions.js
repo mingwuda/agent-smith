@@ -451,6 +451,9 @@ async function switchSession(sessionId, source, forceLoad = false) {
   const targetKey = sessionId + '_' + source;
   if (sessionId === currentSessionId && source === currentSessionSource && !forceLoad) return;
 
+  // 记录旧可见会话 key（setVisibleSessionKey 会覆盖它）
+  const prevVisibleKey = visibleSessionKey;
+
   // 先把「之前可见会话」的 live 关掉（它仍在后台跑的话继续累积事件，只是不再渲染到可见区）
   setVisibleSessionKey(targetKey);
   currentSessionId = sessionId;
@@ -460,6 +463,14 @@ async function switchSession(sessionId, source, forceLoad = false) {
   if (typeof hideTyping === 'function') hideTyping();
   if (typeof removeGeneratingBadge === 'function') removeGeneratingBadge();
   if (typeof stopStreamIdleWatch === 'function') stopStreamIdleWatch();
+
+  // 内存回收: 旧可见会话若已完成(done/error), 不再需要保留其 runtime
+  if (prevVisibleKey && prevVisibleKey !== targetKey && typeof sessionRuntimes !== 'undefined') {
+    const prevRt = sessionRuntimes.get(prevVisibleKey);
+    if (prevRt && (prevRt.status === 'done' || prevRt.status === 'error')) {
+      sessionRuntimes.delete(prevVisibleKey);
+    }
+  }
 
   // 更新激活样式（同时兼容旧 .session-item 与新 .psession-item）
   document.querySelectorAll('.session-item, .psession-item').forEach(el => {
@@ -560,6 +571,12 @@ async function deleteSession(sessionId) {
   if (!confirm(t('deleteSessionConfirm'))) return;
   try {
     await fetch(`/sessions/${sessionId}`, { method: 'DELETE' });
+    // 清理该会话所有 source 的 runtime（web/wechat 等）
+    if (typeof sessionRuntimes !== 'undefined') {
+      for (const key of [...sessionRuntimes.keys()]) {
+        if (key.startsWith(sessionId + '_')) sessionRuntimes.delete(key);
+      }
+    }
     if (sessionId === currentSessionId) {
       // 当前会话被删除，切到第一个或新建
       const remaining = sessionsCache.filter(s => s.id !== sessionId || s.source !== currentSessionSource);

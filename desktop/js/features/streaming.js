@@ -442,6 +442,12 @@ async function send() {
     rt.controller = null;
     rt.live = false;
     currentAbortController = null;
+
+    // 内存回收: 后台完成的会话不再需要保留(历史消息从后端加载, reconstruct 不依赖它)
+    // 可见会话暂留——等 switchSession 切走时再清
+    if (visibleSessionKey !== rt.key && typeof sessionRuntimes !== 'undefined') {
+      sessionRuntimes.delete(rt.key);
+    }
     // 派生态：可见/加载态、运行指示器、侧边栏列表
     syncStreamingActive();
     updateRunIndicators();
