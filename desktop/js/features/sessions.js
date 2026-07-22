@@ -456,9 +456,10 @@ async function switchSession(sessionId, source, forceLoad = false) {
   currentSessionId = sessionId;
   currentSessionSource = source;
   threadId = sessionId;
-  // 切走时清理上一可见会话遗留的全局「思考中/生成中」指示器（它们不属于新会话）
+  // 切走时清理上一可见会话遗留的全局「思考中/生成中/空闲监测」指示器（它们不属于新会话）
   if (typeof hideTyping === 'function') hideTyping();
   if (typeof removeGeneratingBadge === 'function') removeGeneratingBadge();
+  if (typeof stopStreamIdleWatch === 'function') stopStreamIdleWatch();
 
   // 更新激活样式（同时兼容旧 .session-item 与新 .psession-item）
   document.querySelectorAll('.session-item, .psession-item').forEach(el => {
@@ -522,6 +523,8 @@ async function reconstructStreamingSession(rt) {
   } finally {
     _isReconstructing = false;
   }
+  // 切回后续接实时事件：重启空闲监测（切走时已停掉）
+  if (typeof startStreamIdleWatch === 'function') startStreamIdleWatch();
   // 保证切回时自动跳到最新输出（用户明确要求的体验）
   container.scrollTop = container.scrollHeight;
   smartScroll(container);

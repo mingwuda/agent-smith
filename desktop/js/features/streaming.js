@@ -419,10 +419,12 @@ async function send() {
   } finally {
     clearTimeout(fetchTimeout);
     closePythonProgress();
+    // 空闲定时器是全局单例，无论该会话是否可见都必须停止（否则后台会话结束后定时器继续跑，
+    // 切到别的会话时不断创建 orphaned "后端仍在处理..." badge）
+    stopStreamIdleWatch();
     // 仅当该会话仍是可见渲染目标时，才清理可见区的「执行中」UI 状态，
     // 否则会误伤正在看的另一个会话的画面（后台会话结束不应扰动可见区）。
     if (rt.live) {
-      stopStreamIdleWatch();
       hideTyping();
       removeGeneratingBadge();
       if (_timerInterval) { clearInterval(_timerInterval); _timerInterval = null; }
