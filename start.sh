@@ -194,7 +194,7 @@ rollback_once() {
 # ── 重启 ──
 if [[ "$ACTION" == "restart" ]]; then
   echo "🔄 重启 Agent..."
-  local commit_before=""
+  commit_before=""
   cd "$SCRIPT_DIR"
   if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     commit_before=$(git rev-parse HEAD 2>/dev/null)
@@ -215,7 +215,7 @@ if [[ "$ACTION" == "restart" ]]; then
   kill_stray_workers
   cd "$SCRIPT_DIR/agent_core"
   nohup "$PYTHON" main.py > "$SCRIPT_DIR/agent.log" 2>&1 &
-  local new_pid=$!
+  new_pid=$!
   echo $! > "$PIDFILE"
   echo "🔄 已启动新版本 (PID: $new_pid)"
 

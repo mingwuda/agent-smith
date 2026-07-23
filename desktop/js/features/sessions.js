@@ -308,6 +308,10 @@ async function expandBotMessagePlaceholder(responseCard, sessionId, messageIndex
 
     _isReplaying = false;
 
+    // 先删掉卡片上已有的最终输出（占位创建时或上一次展开追加的），
+    // 否则每次「展开→折叠→再展开」都会累积复制一份最终输出。
+    responseCard.querySelectorAll(':scope > .agent-final-output').forEach(el => el.remove());
+
     const ans = document.createElement('div');
     ans.className = 'agent-final-output';
     ans.innerHTML = renderMarkdown(content);
