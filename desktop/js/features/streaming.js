@@ -1432,6 +1432,13 @@ function handleStreamEvent(data) {
       }
       _lastToolImageHtml = null;
       addMessage('❌ ' + data.content, 'system');
+
+      // SSE 输出完成后，隐藏整个「工具执行」段
+      var responseCardForError = getResponseCard();
+      if (responseCardForError) {
+        const segToolForError = responseCardForError.querySelector('.seg-tool');
+        if (segToolForError) segToolForError.style.display = 'none';
+      }
       break;
 
     case 'todo':
@@ -1534,6 +1541,12 @@ function handleStreamEvent(data) {
 
       // 收尾：把「第二段·当前执行」里残留的最后一个 step 提升进「第一段·完整历史」
       _promoteCurrentToHistory();
+
+      // SSE 输出完成后，隐藏整个「工具执行」段
+      if (responseCard) {
+        const segTool = responseCard.querySelector('.seg-tool');
+        if (segTool) segTool.style.display = 'none';
+      }
 
       // Done 事件携带最终 todo 清单时，渲染/更新面板（不触发闪烁）
       if (data.todo_list) {
