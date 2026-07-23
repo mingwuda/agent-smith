@@ -45,10 +45,17 @@ function hideTyping() {
 // ---------- 生成中徽章 ----------
 
 function showGeneratingBadge(text = t('generating')) {
-  if (!generatingBadgeEl) {
-    generatingBadgeEl = document.createElement('div');
-    generatingBadgeEl.className = 'generating-badge';
+  // ponytail: DOM 去重 — 不管 generatingBadgeEl 变量状态如何, DOM 里永远最多一个 .generating-badge
+  // (否则 removeGeneratingBadge 把变量置 null 后, 下次调用会创建第二个元素导致堆积)
+  const existing = document.querySelector('.generating-badge');
+  if (existing) {
+    existing.innerHTML = `<span class="spin"></span> ${escapeHtml(unescapeDisplay(text))}`;
+    generatingBadgeEl = existing;
+    smartScroll(messages);
+    return;
   }
+  generatingBadgeEl = document.createElement('div');
+  generatingBadgeEl.className = 'generating-badge';
   generatingBadgeEl.innerHTML = `<span class="spin"></span> ${escapeHtml(unescapeDisplay(text))}`;
   if (currentBotMsgEl) {
     currentBotMsgEl.after(generatingBadgeEl);
