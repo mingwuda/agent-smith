@@ -334,9 +334,10 @@ async function send() {
   // 立即在侧边栏标记该会话为「正在执行」，显示 loading 图标（否则要等到 finally / 60s 刷新才会出现）
   if (typeof updateRunIndicators === 'function') updateRunIndicators();
   currentAbortController = rt.controller;  // 兼容旧引用
-  // 前端总超时：兜底保护，避免后端/网络异常导致 fetch 永久挂起（后端已有 90s 空闲看门狗 + 重试，这里给更长的上限）
+  // 前端总超时：兜底保护，避免后端/网络异常导致 fetch 永久挂起。
+  // 后端已有 180s 硬墙钟超时（fix #1），正常会在那之前以 error 事件收尾；这里给稍长上限（3 分钟）防止误杀合法长生成，同时把最坏白屏从 10 分钟压到 3 分钟。
   let fetchTimedOut = false;
-  const fetchTimeoutMs = 600000;
+  const fetchTimeoutMs = 180000; // fix #3: 600000 -> 180000
   const fetchTimeout = setTimeout(() => {
     fetchTimedOut = true;
     if (rt.controller) rt.controller.abort();

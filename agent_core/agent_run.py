@@ -422,6 +422,9 @@ class AgentRunMixin:
         subagent_end_sent_at = 0.0           # 子代理结束事件发送时间戳
         _subagent_results: list[dict] = []   # 子代理完成后收集的结果（防循环触发时用于生成真实汇总）
         last_model_activity_at = 0.0         # 最后一次模型活动（token/thought/tool）时间戳
+        # fix #1: 单次 LLM 调用硬墙钟超时状态
+        llm_call_in_flight = False           # 当前是否有 LLM 调用在飞（node=agent）
+        llm_silent_since = 0.0               # 硬超时计时钟：上次真实输出/调用开始的时刻；空 keepalive 不刷新
         _stream_chunk_idx = 0                # 当前 LLM 调用的流式 chunk 计数，用于调试首块结构
         
         # 当前 todo 清单数据（随 manage_todo 工具调用更新）
@@ -438,6 +441,9 @@ class AgentRunMixin:
             await self._compact_checkpoint_if_needed(run_config)
             # 从配置读取超时，默认 90 秒
             llm_timeout = getattr(self.config, "llm_timeout_seconds", 90)
+            # fix #1: 单次 LLM 调用的硬墙钟上限（秒）。上游挂起（连接开着但无首 token/无结束）时，
+            # 即便心跳与 RetryableLLM 重试不断刷新现有计时器，此墙钟也会强制终止该轮。
+            llm_hard_timeout = getattr(self.config, "llm_hard_timeout_seconds", 180.0)
             async for event in self._stream_events_with_heartbeat(
                 graph, input_data, run_config, timeout=llm_timeout
             ):
@@ -477,6 +483,20 @@ class AgentRunMixin:
                     continue
                 if event.get("_heartbeat"):
                     now = time.time()
+                    # fix #1: 单次 LLM 调用硬墙钟超时。上游挂起（连接开着但无首 token / 无结束）时，
+                    # 心跳仍规律发出，故在此检测。计时钟只在「真实 token/推理」或「调用开始（且仅当此前无调用在飞）」
+                    # 时刷新；空 keepalive chunk 与 RetryableLLM 的重试（新 run_id 的 on_chat_model_start）都不会重置它。
+                    if llm_call_in_flight and (now - llm_silent_since) >= llm_hard_timeout:
+                        logger.error(
+                            "[stream_run] 单次 LLM 调用硬超时 %.0fs（>=%.0fs），强制终止 tid=%s",
+                            now - llm_silent_since, llm_hard_timeout, tid,
+                        )
+                        yield _sse({
+                            "type": "error",
+                            "content": f"模型单轮响应超时（{int(llm_hard_timeout)} 秒内未返回有效内容），请重试或切换模型。",
+                        })
+                        _done_yielded = True
+                        return
                     # 发送所有正在运行的工具进度
                     for rid, tinfo in list(running_tools.items()):
                         elapsed = int(now - tinfo["started_at"])
@@ -522,6 +542,20 @@ class AgentRunMixin:
                 # ── LLM 调用开始（日志 + 前端状态提示）──
                 if kind == "on_chat_model_start" and node == "agent":
                     graph_steps += 1
+                    # fix #1: 标记 LLM 调用在飞；仅在「此前无调用在飞」时启动硬超时计时钟，
+                    # 这样 RetryableLLM 的重试（新 run_id 的 start）不会把计时钟清零，避免无限挂起。
+                    if not llm_call_in_flight:
+                        llm_silent_since = time.time()
+                    llm_call_in_flight = True
+                    # fix #2: 单轮内周期性压缩。工具步累积使上下文滚雪球时，在每次（首轮之后）LLM 调用
+                    # 开始前触发一次压缩——函数内部按 token 阈值 / 50 条硬上限自判，未超阈值只做轻量读取、不写。
+                    # 此处是改写 checkpoint 最安全的时机：图刚结束上一步 checkpoint 写入、尚未开始本轮 LLM 写入，
+                    # 不与图循环竞争；压缩只影响「下一轮」LLM 上下文，当前在飞调用已加载完消息、不受影响。
+                    if graph_steps >= 2:
+                        try:
+                            await self._compact_checkpoint_if_needed(run_config)
+                        except Exception as exc:
+                            logger.warning("[压缩] 单轮内压缩失败（已忽略，不影响主流程）: %s", exc)
                     _input = event.get("data", {}).get("input", {})
                     run_id = event.get("run_id", "")[:12]
                     # LangChain 回调的 input 结构可能是多层的（list / dict / 嵌套 list），
@@ -583,6 +617,9 @@ class AgentRunMixin:
                     if reasoning_delta:
                         reasoning_buffer += reasoning_delta
                         yield _sse({"type": "reasoning", "content": reasoning_delta})
+                    # fix #1: 真实 token / 推理会刷新硬超时计时钟；空 keepalive chunk 不刷新
+                    if has_content or reasoning_delta:
+                        llm_silent_since = time.time()
                         last_model_activity_at = time.time()
 
                     if has_tool_chunks:
@@ -854,6 +891,8 @@ class AgentRunMixin:
                         yield _sse({"type": "done", "content": final_buffer})
                         break
                 elif kind == "on_chat_model_end" and node == "agent":
+                    # fix #1: 调用正常结束 → 清除在飞标记，硬超时计时钟失效
+                    llm_call_in_flight = False
                     output = event.get("data", {}).get("output")
                     input_tok, output_tok, cached_tok = _extract_usage_tokens(output)
                     run_id = event.get("run_id", "")[:12]
