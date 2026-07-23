@@ -366,9 +366,11 @@ async function send() {
   if (typeof updateRunIndicators === 'function') updateRunIndicators();
   currentAbortController = rt.controller;  // 兼容旧引用
   // 前端总超时：兜底保护，避免后端/网络异常导致 fetch 永久挂起。
-  // 后端已有 180s 硬墙钟超时（fix #1），正常会在那之前以 error 事件收尾；这里给稍长上限（3 分钟）防止误杀合法长生成，同时把最坏白屏从 10 分钟压到 3 分钟。
+  // 后端硬墙钟 200s，且 idle 重试预算约 45s×(2+1)=135s；前端必须给足余量，
+  // 否则后端还在重试恢复，前端 180s 就先掐断连接，导致每次都卡整 3 分钟。
+  // 这里设 5 分钟，确保后端重试序列有机会跑完，同时仍把最坏白屏压在可接受范围。
   let fetchTimedOut = false;
-  const fetchTimeoutMs = 180000; // fix #3: 600000 -> 180000
+  const fetchTimeoutMs = 300000; // 5min，必须 > 后端 llm_hard_timeout_seconds
   const fetchTimeout = setTimeout(() => {
     fetchTimedOut = true;
     if (rt.controller) rt.controller.abort();
