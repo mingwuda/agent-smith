@@ -1,5 +1,5 @@
 """
-统一日志模块 —— 全局日志配置，支持 7 天滚动轮换。
+统一日志模块 —— 每日按日期轮换，自动清理超期日志。
 
 提供 `set_log_context()` / `clear_log_context()`，在请求处理开始时设定
 session_id 和 message_id，后续所有日志行自动携带上下文前缀。
@@ -90,7 +90,7 @@ def setup_logging(
     log_file: str = DEFAULT_LOG_FILE,
     level: Optional[Union[str, int]] = None,
     console: bool = True,
-    backup_count: int = 4,
+    retain_days: int = 7,
 ) -> logging.Logger:
     """初始化全局日志配置。
 
@@ -99,7 +99,7 @@ def setup_logging(
         log_file: 日志文件名，默认 agent.log
         level: 日志级别，默认从环境变量 AGENT_LOG_LEVEL 读取，回退到 INFO
         console: 是否同时输出到控制台，默认 True
-        backup_count: 保留的旧日志文件数，默认 4（共保留约 28 天）
+        retain_days: 保留天数（含当天），默认 7
 
     返回:
         root logger
@@ -143,15 +143,28 @@ def setup_logging(
             return True
     root.addFilter(_NoiseFilter())
 
-    # ── 文件 Handler：每 7 天滚动一次 ──
+    # ── 文件 Handler：每天午夜滚动，保留 retain_days 天 ──
+    # ponytail: 自定义命名 agent.2026-07-23.log（而非默认的 agent.log.2026-07-23）
+    _stem = log_path.stem  # "agent"
+    _ext = log_path.suffix  # ".log"
+
+    def _daily_namer(default_name: str) -> str:
+        """把 agent.log.2026-07-23 → agent.2026-07-23.log"""
+        # default_name = "/path/to/agent.log.2026-07-23"
+        p = Path(default_name)
+        date_part = p.suffixes[-1].lstrip(".")  # "2026-07-23"
+        return str(p.with_name(f"{_stem}.{date_part}{_ext}"))
+
     file_handler = TimedRotatingFileHandler(
         log_path,
-        when="D",
-        interval=7,
-        backupCount=backup_count,
+        when="midnight",
+        interval=1,
+        backupCount=max(0, retain_days - 1),
         encoding="utf-8",
         delay=False,
     )
+    file_handler.namer = _daily_namer
+    file_handler.suffix = "%Y-%m-%d"
     file_handler.setLevel(level)
     file_handler.setFormatter(logging.Formatter(_FILE_FORMAT, datefmt=_DATE_FORMAT))
     file_handler.addFilter(_LOG_CONTEXT_FILTER)
@@ -166,7 +179,7 @@ def setup_logging(
         root.addHandler(console_handler)
 
     _initialized = True
-    root.info("日志系统已初始化, 文件: %s, 级别: %s, 7 天自动滚动", log_path, logging.getLevelName(level))
+    root.info("日志系统已初始化, 文件: %s, 级别: %s, 每日滚动, 保留 %d 天", log_path, logging.getLevelName(level), retain_days)
     return root
 
 
