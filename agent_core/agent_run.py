@@ -38,7 +38,7 @@ from agent_helpers import (
     _SCENE_PROMPTS, _connection_diagnostic, _detect_scene,
     _drop_dangling_tool_call_messages, _dump_context_profile,
     _extract_steps_from_messages, _extract_usage_tokens,
-    _human_content, _is_recursion_limit_error, _message_text,
+    _human_content, _is_recursion_limit_error, _extract_reasoning, _message_text,
     _normalize_messages, _recursion_limit_message, _retry_notifications_ctx,
     _sse, _strip_image_content_from_messages, _synthesize_guard_summary,
     _tool_signature, _truncate,
@@ -402,6 +402,7 @@ class AgentRunMixin:
         input_data = {"messages": input_messages}
         
         thinking_buffer = ""        # 累积推理文本（工具调用前的内容）
+        reasoning_buffer = ""       # 累积推理模型的思考 token（reasoning_content），不进入最终答案
         final_buffer = ""           # 最终回复缓存
         step_count = 0
         in_tool_call = False        # 当前是否正在产生工具调用
@@ -421,6 +422,7 @@ class AgentRunMixin:
         subagent_end_sent_at = 0.0           # 子代理结束事件发送时间戳
         _subagent_results: list[dict] = []   # 子代理完成后收集的结果（防循环触发时用于生成真实汇总）
         last_model_activity_at = 0.0         # 最后一次模型活动（token/thought/tool）时间戳
+        _stream_chunk_idx = 0                # 当前 LLM 调用的流式 chunk 计数，用于调试首块结构
         
         # 当前 todo 清单数据（随 manage_todo 工具调用更新）
         current_todo_list = None
@@ -559,6 +561,29 @@ class AgentRunMixin:
                     chunk = event["data"]["chunk"]
                     has_content = bool(chunk.content)
                     has_tool_chunks = bool(getattr(chunk, "tool_call_chunks", None))
+
+                    # ── 诊断：确认 chunk 中推理字段结构（新增特性上线确认）──
+                    # 只在「有 content / 有推理 token」时打（空 chunk 已靠 end 汇总计数），
+                    # 且每条流最多打 12 条，避免刷屏。
+                    _stream_chunk_idx += 1
+                    if (_stream_chunk_idx <= 2 or has_content or reasoning_delta) and _stream_chunk_idx <= 12:
+                        ak_keys = list(getattr(chunk, "additional_kwargs", {}).keys())
+                        logger.info(
+                            "[推理诊断] chunk#%d content_has=%s reasoning_content_attr=%s ak_keys=%s",
+                            _stream_chunk_idx, has_content,
+                            bool(getattr(chunk, "reasoning_content", None)),
+                            ak_keys,
+                        )
+
+                    # ── 推理模型的思考 token（reasoning_content / thinking）──
+                    # 推理模型先把思考过程逐块流出，最后才输出正文。若不单独捕获，
+                    # 思考阶段正文为空 → 前端长时间空白，且思考过程被静默丢弃。
+                    # 这里实时转发给前端做「思考过程」实时展示，并独立累积（不污染最终答案）。
+                    reasoning_delta = _extract_reasoning(chunk)
+                    if reasoning_delta:
+                        reasoning_buffer += reasoning_delta
+                        yield _sse({"type": "reasoning", "content": reasoning_delta})
+                        last_model_activity_at = time.time()
 
                     if has_tool_chunks:
                         # 已确定本轮为工具轮 → 正文归为推理，不逐字流出，仅累积（轮末作 thought 展示）
@@ -839,9 +864,18 @@ class AgentRunMixin:
                     finish_reason = getattr(output, "response_metadata", {}).get("finish_reason", "") if output else ""
                     # ponytail: 主模型输出被 max_tokens 截断（finish_reason=length）且无工具调用时，
                     # 会被当成最终回答发出半截内容；此处仅标记，流结束处追加提示（自动续写需图层面支持）。
-                    if finish_reason == "length" and not has_tool_calls:
+                    if finish_reason == "length" and not tool_calls:
                         logger.warning("[LLM_END] 模型输出被截断 (finish_reason=length)，最终回答可能不完整")
                         truncated_final = True
+
+                    # ── 诊断汇总：本次 LLM 调用是否下发推理 token（定性此模型是否为推理模型）──
+                    _total_chunks = _stream_chunk_idx
+                    _has_reasoning = bool(reasoning_buffer)
+                    logger.info(
+                        "[推理汇总] 本次调用 chunk 总数=%d 推理 token 长度=%d 是否为推理模型=%s",
+                        _total_chunks, len(reasoning_buffer), _has_reasoning,
+                    )
+                    _stream_chunk_idx = 0  # 重置，供下一轮 LLM 调用重新计数
                     real_ctx = self._ctx_token_sizes.pop(run_id, 0)
                     logger.info(
                         "[LLM_END] run_id=%s tokens=(in=%d out=%d cached=%d real=%d) finish=%s has_tool_calls=%s content=%s",

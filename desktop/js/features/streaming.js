@@ -16,6 +16,11 @@ var _currentProgressLine = null; // 当前进度指示行 DOM
 var _isReplaying = false;
 var _subagentToolStep = null;  // 当前子代理对应的工具调用 step，用于锚定胶囊行位置
 var _llmThinkingAt = 0;        // 最近一次「模型开始思考」的时间戳，用于 ping 时刷新「已等待」计时
+var _reasoningEl = null;       // 当前轮正在实时填充的「思考过程」面板（推理模型专属）
+var _reasoningFadeTimer = null;// 思考完成后「延时 3s 淡出关闭」的定时器
+var _answerBodyEl = null;      // 第三段（最终回答）的 body 容器，token 最终答案挂载于此
+var _historyBodyEl = null;     // 第一段（工作耗时）的「完整历史」容器，承载所有 step
+var _indicatorsEl = null;      // 第二段（当前执行）的固定指示器区（当前动作+进度行），永不被提升进历史
 
 // ---------- 耗时格式化 ----------
 
@@ -83,15 +88,14 @@ function markStreamActivity() {
 function startStreamIdleWatch() {
   stopStreamIdleWatch();
   markStreamActivity();
+  // ponytail: 「后端仍在处理」badge 已移除 —— 思考真空期现由 ping 驱动的
+  // 「正在调用 AI... 已 Ns」进度行 + 第二段工具执行实时覆盖，无需额外 badge。
+  // 这里仅保留「卡片尚未建立」极短窗口的兜底（实际几乎不触发，因 beginRoundRender 同步建卡）。
   streamIdleTimer = setInterval(() => {
     if (!streamingActive) return;
     const idleMs = Date.now() - lastStreamEventAt;
-    if (idleMs > 1800) {
-      if (currentBotMsgEl || currentStepsEl) {
-        showGeneratingBadge(t('stillProcessing'));
-      } else {
-        showTyping();
-      }
+    if (idleMs > 1800 && !currentBotMsgEl && !currentStepsEl) {
+      showTyping();
     }
   }, 800);
 }
@@ -153,6 +157,9 @@ function _saveRoundState(rt) {
   rt._rs._currentProgressLine = _currentProgressLine;
   rt._rs._subagentToolStep = _subagentToolStep;
   rt._rs._lastToolImageHtml = _lastToolImageHtml;
+  rt._rs._reasoningEl = _reasoningEl;
+  rt._rs._answerBodyEl = _answerBodyEl;
+  rt._rs._historyBodyEl = _historyBodyEl;
 }
 
 function _restoreRoundState(rt) {
@@ -168,11 +175,19 @@ function _restoreRoundState(rt) {
   _currentProgressLine = rt._rs._currentProgressLine;
   _subagentToolStep = rt._rs._subagentToolStep;
   _lastToolImageHtml = rt._rs._lastToolImageHtml;
+  _reasoningEl = rt._rs._reasoningEl;
+  _answerBodyEl = rt._rs._answerBodyEl;
+  _historyBodyEl = rt._rs._historyBodyEl;
 }
 
 // 创建新一轮「三段式」输出卡片骨架，并初始化本轮所需的全局回合状态。
 // 既被 send()（发起新请求）调用，也被 reconstructStreamingSession()（切回后台运行会话）调用，
 // 两者共用同一套骨架，保证可见区与后台缓冲重建出的画面结构一致。
+//
+// 三段式结构（每段独立折叠）：
+//   第一段 seg-time   工作耗时    —— 默认折叠
+//   第二段 seg-tool   工具执行    —— 默认展开，顶部实时显示 LLM 思考过程，下方为当前动作+工具卡片
+//   第三段 seg-answer 最终回答    —— 保持现状
 function beginRoundRender(rt) {
   currentStepsEl = null;
   currentBotMsgEl = null;
@@ -185,46 +200,76 @@ function beginRoundRender(rt) {
   _currentProgressLine = null;
   _subagentToolStep = null;
   _lastToolImageHtml = null;  // 清空上一轮残留的工具截图，避免串入本轮最终输出
+  _reasoningEl = null;
+  _answerBodyEl = null;
 
   const container = document.getElementById('messages');
+
   var responseCard = document.createElement('div');
   responseCard.className = 'agent-response';
   responseCard.dataset.roundId = 'r-' + Date.now() + '-' + (rt ? rt.key : 'x');
 
-  // 第一行：头像 + 耗时
-  var headerEl = document.createElement('div');
-  headerEl.className = 'agent-header';
-  headerEl.innerHTML =
-    '<div class="agent-avatar">🤖</div>' +
-    '<span class="agent-toggle-arrow">▶</span>' +
-    '<span class="agent-time"><span class="agent-time-label">工作耗时:</span> <span class="agent-time-val">0s</span></span>';
-  headerEl.onclick = function() {
-    responseCard.classList.toggle('collapsed');
-  };
-  responseCard.appendChild(headerEl);
+  // ── 第一段：工作耗时（默认折叠）── 内部承载「完整的全部 step 历史」
+  var segTime = document.createElement('div');
+  segTime.className = 'seg seg-time collapsed';
+  segTime.innerHTML =
+    '<div class="seg-header">' +
+      '<span class="seg-arrow">▶</span>' +
+      '<div class="agent-avatar">🤖</div>' +
+      '<span class="agent-time"><span class="agent-time-label">工作耗时:</span> <span class="agent-time-val">0s</span></span>' +
+    '</div>' +
+    '<div class="seg-body"><div class="seg-time-summary"></div><div class="seg-history"></div></div>';
+  segTime.querySelector('.seg-header').onclick = function() { segTime.classList.toggle('collapsed'); };
+  responseCard.appendChild(segTime);
+  _historyBodyEl = segTime.querySelector('.seg-history');  // 完整 step 历史进这里
 
-  // 展开区：思考+工具调用
-  var bodyEl = document.createElement('div');
-  bodyEl.className = 'agent-body';
-  responseCard.appendChild(bodyEl);
+  // ── 第二段：当前执行工具（默认展开）── 仅展示「最新的一个 step」，思考面板置顶
+  var segTool = document.createElement('div');
+  segTool.className = 'seg seg-tool';
+  segTool.innerHTML =
+    '<div class="seg-header">' +
+      '<span class="seg-arrow">▶</span>' +
+      '<span class="seg-title">' + escapeHtml(t('toolExecution') || '工具执行') + '</span>' +
+    '</div>' +
+    '<div class="seg-body">' +
+      '<div class="seg-tool-indicators"></div>' +   // 固定：当前动作 + 进度行（永不被提升进历史）
+      '<div class="seg-tool-current"></div>' +       // 仅承载「最新一个 step」，新 step 开始时旧块被提升进历史
+    '</div>';
+  segTool.querySelector('.seg-header').onclick = function() { segTool.classList.toggle('collapsed'); };
+  responseCard.appendChild(segTool);
+  _indicatorsEl = segTool.querySelector('.seg-tool-indicators');
+  var bodyEl = segTool.querySelector('.seg-tool-current');
 
-  // 第二行：当前动作（初始隐藏）
+  // 第二行：当前动作（初始隐藏）—— 放入第二段「固定指示器区」（不被提升）
   var activeLineEl = document.createElement('div');
   activeLineEl.className = 'agent-active-line';
   activeLineEl.style.display = 'none';
-  responseCard.appendChild(activeLineEl);
+  _indicatorsEl.appendChild(activeLineEl);
   _currentActiveLine = activeLineEl;
 
-  // 第三行：进度指示（初始隐藏）
+  // 第三行：进度指示（初始隐藏）—— 放入第二段「固定指示器区」（不被提升）
   var progressLineEl = document.createElement('div');
   progressLineEl.className = 'agent-progress-line';
   progressLineEl.style.display = 'none';
   progressLineEl.innerHTML = '<span class="agent-progress-spinner"></span><span>' + escapeHtml(t('agentPlanning') || 'Agent 正在规划与执行...') + '</span>';
-  responseCard.appendChild(progressLineEl);
+  _indicatorsEl.appendChild(progressLineEl);
   _currentProgressLine = progressLineEl;
 
+  // ── 第三段：最终回答（默认展开）──
+  var segAnswer = document.createElement('div');
+  segAnswer.className = 'seg seg-answer';
+  segAnswer.innerHTML =
+    '<div class="seg-header">' +
+      '<span class="seg-arrow">▶</span>' +
+      '<span class="seg-title">' + escapeHtml(t('finalAnswer') || '最终回答') + '</span>' +
+    '</div>' +
+    '<div class="seg-body"></div>';
+  segAnswer.querySelector('.seg-header').onclick = function() { segAnswer.classList.toggle('collapsed'); };
+  responseCard.appendChild(segAnswer);
+  _answerBodyEl = segAnswer.querySelector('.seg-body');
+
   container.appendChild(responseCard);
-  currentStepsEl = bodyEl;
+  currentStepsEl = bodyEl;  // 工具卡片 / thought / 思考面板 都进第二段 body
 
   // 物理移除上一轮/上一会话的 todo 面板，避免跨会话泄漏
   if (_currentTodoPanel && _currentTodoPanel.parentNode) {
@@ -236,7 +281,7 @@ function beginRoundRender(rt) {
   if (rt && rt._timerInterval) clearInterval(rt._timerInterval);
   rt._timerInterval = setInterval(function() {
     var elapsed = Date.now() - _agentStartTime;
-    var valEl = responseCard.querySelector('.agent-time-val');
+    var valEl = segTime.querySelector('.agent-time-val');
     if (valEl) {
       valEl.textContent = formatElapsed(elapsed);
     }
@@ -482,6 +527,42 @@ function handleStreamEvent(data) {
       container.appendChild(currentStepsEl);
     }
     return currentStepsEl;
+  }
+
+  // 推理模型思考过程面板：把本轮累积的推理文本定稿（markdown 渲染 + 标记已完成）
+  function _finalizeReasoning() {
+    if (!_reasoningEl || !_reasoningEl.isConnected) { _reasoningEl = null; return; }
+    const el = _reasoningEl;
+    const stateEl = el.querySelector('.reasoning-state');
+    if (stateEl) stateEl.textContent = '已完成';
+    const contentEl = el.querySelector('.reasoning-content');
+    if (contentEl) {
+      const raw = contentEl.textContent || '';
+      if (raw.trim()) {
+        try { contentEl.innerHTML = renderMarkdown(raw); }
+        catch (e) { /* 渲染失败则保留纯文本 */ }
+      }
+    }
+    el.classList.add('done');
+    _reasoningEl = null;
+    // 思考完成：延时 3s 后淡出关闭（用户明确要求）
+    clearTimeout(_reasoningFadeTimer);
+    _reasoningFadeTimer = setTimeout(function() {
+      el.classList.add('fading');                 // 触发 CSS opacity 过渡
+      setTimeout(function() { if (el.isConnected) el.remove(); }, 550);  // 真正从 DOM 移除（关闭）
+    }, 3000);
+  }
+
+  // 把「第二段·当前执行」容器里的步骤块（除思考面板外）全部移入「第一段·完整历史」。
+  // 调用时机：每个新 step 开始（thought / tool_start / subagent_start）之前，确保第二段只留最新一个 step。
+  function _promoteCurrentToHistory() {
+    if (!_historyBodyEl || !currentStepsEl) return;
+    const kids = Array.from(currentStepsEl.children);
+    for (const kid of kids) {
+      if (kid.classList && kid.classList.contains('reasoning-block')) continue;  // 思考面板单独管理，不进历史
+      if (kid === _reasoningEl) continue;
+      _historyBodyEl.appendChild(kid);
+    }
   }
 
   // 获取当前 responseCard（向上查找）
@@ -775,6 +856,7 @@ function handleStreamEvent(data) {
   switch (data.type) {
     case 'subagent_start':
       hideTyping();
+      _promoteCurrentToHistory();  // 新 step 开始：把上一个 step 提升进完整历史
       hasToolCalls = true;
       console.log('[胶囊] subagent_start 收到:', data);
       if (!data.capsules || !data.capsules.length) {
@@ -791,7 +873,33 @@ function handleStreamEvent(data) {
       showGeneratingBadge('🔄 正在汇总...');
       break;
 
+    case 'reasoning': {
+      // 推理模型的思考过程（reasoning_content / thinking）：逐块实时填充到「思考过程」面板
+      const delta = data.content || '';
+      if (!delta) break;
+      if (!_reasoningEl || !_reasoningEl.isConnected) {
+        ensureStepsContainer();
+        const block = document.createElement('div');
+        block.className = 'reasoning-block';
+        block.innerHTML =
+          '<div class="reasoning-header">💭 ' + escapeHtml(t('modelThinking') || '模型思考过程') +
+          ' <span class="reasoning-state">思考中…</span></div>' +
+          '<div class="reasoning-content"></div>';
+        // 置于第二段顶部：思考过程在最上，工具执行在其下（用户要求）
+        currentStepsEl.insertBefore(block, currentStepsEl.firstChild);
+        _reasoningEl = block;
+      }
+      const contentEl = _reasoningEl.querySelector('.reasoning-content');
+      if (contentEl) contentEl.textContent += delta;  // 增量追加纯文本，成本低且防 XSS
+      hideTyping();  // 顶部「思考中」让位给可见的思考面板
+      removeGeneratingBadge();
+      smartScroll(container);
+      break;
+    }
+
     case 'thought': {
+      _finalizeReasoning();  // 思考阶段结束（本轮为工具轮）
+      _promoteCurrentToHistory();  // 新 step 开始：把上一个 step 提升进完整历史
       hideTyping();
       removeThinkingHint();
       removeGeneratingBadge();
@@ -820,6 +928,8 @@ function handleStreamEvent(data) {
     }
 
     case 'tool_start':
+      _finalizeReasoning();  // 工具开始 → 思考阶段结束
+      _promoteCurrentToHistory();  // 新 step 开始：把上一个 step 提升进完整历史
       hideTyping();
       removeThinkingHint();
       removeGeneratingBadge();
@@ -1230,6 +1340,7 @@ function handleStreamEvent(data) {
       break;
 
     case 'llm_response':
+      _finalizeReasoning();  // 模型思考阶段结束，定稿「思考过程」面板
       if (!data.has_tool_calls) {
         hideProgressLine();
       }
@@ -1249,6 +1360,7 @@ function handleStreamEvent(data) {
     case 'token':
       // 重放历史时跳过；但「切回后台会话」的重建回放需要渲染 token（_isReconstructing 放开）
       if (_isReplaying && !_isReconstructing) break;
+      _finalizeReasoning();  // 答案开始输出 → 思考阶段结束
       hideTyping();
       removeThinkingHint();
       removeGeneratingBadge();
@@ -1257,7 +1369,9 @@ function handleStreamEvent(data) {
       if (!currentBotMsgEl) {
         currentBotMsgEl = document.createElement('div');
         currentBotMsgEl.className = 'msg bot streaming-final';
-        if (currentStepsEl) {
+        if (_answerBodyEl) {
+          _answerBodyEl.appendChild(currentBotMsgEl);
+        } else if (currentStepsEl) {
           currentStepsEl.after(currentBotMsgEl);
         } else {
           container.appendChild(currentBotMsgEl);
@@ -1321,6 +1435,7 @@ function handleStreamEvent(data) {
       }
 
       // 冻结最终耗时到 header（防止定时器被清后值丢失）
+      var responseCard = getResponseCard();
       var finalElapsed = _agentStartTime ? (Date.now() - _agentStartTime) : 0;
       if (finalElapsed > 0 && responseCard) {
         var fvalEl = responseCard.querySelector('.agent-time-val');
@@ -1328,7 +1443,6 @@ function handleStreamEvent(data) {
       }
 
       // ── 渲染最终输出到 agent-final-output 区域 ──
-      var responseCard = getResponseCard();
       // 标记卡片已完成（CSS 据此隐藏执行状态行；JS 也做 display:none 双保险）
       if (responseCard) responseCard.classList.add('finished');
       var finalContent = data.content || currentFinalContent || t('taskEndedNoFinal');
@@ -1351,7 +1465,9 @@ function handleStreamEvent(data) {
         finalOutputEl = document.createElement('div');
         finalOutputEl.className = 'agent-final-output';
         finalOutputEl.innerHTML = finalHtml;
-        if (responseCard) {
+        if (_answerBodyEl) {
+          _answerBodyEl.appendChild(finalOutputEl);
+        } else if (responseCard) {
           responseCard.appendChild(finalOutputEl);
         } else {
           container.appendChild(finalOutputEl);
@@ -1366,10 +1482,24 @@ function handleStreamEvent(data) {
       // 重置工具图片缓存
       _lastToolImageHtml = null;
 
-      // ── 兜底：确保最终答案在正确位置 ──
-      if (finalOutputEl && responseCard && finalOutputEl.parentElement !== responseCard) {
+      // ── 兜底：确保最终答案在正确位置（优先第三段 body）──
+      if (finalOutputEl && _answerBodyEl && finalOutputEl.parentElement !== _answerBodyEl) {
+        _answerBodyEl.appendChild(finalOutputEl);
+      } else if (finalOutputEl && responseCard && finalOutputEl.parentElement !== responseCard) {
         responseCard.appendChild(finalOutputEl);
       }
+
+      // 第一段「工作耗时」折叠区填充汇总（共 N 步 · 耗时 X）
+      if (responseCard) {
+        var sumEl = responseCard.querySelector('.seg-time-summary');
+        if (sumEl) {
+          var stepsTxt = totalSteps > 0 ? ('共 ' + totalSteps + ' 步') : '无工具调用';
+          sumEl.textContent = stepsTxt + ' · 耗时 ' + formatElapsed(finalElapsed);
+        }
+      }
+
+      // 收尾：把「第二段·当前执行」里残留的最后一个 step 提升进「第一段·完整历史」
+      _promoteCurrentToHistory();
 
       // Done 事件携带最终 todo 清单时，渲染/更新面板（不触发闪烁）
       if (data.todo_list) {

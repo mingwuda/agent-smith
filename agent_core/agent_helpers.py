@@ -244,6 +244,32 @@ def _message_text(content) -> str:
     return str(content)
 
 
+def _extract_reasoning(chunk) -> str:
+    """从流式 chunk 中抽取推理/思考 token（推理模型专属）。
+
+    不同厂商字段不同，这里做多源兼容：
+      - DeepSeek / 兼容端点（agnes、qwen 推理版等）：chunk.reasoning_content
+        或 chunk.additional_kwargs["reasoning_content"]
+      - Claude extended thinking：chunk.additional_kwargs["thinking"]
+      - 部分封装会把推理放在 additional_kwargs["reasoning"]
+
+    非推理模型这些字段为空，返回 "" 不影响既有逻辑。
+    """
+    if chunk is None:
+        return ""
+    # 1) 直接属性（ChatOpenAI + DeepSeek 网关常直接暴露 reasoning_content）
+    r = getattr(chunk, "reasoning_content", "")
+    if isinstance(r, str) and r:
+        return r
+    # 2) additional_kwargs 兜底（langchain 把非标准字段放这里）
+    ak = getattr(chunk, "additional_kwargs", None) or {}
+    for key in ("reasoning_content", "reasoning", "thinking"):
+        v = ak.get(key)
+        if isinstance(v, str) and v:
+            return v
+    return ""
+
+
 def _normalize_messages(inp):
     """把 LangChain on_chat_model_start 回调的 input 归一化为扁平的消息列表。
 
