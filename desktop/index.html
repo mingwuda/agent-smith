@@ -47,11 +47,10 @@
       <button class="fb-back" onclick="exitFileBrowser()">←</button>
       <div class="fb-path" id="fb-current-path"></div>
       <button class="fb-refresh" onclick="refreshFileBrowser()" title="刷新">⟳</button>
-      <button class="fb-more-btn" id="fb-more-btn" onclick="toggleFbMoreMenu()" title="更多操作">▾</button>
+      <button class="fb-more-btn" id="fb-more-btn" onclick="toggleFbMoreMenu()" title="更多操作">▾<span class="fb-badge" id="fb-changes-badge" style="display:none;"></span></button>
       <div class="fb-more-menu" id="fb-more-menu">
         <button class="fb-menu-item" id="fb-menu-changes" onclick="toggleChangesView()" title="变更文件">
           <span class="fb-menu-icon">📝</span> 变更文件
-          <span class="fb-badge" id="fb-changes-badge" style="display:none;"></span>
         </button>
         <button class="fb-menu-item" id="fb-menu-pull" onclick="pullCommits()" title="拉取代码">
           <span class="fb-menu-icon">⬇️</span> 拉取代码

@@ -700,7 +700,7 @@
   .file-browser-panel { flex: 1; display: none; flex-direction: column; min-height: 0; background: #161618; }
   .file-browser-panel.show { display: flex; }
   .fb-header { display: flex; align-items: center; gap: 6px; padding: 10px 12px; border-bottom: 1px solid #2c2c2e; flex: 0 0 auto; position: relative; }
-  .fb-header .fb-back, .fb-header .fb-refresh, .fb-header .fb-more-btn { width: 26px; height: 26px; border: none; background: transparent; color: #8e8e93; cursor: pointer; border-radius: 6px; font-size: 14px; }
+  .fb-header .fb-back, .fb-header .fb-refresh, .fb-header .fb-more-btn { width: 26px; height: 26px; border: none; background: transparent; color: #8e8e93; cursor: pointer; border-radius: 6px; font-size: 14px; position: relative; }
   .fb-header .fb-back:hover, .fb-header .fb-refresh:hover { background: #2c2c2e; color: #f5f5f7; }
   .fb-header .fb-more-btn:hover { background: #2c2c2e; color: #f5f5f7; }
 
@@ -746,6 +746,22 @@
     line-height: 16px;
     text-align: center;
     border-radius: 8px;
+  }
+  /* 角标在 fb-more-btn 上的定位 */
+  .fb-more-btn .fb-badge {
+    position: absolute;
+    top: -2px;
+    right: -2px;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 5px;
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 16px;
+    text-align: center;
+    border-radius: 8px;
+    background: #ff453a;
+    color: #fff;
   }
     pointer-events: none;
     white-space: nowrap;
