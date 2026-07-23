@@ -16,6 +16,10 @@ var _currentProgressLine = null; // 当前进度指示行 DOM
 var _isReplaying = false;
 var _subagentToolStep = null;  // 当前子代理对应的工具调用 step，用于锚定胶囊行位置
 
+// 悬浮「滚动到底部」按钮状态
+var _scrollBtnVisible = false;
+var _scrollBtnThreshold = 100; // 距底部超过 100px 时显示按钮
+
 // ---------- 耗时格式化 ----------
 
 function formatElapsed(ms) {
@@ -103,6 +107,33 @@ function stopStreamIdleWatch() {
   // 停止空闲监测时，顺手清理它可能已创建的 badge（避免多会话切换时残留堆积）
   removeGeneratingBadge();
 }
+
+// ---------- 悬浮「滚动到底部」按钮 ----------
+
+function initScrollToBottomBtn() {
+  const messages = document.getElementById('messages');
+  const btn = document.getElementById('scroll-to-bottom-btn');
+  if (!messages || !btn) return;
+
+  messages.addEventListener('scroll', function() {
+    const distFromBottom = messages.scrollHeight - messages.scrollTop - messages.clientHeight;
+    const shouldShow = distFromBottom > _scrollBtnThreshold;
+    if (shouldShow !== _scrollBtnVisible) {
+      _scrollBtnVisible = shouldShow;
+      btn.classList.toggle('visible', shouldShow);
+    }
+  });
+}
+
+function scrollToBottomManually() {
+  const messages = document.getElementById('messages');
+  if (messages) {
+    messages.scrollTop = messages.scrollHeight;
+  }
+}
+
+// 确保函数全局可用（HTML onclick 调用）
+window.scrollToBottomManually = scrollToBottomManually;
 
 // ---------- Python 进度 ----------
 

@@ -29,8 +29,9 @@ function escapeId(s) { return s.replace(/[^a-zA-Z0-9_-]/g, '_'); }
 function smartScroll(el) {
   const threshold = 2; // 距底部 ≤2px 才滚动，避免用户翻看时被打断
   const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight <= threshold;
-  // 流式输出期间强制跟随到最新内容，避免用户手动滚屏后漏看新输出
-  if (atBottom || streamingActive) {
+  // ponytail: 仅在用户已处于底部时才自动跟随；streamingActive 不再触发强制滚动，
+  // 避免用户往上翻历史消息时被拽回底部。改为悬浮「向下」按钮手动滚动。
+  if (atBottom) {
     el.scrollTop = el.scrollHeight;
   }
 }
