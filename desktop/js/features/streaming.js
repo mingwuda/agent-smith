@@ -15,6 +15,7 @@ var _currentProgressLine = null; // 当前进度指示行 DOM
 // 会话回放标记：加载历史消息时设为 true，避免重复触发工具副作用
 var _isReplaying = false;
 var _subagentToolStep = null;  // 当前子代理对应的工具调用 step，用于锚定胶囊行位置
+var _llmThinkingAt = 0;        // 最近一次「模型开始思考」的时间戳，用于 ping 时刷新「已等待」计时
 
 // ---------- 耗时格式化 ----------
 
@@ -1207,9 +1208,25 @@ function handleStreamEvent(data) {
       break;
 
     case 'llm_thinking':
-      hideTyping();
+      // ponytail: 不再 hideTyping() —— 保留顶部「思考中」动画条，同时显示卡片内进度行（双保险）。
+      // 否则长思考（首 token 延迟高）期间顶部动画消失，只剩卡片内一行小字，用户误以为卡死。
       removeGeneratingBadge();
+      _llmThinkingAt = Date.now();
       showProgressLine(t('callingAI'));
+      break;
+
+    case 'ping':
+      // ponytail: 后端每 2s 心跳（无运行中工具时发），目的是「避免连接因空闲断开」。
+      // 原前端无此分支，ping 被完全忽略 → 思考真空期零反馈。这里接住它：
+      // 标记流活跃 + 确保可见指示器存在 + 刷新「已等待」计时，让用户明确知道连接还活着。
+      markStreamActivity();
+      if (_currentProgressLine && _currentProgressLine.style.display !== 'none') {
+        const waited = Math.max(0, Math.round((Date.now() - (_llmThinkingAt || _agentStartTime)) / 1000));
+        const txtSpan = _currentProgressLine.querySelector('span:last-child');
+        if (txtSpan) txtSpan.textContent = `${t('callingAI')} · 已 ${waited}s`;
+      } else if (!document.getElementById('loading-bar').classList.contains('show')) {
+        showTyping();
+      }
       break;
 
     case 'llm_response':
