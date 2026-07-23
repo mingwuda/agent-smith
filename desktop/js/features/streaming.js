@@ -22,6 +22,10 @@ var _answerBodyEl = null;      // 第三段（最终回答）的 body 容器，t
 var _historyBodyEl = null;     // 第一段（工作耗时）的「完整历史」容器，承载所有 step
 var _indicatorsEl = null;      // 第二段（当前执行）的固定指示器区（当前动作+进度行），永不被提升进历史
 
+// 悬浮「滚动到底部」按钮状态
+var _scrollBtnVisible = false;
+var _scrollBtnThreshold = 100; // 距底部超过 100px 时显示按钮
+
 // ---------- 耗时格式化 ----------
 
 function formatElapsed(ms) {
@@ -108,6 +112,33 @@ function stopStreamIdleWatch() {
   // 停止空闲监测时，顺手清理它可能已创建的 badge（避免多会话切换时残留堆积）
   removeGeneratingBadge();
 }
+
+// ---------- 悬浮「滚动到底部」按钮 ----------
+
+function initScrollToBottomBtn() {
+  const messages = document.getElementById('messages');
+  const btn = document.getElementById('scroll-to-bottom-btn');
+  if (!messages || !btn) return;
+
+  messages.addEventListener('scroll', function() {
+    const distFromBottom = messages.scrollHeight - messages.scrollTop - messages.clientHeight;
+    const shouldShow = distFromBottom > _scrollBtnThreshold;
+    if (shouldShow !== _scrollBtnVisible) {
+      _scrollBtnVisible = shouldShow;
+      btn.classList.toggle('visible', shouldShow);
+    }
+  });
+}
+
+function scrollToBottomManually() {
+  const messages = document.getElementById('messages');
+  if (messages) {
+    messages.scrollTop = messages.scrollHeight;
+  }
+}
+
+// 确保函数全局可用（HTML onclick 调用）
+window.scrollToBottomManually = scrollToBottomManually;
 
 // ---------- Python 进度 ----------
 

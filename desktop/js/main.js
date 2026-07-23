@@ -29,6 +29,8 @@ setInterval(loadSessions, 60000);
 (async () => {
   applyI18n();
   resetBlockingOverlays();
+  // 初始化悬浮「滚动到底部」按钮
+  if (typeof initScrollToBottomBtn === 'function') initScrollToBottomBtn();
   const ok = await checkHealth();
   await loadCurrentUser();
   await loadSettingsForSwitcher();

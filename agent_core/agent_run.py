@@ -315,7 +315,6 @@ class AgentRunMixin:
                     continue
 
                 if event_task in done:
-                    last_event_at = time.time()
                     try:
                         event = event_task.result()
                     except StopAsyncIteration:
@@ -327,6 +326,10 @@ class AgentRunMixin:
                         # 若用 continue 会陷入无限循环(每轮对同一个已失败 task 调 .result() 反复抛异常)。
                         # 改为 return: 仅产出一次错误事件, 让消费端 async for 自然结束。
                         return
+                    # 只在成功拿到事件时更新 last_event_at — ponytail: 若 event_task 被外部取消,
+                    # CancelledError 在此处抛出, last_event_at 保持原值, 下次心跳时超时检查会触发,
+                    # 产出 _timeout 事件而非被静默取消。
+                    last_event_at = time.time()
                     yield event
                     event_task = asyncio.create_task(event_iter.__anext__())
         finally:
