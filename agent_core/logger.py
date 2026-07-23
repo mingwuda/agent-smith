@@ -1,5 +1,9 @@
 """
-统一日志模块 —— 每日按日期轮换，自动清理超期日志。
+统一日志模块 —— 每日独立日期文件，自动清理超期日志。
+
+每天一个文件: agent.2026-07-23.log, agent.2026-07-22.log, ...
+超过 retain_days 的自动删除。
+午夜自动切换到新一天文件（后台守护线程，无需每天重启）。
 
 提供 `set_log_context()` / `clear_log_context()`，在请求处理开始时设定
 session_id 和 message_id，后续所有日志行自动携带上下文前缀。
@@ -24,7 +28,9 @@ import contextvars
 import logging
 import os
 import sys
-from logging.handlers import TimedRotatingFileHandler
+import threading
+import time
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Optional, Union
 
@@ -85,6 +91,105 @@ class _LogContextFilter(logging.Filter):
 _LOG_CONTEXT_FILTER = _LogContextFilter()
 
 
+class DailyLogFileHandler(logging.FileHandler):
+    """每天一个独立日志文件: agent.2026-07-23.log。
+
+    特性:
+      - 当前文件名自带日期（而非 TimedRotatingFileHandler 那样只有滚动后才有日期后缀）
+      - 后台守护线程每分钟检查日期变更，午夜自动切换到新文件（无需重启）
+      - 启动时自动创建当天文件
+      - 每次 rollover 自动清理超过 retain_days 的旧文件
+      - 兼容 logging.Handler 接口，可直接替换 TimedRotatingFileHandler
+    """
+
+    def __init__(
+        self,
+        log_dir: Union[str, Path],
+        stem: str = "agent",
+        suffix: str = ".log",
+        retain_days: int = 7,
+        encoding: str = "utf-8",
+        delay: bool = False,
+    ) -> None:
+        self.log_dir = Path(log_dir)
+        self.stem = stem
+        self.suffix = suffix
+        self.retain_days = retain_days
+        self._current_date = date.today()
+        self._lock = threading.Lock()
+        self._stop_event = threading.Event()
+
+        # 确保目录存在
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+
+        filepath = self._filepath(self._current_date)
+        super().__init__(str(filepath), encoding=encoding, delay=delay)
+
+        # 启动后台守护线程（每 60s 检查是否跨天）
+        self._watcher = threading.Thread(target=self._watch_midnight, daemon=True, name="log-daily-rotator")
+        self._watcher.start()
+
+    def _filepath(self, d: date) -> Path:
+        return self.log_dir / f"{self.stem}.{d.strftime('%Y-%m-%d')}{self.suffix}"
+
+    def _watch_midnight(self) -> None:
+        """后台线程：每分钟检查日期是否变更，跨天则执行 rollover。"""
+        while not self._stop_event.is_set():
+            self._stop_event.wait(60)  # 每 60s 检查一次
+            if self._stop_event.is_set():
+                break
+            today = date.today()
+            if today != self._current_date:
+                with self._lock:
+                    # double-check after acquiring lock
+                    if today == self._current_date:
+                        continue
+                    self._perform_rollover(today)
+
+    def _perform_rollover(self, new_date: date) -> None:
+        """关闭当前文件、清理超期、打开新日期文件。"""
+        # 先 flush + close 当前流
+        self.flush()
+        if self.stream and not self.stream.closed:
+            try:
+                self.stream.close()
+            except OSError:
+                pass
+
+        self._current_date = new_date
+        new_path = self._filepath(new_date)
+
+        # 清理超期日志
+        self._cleanup_old_logs()
+
+        # 切换到新文件
+        self.baseFilename = str(new_path)
+        self.mode = "a"
+        self.stream = open(self.baseFilename, mode=self.mode, encoding=self.encoding)
+
+    def _cleanup_old_logs(self) -> None:
+        """删除超过 retain_days 的旧日志文件。"""
+        cutoff = date.today() - timedelta(days=self.retain_days)
+        pattern = f"{self.stem}.*{self.suffix}"
+        for f in self.log_dir.glob(pattern):
+            try:
+                # 从文件名提取日期: agent.2026-07-22.log → 2026-07-22
+                name = f.name
+                # 去掉 stem 前缀和 suffix 后缀
+                date_str = name[len(self.stem) + 1:-len(self.suffix)]
+                file_date = date.fromisoformat(date_str)
+                if file_date < cutoff:
+                    f.unlink()
+            except (ValueError, IndexError, OSError):
+                # 文件名不符合预期格式，跳过
+                pass
+
+    def close(self) -> None:
+        self._stop_event.set()
+        with self._lock:
+            super().close()
+
+
 def setup_logging(
     log_dir: Optional[Union[str, Path]] = None,
     log_file: str = DEFAULT_LOG_FILE,
@@ -96,7 +201,7 @@ def setup_logging(
 
     参数:
         log_dir: 日志目录，默认 ~/.desktop_agent/logs
-        log_file: 日志文件名，默认 agent.log
+        log_file: 日志文件名（仅取 stem 部分），默认 agent.log
         level: 日志级别，默认从环境变量 AGENT_LOG_LEVEL 读取，回退到 INFO
         console: 是否同时输出到控制台，默认 True
         retain_days: 保留天数（含当天），默认 7
@@ -118,7 +223,10 @@ def setup_logging(
     log_dir = Path(log_dir)
     log_dir.mkdir(parents=True, exist_ok=True)
 
-    log_path = log_dir / log_file
+    # 从 log_file 提取 stem (如 "agent.log" → stem="agent", suffix=".log")
+    _p = Path(log_file)
+    _stem = _p.stem
+    _ext = _p.suffix or ".log"
 
     # 获取 root logger
     root = logging.getLogger()
@@ -143,28 +251,18 @@ def setup_logging(
             return True
     root.addFilter(_NoiseFilter())
 
-    # ── 文件 Handler：每天午夜滚动，保留 retain_days 天 ──
-    # ponytail: 自定义命名 agent.2026-07-23.log（而非默认的 agent.log.2026-07-23）
-    _stem = log_path.stem  # "agent"
-    _ext = log_path.suffix  # ".log"
+    # ── 文件 Handler：每天一个日期文件，自动清理超期 ──
+    today = date.today()
+    log_path = log_dir / f"{_stem}.{today.strftime('%Y-%m-%d')}{_ext}"
 
-    def _daily_namer(default_name: str) -> str:
-        """把 agent.log.2026-07-23 → agent.2026-07-23.log"""
-        # default_name = "/path/to/agent.log.2026-07-23"
-        p = Path(default_name)
-        date_part = p.suffixes[-1].lstrip(".")  # "2026-07-23"
-        return str(p.with_name(f"{_stem}.{date_part}{_ext}"))
-
-    file_handler = TimedRotatingFileHandler(
-        log_path,
-        when="midnight",
-        interval=1,
-        backupCount=max(0, retain_days - 1),
+    file_handler = DailyLogFileHandler(
+        log_dir,
+        stem=_stem,
+        suffix=_ext,
+        retain_days=retain_days,
         encoding="utf-8",
         delay=False,
     )
-    file_handler.namer = _daily_namer
-    file_handler.suffix = "%Y-%m-%d"
     file_handler.setLevel(level)
     file_handler.setFormatter(logging.Formatter(_FILE_FORMAT, datefmt=_DATE_FORMAT))
     file_handler.addFilter(_LOG_CONTEXT_FILTER)
@@ -179,7 +277,7 @@ def setup_logging(
         root.addHandler(console_handler)
 
     _initialized = True
-    root.info("日志系统已初始化, 文件: %s, 级别: %s, 每日滚动, 保留 %d 天", log_path, logging.getLevelName(level), retain_days)
+    root.info("日志系统已初始化, 文件: %s, 级别: %s, 每日独立文件, 保留 %d 天", log_path, logging.getLevelName(level), retain_days)
     return root
 
 

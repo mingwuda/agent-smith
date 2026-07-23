@@ -44,6 +44,29 @@ def _app_base_dir() -> Path:
     return Path(__file__).resolve().parent.parent  # agent_core/.. = 仓库根
 
 
+def _resolve_today_log() -> Path:
+    """解析当天日志文件路径 (agent.2026-07-23.log)，回退到最新的日志文件。"""
+    from datetime import date as _date
+    log_dir = Path.home() / ".desktop_agent" / "logs"
+    today = _date.today().strftime("%Y-%m-%d")
+    today_path = log_dir / f"agent.{today}.log"
+    if today_path.exists():
+        return today_path
+    # 当天文件不存在（服务未启动过），找最新的日志文件
+    try:
+        files = sorted(
+            log_dir.glob("agent.2*.log"),
+            key=lambda f: f.stat().st_mtime,
+            reverse=True,
+        )
+        if files:
+            return files[0]
+    except OSError:
+        pass
+    # 兜底：返回预期路径（即使不存在，调用方会处理）
+    return today_path
+
+
 def resolve_paths() -> dict:
     base = _app_base_dir()
     return {
@@ -51,7 +74,7 @@ def resolve_paths() -> dict:
         "manifest_path": base / "skills" / ".generated" / "manifest.json",
         "quarantine_dir": base / "skills" / ".quarantine",
         "boot_ok_marker": base / ".boot_ok",
-        "log_file": Path.home() / ".desktop_agent" / "logs" / "agent.log",
+        "log_file": _resolve_today_log(),
     }
 
 
