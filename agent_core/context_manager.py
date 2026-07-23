@@ -89,7 +89,15 @@ def compact_messages(messages: list[BaseMessage], model: str, configured_window:
     while len(recent) > MIN_RECENT_MESSAGES and estimate_messages_tokens(recent) > threshold * 0.65:
         recent = recent[1:]
 
-    older = messages[: len(messages) - len(recent)]
+    # 边界对齐：recent 不能以 tool 消息开头——其父 AIMessage(tool_calls) 会落入 older 被
+    # 摘要成纯文本，留下的 tool 结果就成了孤儿，触发 INVALID_CHAT_HISTORY。把开头的
+    # tool 消息推回 older（一并摘要），保证 recent 从一条非 tool 消息开始。
+    split = len(messages) - len(recent)
+    while split < len(messages) and getattr(messages[split], "type", "") == "tool":
+        split += 1
+    recent = messages[split:]
+
+    older = messages[:split]
     if not older:
         return recent
 

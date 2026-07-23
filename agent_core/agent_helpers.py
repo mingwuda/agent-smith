@@ -550,13 +550,23 @@ def _tool_message_id(message) -> str:
 
 
 def _drop_dangling_tool_call_messages(messages: list) -> tuple[list, bool]:
+    """清理会破坏 LLM 校验（INVALID_CHAT_HISTORY）的两类残缺 tool 消息：
+
+    1) 悬空 AIMessage：带 tool_calls 但后随的 ToolMessage 不齐（取消/超时/截断留下）；
+    2) 孤儿 ToolMessage：前面没有匹配 tool_call 的 tool 消息（多由上下文压缩切片
+       把 AIMessage 切进 older 摘要、只留下 tool 结果导致）。
+
+    按「AI(tool_calls)+其 tool 结果」为一个块整体处理：块完整则整体保留，
+    块残缺则整体丢弃；不属于任何有效块的 tool 消息按孤儿丢弃。
+    """
     result = []
     changed = False
     idx = 0
     while idx < len(messages):
         message = messages[idx]
-        expected_ids = _tool_call_ids(message) if getattr(message, "type", "") == "ai" else set()
-        if expected_ids:
+        mtype = getattr(message, "type", "")
+        if mtype == "ai" and _tool_call_ids(message):
+            expected_ids = _tool_call_ids(message)
             next_idx = idx + 1
             seen_ids: set[str] = set()
             while next_idx < len(messages) and getattr(messages[next_idx], "type", "") == "tool":
@@ -564,10 +574,19 @@ def _drop_dangling_tool_call_messages(messages: list) -> tuple[list, bool]:
                 if tool_call_id:
                     seen_ids.add(tool_call_id)
                 next_idx += 1
-            if not expected_ids.issubset(seen_ids):
+            if expected_ids.issubset(seen_ids):
+                # 块完整：AIMessage 及其全部 tool 结果整体保留
+                result.extend(messages[idx:next_idx])
+            else:
+                # 块残缺：整块丢弃（含已到的部分 tool 结果）
                 changed = True
-                idx = next_idx
-                continue
+            idx = next_idx
+            continue
+        if mtype == "tool":
+            # 孤儿 tool 消息：不在任何有效 AI(tool_calls) 块内，丢弃
+            changed = True
+            idx += 1
+            continue
         result.append(message)
         idx += 1
     return result, changed

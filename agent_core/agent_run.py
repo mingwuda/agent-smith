@@ -68,6 +68,9 @@ class AgentRunMixin:
                 return
         before = estimate_messages_tokens(messages)
         compacted = compact_messages(messages, self.config.model, self.config.context_window_tokens)
+        # 兜底：压缩切片仍可能在边界残留悬空/孤儿 tool 消息，写回前统一自净，
+        # 保证喂给 graph 的历史永远满足 tool_call ↔ ToolMessage 配对（避免 INVALID_CHAT_HISTORY）。
+        compacted, _ = _drop_dangling_tool_call_messages(compacted)
         await self._graph.aupdate_state(run_config, {"messages": checkpoint_replacement(compacted)})
         after = estimate_messages_tokens(compacted)
         logger.info(
