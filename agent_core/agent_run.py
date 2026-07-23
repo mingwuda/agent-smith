@@ -60,8 +60,12 @@ class AgentRunMixin:
         messages = list(values.get("messages") or [])
         if not messages:
             return
+        # 硬上限：消息数超过 50 时强制压缩，避免长会话无限制膨胀
         if not should_compact(messages, self.config.model, self.config.context_window_tokens):
-            return
+            if len(messages) > 50:
+                logger.info("[压缩] 消息数=%d 超过硬上限 50，强制压缩", len(messages))
+            else:
+                return
         before = estimate_messages_tokens(messages)
         compacted = compact_messages(messages, self.config.model, self.config.context_window_tokens)
         await self._graph.aupdate_state(run_config, {"messages": checkpoint_replacement(compacted)})
@@ -102,10 +106,16 @@ class AgentRunMixin:
         messages = list(values.get("messages") or [])
         if not messages:
             return
-        stripped, changed = _strip_image_content_from_messages(messages)
+        
+        # 只扫描最近 20 条消息，更老的直接跳过（不清理，也不扫描）
+        # 避免长会话中每次请求都全量遍历，导致越来越慢
+        recent = messages[-20:]
+        stripped, changed = _strip_image_content_from_messages(recent)
         if changed:
-            logger.info("[_strip_checkpoint_images] 已从 %d 个消息中移除图片/截图引用", len(messages))
-            await graph.aupdate_state(run_config, {"messages": checkpoint_replacement(stripped)})
+            # 只回写最近的消息部分，保留完整历史
+            new_messages = messages[:-20] + stripped if len(messages) > 20 else stripped
+            logger.info("[_strip_checkpoint_images] 已从最近 %d 条消息中移除图片/截图引用（共 %d 条）", len(recent), len(messages))
+            await graph.aupdate_state(run_config, {"messages": checkpoint_replacement(new_messages)})
 
 
     def _thread_key(self, thread_id: str = "") -> str:
@@ -264,16 +274,21 @@ class AgentRunMixin:
         input_data: dict,
         run_config: dict,
         heartbeat_interval: float = 2.0,
+        timeout: float = 90.0,
     ) -> AsyncGenerator[dict, None]:
         """流式获取 LangGraph 事件，并定期产生心跳事件。
 
         心跳事件格式为 {"_heartbeat": True}。此实现用独立的心跳任务替代
         asyncio.shield，避免底层事件任务异常未被消费而触发 asyncio 的
         "exception in shielded future" 告警。
+
+        如果 timeout 秒内无任何事件（LLM/工具卡死），产生 {"_timeout": True} 事件后结束，
+        消费端应据此返回超时错误，避免无限挂起。
         """
         event_iter = graph.astream_events(input_data, run_config, version="v2").__aiter__()
         event_task = asyncio.create_task(event_iter.__anext__())
         heartbeat_task = asyncio.create_task(asyncio.sleep(heartbeat_interval))
+        last_event_at = time.time()
         try:
             while True:
                 done, _pending = await asyncio.wait(
@@ -285,12 +300,22 @@ class AgentRunMixin:
                         heartbeat_task.result()
                     except asyncio.CancelledError:
                         return
+                    now = time.time()
+                    # 超时检查：距上次任何事件已超过 timeout 秒 → 强制结束
+                    if now - last_event_at > timeout:
+                        logger.warning(
+                            "[stream_events] 超时: 距上次事件 %.1fs（阈值 %.1fs），强制结束",
+                            now - last_event_at, timeout,
+                        )
+                        yield {"_timeout": True, "reason": f"no event for {now - last_event_at:.1f}s"}
+                        return
                     logger.debug("[stream_run] 心跳")
                     yield {"_heartbeat": True}
                     heartbeat_task = asyncio.create_task(asyncio.sleep(heartbeat_interval))
                     continue
 
                 if event_task in done:
+                    last_event_at = time.time()
                     try:
                         event = event_task.result()
                     except StopAsyncIteration:
@@ -409,7 +434,23 @@ class AgentRunMixin:
                 len(message),
             )
             await self._compact_checkpoint_if_needed(run_config)
-            async for event in self._stream_events_with_heartbeat(graph, input_data, run_config):
+            # 从配置读取超时，默认 90 秒
+            llm_timeout = getattr(self.config, "llm_timeout_seconds", 90)
+            async for event in self._stream_events_with_heartbeat(
+                graph, input_data, run_config, timeout=llm_timeout
+            ):
+                # ── 超时事件：LLM/工具长时间无响应 ──
+                if event.get("_timeout"):
+                    logger.error(
+                        "[stream_run] 超时: %s，tid=%s",
+                        event.get("reason", "unknown"), tid,
+                    )
+                    yield _sse({
+                        "type": "error",
+                        "content": f"模型响应超时（{llm_timeout} 秒内无响应），请重试或切换模型。",
+                    })
+                    _done_yielded = True
+                    return
                 # 把 RetryableLLM 上报的「空闲超时重试」事件转成 SSE，提示前端正在重试
                 if _retry_notif_list:
                     for _note in _retry_notif_list:

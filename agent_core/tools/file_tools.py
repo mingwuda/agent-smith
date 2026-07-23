@@ -65,7 +65,7 @@ PERMISSION_PREFIX = "__PERMISSION_NEEDED__"  # 前端据此识别"需要授权"
 
 def _invalidate_line_cache(path: str):
     _line_cache.pop(str(path), None)
-    linecache.clearcache()
+    # 不调用 linecache.clearcache()，让 linecache 基于 mtime 自动处理
 
 
 def _get_lines_cached(path: Path) -> list[str]:
@@ -244,7 +244,7 @@ def _fmt_size(size: int) -> str:
 # ═══════════════════════════════════════════════════════════════
 
 @tool
-def read_file(path: str, start_line: int = 0, max_lines: int = 200) -> str:
+def read_file(path: str, start_line: int = 0, max_lines: int = 500) -> str:
     """读取文件内容（支持按行区段）。path 可为工作区相对路径，也可为绝对路径。
 
     参数:
