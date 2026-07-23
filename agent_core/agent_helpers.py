@@ -689,18 +689,55 @@ def _on_llm_idle_retry(attempt: int, reason: str):
         pass
 
 
+def _chunk_has_progress(chunk) -> bool:
+    """判断一个 LLM 流式 chunk 是否代表「真实进展」（应刷新空闲看门狗）。
+
+    仅以下情况算进展：
+      - 有正文 content（非空字符串 / 非空列表）
+      - 有工具调用块 tool_call_chunks
+      - 推理模型的思考 token（reasoning_content 属性，或 additional_kwargs 中的推理字段）
+    空 keepalive chunk（如上游为保活发出的 role-only / 空 data 块）不算进展，
+    否则空闲看门狗会被空包一直重置，导致上游假死时既不超时也不重试。
+    """
+    if chunk is None:
+        return False
+    if getattr(chunk, "content", None):
+        return True
+    if getattr(chunk, "tool_call_chunks", None):
+        return True
+    if getattr(chunk, "reasoning_content", None):
+        return True
+    ak = getattr(chunk, "additional_kwargs", None) or {}
+    if any(k in ak for k in ("reasoning_content", "reasoning", "thinking")):
+        return True
+    return False
+
+
 async def _astream_with_idle_timeout(agen, idle_timeout: float):
-    """包装异步生成器：若首块或任意相邻两块之间的间隔超过 idle_timeout，抛出 asyncio.TimeoutError。"""
+    """包装异步生成器：若首块超时未到，或任意相邻两次「有效进展」之间的间隔超过 idle_timeout，
+    抛出 asyncio.TimeoutError（交由 RetryableLLM 就地重发本次 LLM 调用）。
+
+    ponytail: 用「距上次有效进展」而非「距上次任意 chunk」计时——上游只发空 keepalive 时，
+    空包会不断抵达使 __anext__ 立即返回，若按「任意 chunk」计时则永不触发，retry 失效。
+    """
+    last_progress = time.monotonic()
     try:
         first = await asyncio.wait_for(agen.__anext__(), timeout=idle_timeout)
     except StopAsyncIteration:
         return
+    if _chunk_has_progress(first):
+        last_progress = time.monotonic()
     yield first
     while True:
         try:
             chunk = await asyncio.wait_for(agen.__anext__(), timeout=idle_timeout)
         except StopAsyncIteration:
             return
+        if _chunk_has_progress(chunk):
+            last_progress = time.monotonic()
+        elif time.monotonic() - last_progress > idle_timeout:
+            # 长时间只有空 keepalive、无任何真实进展 → 判超时，触发重试
+            raise asyncio.TimeoutError()
         yield chunk
 
 

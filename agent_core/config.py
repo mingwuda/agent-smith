@@ -116,10 +116,15 @@ class AgentConfig:
     self_healing_interval_seconds: int = 600  # 巡检周期，默认 10min
     api_max_retries: int = 3
     api_timeout_seconds: float = 120.0
-    # LLM 空闲看门狗：模型调用开始后，超过这么多秒没有产出首个 token（或块间停顿过久）即判超时
-    llm_idle_timeout_seconds: float = 90.0
+    # LLM 空闲看门狗：模型调用开始后，超过这么多秒没有产出「有效进展」chunk
+    # （真实正文 / 工具调用 / 推理 token）即判超时。「空 keepalive chunk」不算进展——
+    # 否则上游只发空心跳、真实首 token 永远不来时，看门狗会被空包一直重置而永不触发重试。
+    llm_idle_timeout_seconds: float = 60.0
     # 空闲超时后的重试次数（仅就地重发 LLM 调用，不重启图/重跑工具；0 表示不重试）
-    llm_idle_max_retries: int = 1
+    llm_idle_max_retries: int = 2
+    # 单次 LLM 调用的硬墙钟上限（秒）：即便是有效进展也会刷新，作为兜底，
+    # 必须明显大于 idle 重试总预算（idle × (retries+1) + 退避），否则会抢在重试序列结束前杀掉调用。
+    llm_hard_timeout_seconds: float = 200.0
     api_host_ips: str = ""
     context_window_tokens: int = 0
     tavily_search_enabled: bool = False
@@ -224,6 +229,7 @@ class AgentConfig:
             "AGENT_API_TIMEOUT_SECONDS": ("api_timeout_seconds", float),
             "AGENT_LLM_IDLE_TIMEOUT_SECONDS": ("llm_idle_timeout_seconds", float),
             "AGENT_LLM_IDLE_MAX_RETRIES": ("llm_idle_max_retries", int),
+            "AGENT_LLM_HARD_TIMEOUT_SECONDS": ("llm_hard_timeout_seconds", float),
             "AGENT_API_HOST_IPS": ("api_host_ips", str),
             "AGENT_CONTEXT_WINDOW_TOKENS": ("context_window_tokens", int),
             "TAVILY_SEARCH_ENABLED": ("tavily_search_enabled", _env_bool),
