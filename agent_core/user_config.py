@@ -37,12 +37,18 @@ def get_user_effective_config(user_id: str) -> dict[str, Any]:
     """返回用户生效配置：全局配置 + 用户覆盖字段。"""
     global_cfg = AgentConfig.load()
     user_overrides = _load_user_config(user_id)
+    providers = user_overrides.get("providers", global_cfg.providers)
+    # 为每个 provider 补充 api_key_configured 标记，供前端过滤使用
+    enriched_providers = {}
+    for pid, p in providers.items():
+        enriched_providers[pid] = dict(p)
+        enriched_providers[pid]["api_key_configured"] = bool(str(p.get("api_key", "") or ""))
     merged = {
         "active_provider": user_overrides.get("active_provider", global_cfg.active_provider),
         "model": user_overrides.get("model", global_cfg.model),
         "api_key": user_overrides.get("api_key", global_cfg.api_key),
         "base_url": user_overrides.get("base_url", global_cfg.base_url),
-        "providers": user_overrides.get("providers", global_cfg.providers),
+        "providers": enriched_providers,
         "review_provider_id": user_overrides.get("review_provider_id", global_cfg.review_provider_id),
         "review_model": user_overrides.get("review_model", global_cfg.review_model),
     }

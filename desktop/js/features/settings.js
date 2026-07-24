@@ -86,9 +86,7 @@ function refreshHeaderProviderDropdown(data) {
 }
 
 function toggleProviderDropdown(event) {
-  if (!isAdmin) return;
-  event.stopPropagation();
-  const dropdown = document.getElementById('header-provider-dropdown');
+  event.stopPropagation();  const dropdown = document.getElementById('header-provider-dropdown');
   if (!dropdown || !dropdown.children.length) return;
   const isVisible = dropdown.style.display === 'block';
   // 关闭其他可能的弹出层
