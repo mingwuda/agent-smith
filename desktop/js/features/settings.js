@@ -6,7 +6,6 @@
 if (settingsBtn) settingsBtn.onclick = openSettings;
 if (statusDot) {
   statusDot.onclick = function(e) {
-    if (!isAdmin) return;
     toggleProviderDropdown(e || window.event);
   };
 }
@@ -67,7 +66,7 @@ function refreshHeaderProviderDropdown(data) {
   // 有可切换项时才让状态栏可点击
   const statusText = document.getElementById('status-text');
   if (statusText) {
-    statusText.classList.toggle('clickable', isAdmin && filtered.length > 1);
+    statusText.classList.toggle('clickable', filtered.length > 1);
   }
   
   filtered.forEach(([id, provider]) => {
@@ -104,9 +103,8 @@ document.addEventListener('click', function() {
 });
 
 async function loadSettingsForSwitcher() {
-  if (!isAdmin) return null;
   try {
-    const res = await fetch('/settings');
+    const res = await fetch('/users/me/settings');
     if (!res.ok) return null;
     const data = await res.json();
     refreshHeaderProviderDropdown(data);
@@ -390,13 +388,13 @@ async function restartBackend() {
 }
 
 async function quickSwitchProvider(providerId) {
-  if (!isAdmin || !providerId || !settingsData || !settingsData.providers) return;
+  if (!providerId || !settingsData || !settingsData.providers) return;
   const provider = settingsData.providers[providerId];
-  if (!provider) return;
+  if (!provider) return;  if (!provider) return;
   
   showToast(currentLanguage === 'en' ? 'Switching…' : '切换中…');
   try {
-    const res = await fetch('/settings', {
+    const res = await fetch('/users/me/settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

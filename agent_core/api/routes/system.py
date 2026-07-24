@@ -259,6 +259,27 @@ def get_my_user(request: Request):
     return user
 
 
+@router.get("/users/me/settings")
+def get_my_settings(request: Request):
+    """获取当前用户的设置（继承全局配置，支持 per-user 覆盖）"""
+    uid = _get_current_user(request)
+    if not uid:
+        raise HTTPException(401, "未登录")
+    from user_config import get_user_effective_config
+    return get_user_effective_config(uid)
+
+
+@router.post("/users/me/settings")
+def save_my_settings(req: SettingsRequest, request: Request):
+    """保存当前用户的设置（仅保存到用户级配置，不覆盖全局）"""
+    uid = _get_current_user(request)
+    if not uid:
+        raise HTTPException(401, "未登录")
+    from user_config import save_user_config
+    save_user_config(uid, req.dict(exclude_none=True))
+    return {"status": "ok", "message": "用户设置已保存"}
+
+
 @router.post("/system/restart", response_model=RestartResponse)
 def restart_backend(request: Request):
     """重启后端服务（仅管理员）"""
