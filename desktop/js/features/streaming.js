@@ -517,18 +517,25 @@ async function send() {
     stopStreamIdleWatch();
     // 仅当该会话仍是可见渲染目标时，才清理可见区的「执行中」UI 状态，
     // 否则会误伤正在看的另一个会话的画面（后台会话结束不应扰动可见区）。
+    // 用 try/catch 包裹：这里任何一步抛异常都不能阻断后续的 syncStreamingActive()，
+    // 否则发送按钮无法从「停止(红色)」还原为「发送」（历史 bug 就是 finally 中途抛错导致）。
     if (rt.live) {
-      _finalizeThinking();  // 流结束：确保 thought 顶部面板进入完成淡出
-      hideTyping();
-      removeGeneratingBadge();
-      if (_timerInterval) { clearInterval(_timerInterval); _timerInterval = null; }
-      document.querySelectorAll('.thinking-step').forEach(el => el.remove());
-      document.querySelectorAll('.tool-status-dot.running').forEach(d => {
-        d.className = 'tool-status-dot done';
-      });
-      if (_currentActiveLine) { _currentActiveLine.style.display = 'none'; }
-      if (_currentProgressLine) { _currentProgressLine.style.display = 'none'; }
-      input.focus();
+      try {
+        _finalizeReasoning();  // 流结束：定稿推理模型「思考过程」面板并淡出
+        _finalizeThinking();   // 流结束：确保 thought 顶部面板进入完成淡出
+        hideTyping();
+        removeGeneratingBadge();
+        if (_timerInterval) { clearInterval(_timerInterval); _timerInterval = null; }
+        document.querySelectorAll('.thinking-step').forEach(el => el.remove());
+        document.querySelectorAll('.tool-status-dot.running').forEach(d => {
+          d.className = 'tool-status-dot done';
+        });
+        if (_currentActiveLine) { _currentActiveLine.style.display = 'none'; }
+        if (_currentProgressLine) { _currentProgressLine.style.display = 'none'; }
+        input.focus();
+      } catch (uiErr) {
+        console.error('[send finally] 清理可见区 UI 时出错（不影响按钮还原）:', uiErr);
+      }
     }
     if (rt._timerInterval) { clearInterval(rt._timerInterval); rt._timerInterval = null; }
     // 该会话本轮结束（成功/失败/中止都算结束，spinner 应消失）
@@ -550,6 +557,51 @@ async function send() {
   }
 }
 
+// ---------- 思考/推理面板定稿（模块级：send() finally 与 handleStreamEvent 共用）----------
+// 注意：这两个函数必须在模块作用域，不能嵌套进 handleStreamEvent。
+// 否则 send() 的 finally 块调用 _finalizeThinking() 会抛 ReferenceError，
+// 导致 finally 在 syncStreamingActive() 之前中断，发送按钮无法从「停止(红色)」还原为「发送」。
+
+// 推理模型思考过程面板：把本轮累积的推理文本定稿（markdown 渲染 + 标记已完成）
+function _finalizeReasoning() {
+  if (!_reasoningEl || !_reasoningEl.isConnected) { _reasoningEl = null; return; }
+  const el = _reasoningEl;
+  const stateEl = el.querySelector('.reasoning-state');
+  if (stateEl) stateEl.textContent = '已完成';
+  const contentEl = el.querySelector('.reasoning-content');
+  if (contentEl) {
+    const raw = contentEl.textContent || '';
+    if (raw.trim()) {
+      try { contentEl.innerHTML = renderMarkdown(raw); }
+      catch (e) { /* 渲染失败则保留纯文本 */ }
+    }
+  }
+  el.classList.add('done');
+  _reasoningEl = null;
+  // 思考完成：延时 3s 后淡出关闭（用户明确要求）
+  clearTimeout(_reasoningFadeTimer);
+  _reasoningFadeTimer = setTimeout(function() {
+    el.classList.add('fading');                 // 触发 CSS opacity 过渡
+    setTimeout(function() { if (el.isConnected) el.remove(); }, 550);  // 真正从 DOM 移除（关闭）
+  }, 3000);
+}
+
+// thought 事件在第二段顶部临时显示的思考面板：标记完成并延时 3s 淡出关闭。
+// 与 reasoning 面板逻辑类似，但 thought 内容还会以 .thought-block 形式保留进历史。
+function _finalizeThinking() {
+  if (!_thinkingEl || !_thinkingEl.isConnected) { _thinkingEl = null; return; }
+  const el = _thinkingEl;
+  const stateEl = el.querySelector('.reasoning-state');
+  if (stateEl) stateEl.textContent = '已完成';
+  el.classList.add('done');
+  _thinkingEl = null;
+  clearTimeout(_thinkingFadeTimer);
+  _thinkingFadeTimer = setTimeout(function() {
+    el.classList.add('fading');
+    setTimeout(function() { if (el.isConnected) el.remove(); }, 550);
+  }, 3000);
+}
+
 // ---------- 流式事件处理（巨型 switch） ----------
 
 function handleStreamEvent(data) {
@@ -567,46 +619,6 @@ function handleStreamEvent(data) {
       container.appendChild(currentStepsEl);
     }
     return currentStepsEl;
-  }
-
-  // 推理模型思考过程面板：把本轮累积的推理文本定稿（markdown 渲染 + 标记已完成）
-  function _finalizeReasoning() {
-    if (!_reasoningEl || !_reasoningEl.isConnected) { _reasoningEl = null; return; }
-    const el = _reasoningEl;
-    const stateEl = el.querySelector('.reasoning-state');
-    if (stateEl) stateEl.textContent = '已完成';
-    const contentEl = el.querySelector('.reasoning-content');
-    if (contentEl) {
-      const raw = contentEl.textContent || '';
-      if (raw.trim()) {
-        try { contentEl.innerHTML = renderMarkdown(raw); }
-        catch (e) { /* 渲染失败则保留纯文本 */ }
-      }
-    }
-    el.classList.add('done');
-    _reasoningEl = null;
-    // 思考完成：延时 3s 后淡出关闭（用户明确要求）
-    clearTimeout(_reasoningFadeTimer);
-    _reasoningFadeTimer = setTimeout(function() {
-      el.classList.add('fading');                 // 触发 CSS opacity 过渡
-      setTimeout(function() { if (el.isConnected) el.remove(); }, 550);  // 真正从 DOM 移除（关闭）
-    }, 3000);
-  }
-
-  // thought 事件在第二段顶部临时显示的思考面板：标记完成并延时 3s 淡出关闭。
-  // 与 reasoning 面板逻辑类似，但 thought 内容还会以 .thought-block 形式保留进历史。
-  function _finalizeThinking() {
-    if (!_thinkingEl || !_thinkingEl.isConnected) { _thinkingEl = null; return; }
-    const el = _thinkingEl;
-    const stateEl = el.querySelector('.reasoning-state');
-    if (stateEl) stateEl.textContent = '已完成';
-    el.classList.add('done');
-    _thinkingEl = null;
-    clearTimeout(_thinkingFadeTimer);
-    _thinkingFadeTimer = setTimeout(function() {
-      el.classList.add('fading');
-      setTimeout(function() { if (el.isConnected) el.remove(); }, 550);
-    }, 3000);
   }
 
   // 把「第二段·当前执行」容器里的步骤块（除思考面板外）全部移入「第一段·完整历史」。

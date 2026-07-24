@@ -40,7 +40,7 @@ from agent_helpers import (
     _extract_steps_from_messages, _extract_usage_tokens,
     _human_content, _is_recursion_limit_error, _extract_reasoning, _message_text,
     _normalize_messages, _recursion_limit_message, _retry_notifications_ctx,
-    _sse, _strip_image_content_from_messages, _synthesize_guard_summary,
+    _sse, _strip_image_content_from_messages, _strip_think_tags, _synthesize_guard_summary,
     _tool_signature, _truncate,
 )
 from loop_guard import _detect_tool_loop  # 原版 agent.py:169 的文件中间导入,拆分时需显式补回
@@ -936,13 +936,16 @@ class AgentRunMixin:
                     # 正文已在 on_chat_model_stream 逐字流式发出，这里只补进 final_buffer 供 done 校正，不重复 yield；
                     # 若网关未逐块下发正文（thinking_buffer 为空），回退到 output.content 整块补发，避免最终答案丢失。
                     if not has_tool_calls:
-                        final_text = thinking_buffer
+                        # 剥离内联 <think>...</think> 思考块：部分网关把推理混进正文，
+                        # 若不清理会漏进最终答案。done 携带的是权威内容，前端据此校正，
+                        # 因此即便流式阶段短暂闪过 think 标签，最终答案也会是干净的。
+                        final_text = _strip_think_tags(thinking_buffer)
                         thinking_buffer = ""
                         if final_text:
                             # 已逐字流出，仅补进 final_buffer（done 事件据此校正为权威内容）
                             final_buffer += final_text
                         elif output is not None:
-                            fallback_text = _message_text(getattr(output, "content", "")) or ""
+                            fallback_text = _strip_think_tags(_message_text(getattr(output, "content", "")) or "")
                             if fallback_text:
                                 final_buffer += fallback_text
                                 yield _sse({"type": "token", "content": fallback_text})

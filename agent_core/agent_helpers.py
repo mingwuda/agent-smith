@@ -270,6 +270,30 @@ def _extract_reasoning(chunk) -> str:
     return ""
 
 
+# 匹配内联在正文里的思考块：<think>...</think> / <thinking>...</thinking>
+# 部分网关（DeepSeek-R1 系、某些兼容代理）不把推理放进 reasoning_content 字段，
+# 而是直接混进 chunk.content 里用 think 标签包裹。若不剥离，思考过程会漏进最终答案。
+_THINK_BLOCK_RE = re.compile(r"<think(?:ing)?\b[^>]*>.*?</think(?:ing)?>", re.IGNORECASE | re.DOTALL)
+# 只有起始标签、缺闭合标签的残缺情况（流被截断/网关只发了一半）：从 <think> 一直吃到文本结尾。
+_THINK_OPEN_ONLY_RE = re.compile(r"<think(?:ing)?\b[^>]*>.*\Z", re.IGNORECASE | re.DOTALL)
+
+
+def _strip_think_tags(text: str) -> str:
+    """从最终答案文本里剥离内联的 <think>...</think> / <thinking>...</thinking> 思考块。
+
+    设计目标：只清理明确的 think 标签包裹内容，绝不误伤正常正文。
+    - 成对标签整块删除；
+    - 仅剩起始标签（无闭合）时，删除从起始标签到结尾的残余推理；
+    - 无 think 标签时原样返回（对绝大多数模型零影响）。
+    """
+    if not text or "<think" not in text.lower():
+        return text
+    cleaned = _THINK_BLOCK_RE.sub("", text)
+    cleaned = _THINK_OPEN_ONLY_RE.sub("", cleaned)
+    # 剥离后可能留下多余的首尾空白/连续空行
+    return cleaned.strip()
+
+
 def _normalize_messages(inp):
     """把 LangChain on_chat_model_start 回调的 input 归一化为扁平的消息列表。
 
