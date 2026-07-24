@@ -427,6 +427,12 @@
     margin-left: auto; font-weight: 400; font-size: 11px; color: #9b87d4;
   }
   .reasoning-block.done .reasoning-state { color: #10b981; }
+  .reasoning-header .spin {
+    width: 10px; height: 10px;
+    border: 2px solid #6d4fc4; border-top-color: transparent; border-radius: 50%;
+    animation: spin .6s linear infinite;
+    display: inline-block; vertical-align: middle;
+  }
   .reasoning-block .reasoning-content {
     padding: 8px 14px; color: #4a4458; max-height: 320px; overflow-y: auto;
     white-space: pre-wrap; word-break: break-word;

@@ -18,6 +18,8 @@ var _subagentToolStep = null;  // 当前子代理对应的工具调用 step，�
 var _llmThinkingAt = 0;        // 最近一次「模型开始思考」的时间戳，用于 ping 时刷新「已等待」计时
 var _reasoningEl = null;       // 当前轮正在实时填充的「思考过程」面板（推理模型专属）
 var _reasoningFadeTimer = null;// 思考完成后「延时 3s 淡出关闭」的定时器
+var _thinkingEl = null;        // thought 事件在第二段顶部临时显示的「AI 正在思考...」面板
+var _thinkingFadeTimer = null; // thought 面板「延时 3s 淡出关闭」的定时器
 var _answerBodyEl = null;      // 第三段（最终回答）的 body 容器，token 最终答案挂载于此
 var _historyBodyEl = null;     // 第一段（工作耗时）的「完整历史」容器，承载所有 step
 var _indicatorsEl = null;      // 第二段（当前执行）的固定指示器区（当前动作+进度行），永不被提升进历史
@@ -189,6 +191,7 @@ function _saveRoundState(rt) {
   rt._rs._subagentToolStep = _subagentToolStep;
   rt._rs._lastToolImageHtml = _lastToolImageHtml;
   rt._rs._reasoningEl = _reasoningEl;
+  rt._rs._thinkingEl = _thinkingEl;
   rt._rs._answerBodyEl = _answerBodyEl;
   rt._rs._historyBodyEl = _historyBodyEl;
 }
@@ -207,6 +210,7 @@ function _restoreRoundState(rt) {
   _subagentToolStep = rt._rs._subagentToolStep;
   _lastToolImageHtml = rt._rs._lastToolImageHtml;
   _reasoningEl = rt._rs._reasoningEl;
+  _thinkingEl = rt._rs._thinkingEl;
   _answerBodyEl = rt._rs._answerBodyEl;
   _historyBodyEl = rt._rs._historyBodyEl;
 }
@@ -232,6 +236,7 @@ function beginRoundRender(rt) {
   _subagentToolStep = null;
   _lastToolImageHtml = null;  // 清空上一轮残留的工具截图，避免串入本轮最终输出
   _reasoningEl = null;
+  _thinkingEl = null;
   _answerBodyEl = null;
 
   const container = document.getElementById('messages');
@@ -513,6 +518,7 @@ async function send() {
     // 仅当该会话仍是可见渲染目标时，才清理可见区的「执行中」UI 状态，
     // 否则会误伤正在看的另一个会话的画面（后台会话结束不应扰动可见区）。
     if (rt.live) {
+      _finalizeThinking();  // 流结束：确保 thought 顶部面板进入完成淡出
       hideTyping();
       removeGeneratingBadge();
       if (_timerInterval) { clearInterval(_timerInterval); _timerInterval = null; }
@@ -587,6 +593,22 @@ function handleStreamEvent(data) {
     }, 3000);
   }
 
+  // thought 事件在第二段顶部临时显示的思考面板：标记完成并延时 3s 淡出关闭。
+  // 与 reasoning 面板逻辑类似，但 thought 内容还会以 .thought-block 形式保留进历史。
+  function _finalizeThinking() {
+    if (!_thinkingEl || !_thinkingEl.isConnected) { _thinkingEl = null; return; }
+    const el = _thinkingEl;
+    const stateEl = el.querySelector('.reasoning-state');
+    if (stateEl) stateEl.textContent = '已完成';
+    el.classList.add('done');
+    _thinkingEl = null;
+    clearTimeout(_thinkingFadeTimer);
+    _thinkingFadeTimer = setTimeout(function() {
+      el.classList.add('fading');
+      setTimeout(function() { if (el.isConnected) el.remove(); }, 550);
+    }, 3000);
+  }
+
   // 把「第二段·当前执行」容器里的步骤块（除思考面板外）全部移入「第一段·完整历史」。
   // 调用时机：每个新 step 开始（thought / tool_start / subagent_start）之前，确保第二段只留最新一个 step。
   function _promoteCurrentToHistory() {
@@ -594,6 +616,7 @@ function handleStreamEvent(data) {
     const kids = Array.from(currentStepsEl.children);
     for (const kid of kids) {
       if (kid.classList && kid.classList.contains('reasoning-block')) continue;  // 思考面板单独管理，不进历史
+      if (kid.classList && kid.classList.contains('thinking-step')) continue;    // 「继续分析」动画只留在当前执行区，不进历史
       if (kid === _reasoningEl) continue;
       _historyBodyEl.appendChild(kid);
     }
@@ -889,6 +912,7 @@ function handleStreamEvent(data) {
 
   switch (data.type) {
     case 'subagent_start':
+      _finalizeThinking();  // 子代理开始，结束 thought 顶部面板
       hideTyping();
       _promoteCurrentToHistory();  // 新 step 开始：把上一个 step 提升进完整历史
       hasToolCalls = true;
@@ -933,6 +957,7 @@ function handleStreamEvent(data) {
 
     case 'thought': {
       _finalizeReasoning();  // 思考阶段结束（本轮为工具轮）
+      _finalizeThinking();   // 结束上一个 thought 顶部面板
       _promoteCurrentToHistory();  // 新 step 开始：把上一个 step 提升进完整历史
       hideTyping();
       removeThinkingHint();
@@ -951,18 +976,34 @@ function handleStreamEvent(data) {
       } else {
         thoughtHtml = renderMarkdown(thoughtText);
       }
-      // 渲染为 .thought-block（在 agent-body 内）
+
+      // ── 在第二段顶部临时显示「AI 正在思考...」面板（仅实时流；历史回放只保留记录）
+      if (!_isReplaying) {
+        const thinkBlock = document.createElement('div');
+        thinkBlock.className = 'reasoning-block thinking-block';
+        thinkBlock.innerHTML =
+          '<div class="reasoning-header"><span class="spin"></span> ' + escapeHtml(t('thinking') || 'AI 正在思考...') +
+          ' <span class="reasoning-state">思考中…</span></div>' +
+          '<div class="reasoning-content">' + thoughtHtml + '</div>';
+        currentStepsEl.insertBefore(thinkBlock, currentStepsEl.firstChild);
+        _thinkingEl = thinkBlock;
+      }
+
+      // 同时保留一个 .thought-block 在底部，后续提升进「第一段·工作耗时」历史
       const thoughtDiv = document.createElement('div');
       thoughtDiv.className = 'thought-block';
       thoughtDiv.innerHTML = thoughtHtml;
       currentStepsEl.appendChild(thoughtDiv);
-      showThinkingHint(t('keepAnalyzing'));
+      if (!_isReplaying) {
+        showThinkingHint(t('keepAnalyzing'));
+      }
       smartScroll(container);
       break;
     }
 
     case 'tool_start':
-      _finalizeReasoning();  // 工具开始 → 思考阶段结束
+      _finalizeReasoning();  // 工具开始 → 推理模型思考阶段结束
+      _finalizeThinking();   // 工具开始 → thought 顶部面板结束
       _promoteCurrentToHistory();  // 新 step 开始：把上一个 step 提升进完整历史
       hideTyping();
       removeThinkingHint();
@@ -1337,6 +1378,7 @@ function handleStreamEvent(data) {
       break;
 
     case 'progress':
+      _finalizeThinking();  // 进度更新，结束 thought 顶部面板
       hideTyping();
       removeThinkingHint();
       hasToolCalls = true;
@@ -1375,6 +1417,7 @@ function handleStreamEvent(data) {
 
     case 'llm_response':
       _finalizeReasoning();  // 模型思考阶段结束，定稿「思考过程」面板
+      _finalizeThinking();   // LLM 响应开始，结束 thought 顶部面板
       if (!data.has_tool_calls) {
         hideProgressLine();
       }
@@ -1394,7 +1437,8 @@ function handleStreamEvent(data) {
     case 'token':
       // 重放历史时跳过；但「切回后台会话」的重建回放需要渲染 token（_isReconstructing 放开）
       if (_isReplaying && !_isReconstructing) break;
-      _finalizeReasoning();  // 答案开始输出 → 思考阶段结束
+      _finalizeReasoning();  // 答案开始输出 → 推理模型思考阶段结束
+      _finalizeThinking();   // 答案开始输出 → thought 顶部面板结束
       hideTyping();
       removeThinkingHint();
       removeGeneratingBadge();
@@ -1418,6 +1462,7 @@ function handleStreamEvent(data) {
       break;
 
     case 'error':
+      _finalizeThinking();  // 出错，结束 thought 顶部面板
       hideTyping();
       removeThinkingHint();
       removeGeneratingBadge();
@@ -1442,6 +1487,7 @@ function handleStreamEvent(data) {
       break;
 
     case 'todo':
+      _finalizeThinking();  // todo 清单更新，结束 thought 顶部面板
       hideTyping();
       removeThinkingHint();
       removeGeneratingBadge();
@@ -1453,6 +1499,7 @@ function handleStreamEvent(data) {
       break;
 
     case 'done':
+      _finalizeThinking();  // 任务完成，结束 thought 顶部面板
       hideTyping();
       removeThinkingHint();
       removeGeneratingBadge();
