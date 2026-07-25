@@ -476,17 +476,23 @@ class AgentRunMixin:
                         })
                     _retry_notif_list.clear()
                 if event.get("_stream_event_error"):
-                    yield _sse({
-                        "type": "tool_result",
-                        "tool": "_stream_events",
-                        "step": step_count,
-                        "result": f"❌ 工具事件流异常: {event['_stream_event_error']}",
-                        "result_full": "",
-                        "error": True,
-                        "diff": None,
-                        "diff_file_path": "",
-                    })
-                    continue
+                    err_msg = str(event["_stream_event_error"])
+                    # 区分「模型超时」与一般性事件流异常，给出可读提示（不再伪装成工具错误卡片）
+                    is_timeout = ("TimeoutError" in err_msg) or ("timed out" in err_msg.lower())
+                    if is_timeout:
+                        logger.error("[stream_run] 模型事件流超时中断 tid=%s: %s", tid, err_msg[:300])
+                        yield _sse({
+                            "type": "error",
+                            "content": "模型响应超时，本次回复已中断，请重试或切换模型。",
+                        })
+                    else:
+                        logger.error("[stream_run] 模型事件流异常 tid=%s: %s", tid, err_msg[:300])
+                        yield _sse({
+                            "type": "error",
+                            "content": f"模型事件流异常，本次回复已中断：{err_msg[:200]}",
+                        })
+                    _done_yielded = True
+                    return
                 if event.get("_heartbeat"):
                     now = time.time()
                     # fix #1: 单次 LLM 调用硬墙钟超时。上游挂起（连接开着但无首 token / 无结束）时，
@@ -541,6 +547,11 @@ class AgentRunMixin:
                             break
                     continue
 
+                # 防御：任何未被上述特殊分支（_timeout/_stream_event_error/_heartbeat/重试通知）命中的
+                # 异常或未知事件，跳过以防 KeyError 崩溃（例如运行旧版代码时冒泡进来的异常字典）。
+                if "event" not in event:
+                    logger.warning("[stream_run] 收到无 'event' 键的未知事件，跳过: keys=%s", list(event.keys()))
+                    continue
                 kind = event["event"]
                 node = event.get("metadata", {}).get("langgraph_node", "")
                 logger.debug("[stream_run] 事件: kind=%s node=%s", kind, node)
