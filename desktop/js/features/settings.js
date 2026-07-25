@@ -135,12 +135,6 @@ function renderProviderFields(providerId) {
   
   document.getElementById('s-model').value = provider.model || '';
   document.getElementById('s-base-url').value = provider.base_url || '';
-  document.getElementById('s-recursion-limit').value = settingsData.recursion_limit || 60;
-  document.getElementById('s-enable-loop-guard').checked = settingsData.enable_loop_guard !== false;
-  document.getElementById('s-api-timeout').value = settingsData.api_timeout_seconds || 120;
-  document.getElementById('s-tavily-enabled').checked = !!settingsData.tavily_search_enabled;
-  document.getElementById('s-tavily-api-key').value = '';
-  document.getElementById('s-tavily-search-url').value = settingsData.tavily_search_url || 'https://api.tavily.com/search';
   document.getElementById('s-api-key').value = '';
   document.getElementById('s-provider-name').value = provider.name || '';
   document.getElementById('s-provider-name-group').classList.toggle('hidden', !isCustom);
@@ -148,13 +142,6 @@ function renderProviderFields(providerId) {
   document.getElementById('s-api-key-hint').textContent = provider.api_key_configured
     ? t('apiKeySaved', { preview: provider.api_key_preview })
     : t('apiKeyNotSaved');
-  document.getElementById('s-tavily-api-key-hint').textContent = settingsData.tavily_api_key_configured
-    ? t('tavilyApiKeySaved', { preview: settingsData.tavily_api_key_preview })
-    : t('tavilyApiKeyNotSaved');
-  document.getElementById('s-anysearch-api-key').value = '';
-  document.getElementById('s-anysearch-api-key-hint').textContent = settingsData.anysearch_api_key_configured
-    ? t('anysearchApiKeySaved', { preview: settingsData.anysearch_api_key_preview })
-    : t('anysearchApiKeyNotSaved');
 
   // ── 审核模型 ──
   var reviewSelect = document.getElementById('s-review-provider');
@@ -554,15 +541,48 @@ function showToast(message, type) {
   }, 2500);
 }
 
-// 把模型超时参数回填到「参数设置」tab 的输入框
+// 把与模型无关的运行/搜索参数回填到「参数设置」tab 的输入框
 function renderParamsFields(data) {
   if (!data) return;
+
+  // ── LLM 超时 ──
   const idle = document.getElementById('s-llm-idle-timeout');
   const retries = document.getElementById('s-llm-idle-retries');
   const hard = document.getElementById('s-llm-hard-timeout');
   if (idle) idle.value = data.llm_idle_timeout_seconds ?? 45;
   if (retries) retries.value = data.llm_idle_max_retries ?? 2;
   if (hard) hard.value = data.llm_hard_timeout_seconds ?? 200;
+
+  // ── 任务控制 ──
+  const recursion = document.getElementById('s-recursion-limit');
+  const loopGuard = document.getElementById('s-enable-loop-guard');
+  const apiTimeout = document.getElementById('s-api-timeout');
+  if (recursion) recursion.value = data.recursion_limit || 60;
+  if (loopGuard) loopGuard.checked = data.enable_loop_guard !== false;
+  if (apiTimeout) apiTimeout.value = data.api_timeout_seconds || 120;
+
+  // ── 搜索 ──
+  const tavilyEnabled = document.getElementById('s-tavily-enabled');
+  const tavilyKey = document.getElementById('s-tavily-api-key');
+  const tavilyUrl = document.getElementById('s-tavily-search-url');
+  const tavilyHint = document.getElementById('s-tavily-api-key-hint');
+  const anysearchKey = document.getElementById('s-anysearch-api-key');
+  const anysearchHint = document.getElementById('s-anysearch-api-key-hint');
+  if (tavilyEnabled) tavilyEnabled.checked = !!data.tavily_search_enabled;
+  if (tavilyKey) tavilyKey.value = '';
+  if (tavilyUrl) tavilyUrl.value = data.tavily_search_url || 'https://api.tavily.com/search';
+  if (tavilyHint) {
+    tavilyHint.textContent = data.tavily_api_key_configured
+      ? t('tavilyApiKeySaved', { preview: data.tavily_api_key_preview })
+      : t('tavilyApiKeyNotSaved');
+  }
+  if (anysearchKey) anysearchKey.value = '';
+  if (anysearchHint) {
+    anysearchHint.textContent = data.anysearch_api_key_configured
+      ? t('anysearchApiKeySaved', { preview: data.anysearch_api_key_preview })
+      : t('anysearchApiKeyNotSaved');
+  }
+
   // 联动前端 fetch 总超时：留 30s 余量，且不小于 5 分钟，避免前端比后端硬超时先掐断
   if (typeof setFrontendFetchTimeoutMs === 'function' && data.llm_hard_timeout_seconds) {
     setFrontendFetchTimeoutMs((Number(data.llm_hard_timeout_seconds) + 30) * 1000);
