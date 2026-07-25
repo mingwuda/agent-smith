@@ -6,7 +6,7 @@
 """
 from agent_core.main import app  # noqa: F401  触发 sys.path 注入
 from agent_core.agent_helpers import _drop_dangling_tool_call_messages
-from agent_core.context_manager import compact_messages, estimate_message_tokens
+from agent_core.context_manager import compact_messages, estimate_messages_tokens
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 
@@ -92,10 +92,29 @@ def test_compact_never_produces_orphan_tool():
     assert not _has_pairing_violation(final)
 
 
+def test_compact_reduces_tokens():
+    # 行为契约：压缩后总 token 必须严格小于压缩前（旧轮被摘要成远短文本）。
+    # 同时验证工具链完整、不以孤儿 tool 消息开头。
+    msgs = [HumanMessage(content="开始")]
+    chinese = "中文" * 600  # ~1200 字 ≈ 1920 token
+    for i in range(15):
+        msgs.append(HumanMessage(content=f"用户第{i}轮 {chinese}"))
+        msgs.append(AIMessage(content=f"助手回复第{i}轮 {chinese}"))
+    before = estimate_messages_tokens(msgs)
+    compacted = compact_messages(msgs, model="deepseek-chat")
+    after = estimate_messages_tokens(compacted)
+    assert compacted, "压缩结果不应为空"
+    assert getattr(compacted[0], "type", "") != "tool", "压缩结果不能以孤儿 tool 消息开头"
+    assert after < before, f"压缩后 {after} 未小于压缩前 {before}，压缩未生效"
+    final, _ = _drop_dangling_tool_call_messages(compacted)
+    assert not _has_pairing_violation(final)
+
+
 if __name__ == "__main__":
     test_drop_dangling_ai_tool_calls()
     test_drop_orphan_tool_message()
     test_keep_valid_tool_block()
     test_partial_tool_results_dropped()
     test_compact_never_produces_orphan_tool()
+    test_compact_reduces_tokens()
     print("ALL PASS")

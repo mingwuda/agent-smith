@@ -17,154 +17,13 @@ from langgraph.graph.message import REMOVE_ALL_MESSAGES
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# ContextPilot integration (optional dependency)
+# 上下文压缩策略
+# 当前采用内置的「最近轮次保留 + 旧轮摘要」方案（见 compact_messages 的 Phase 1 与
+# _summarize_messages）。早期接入的第三方库 ContextPilot（contextpilot-ai，关键词抽取式
+# 摘要）已回退：其对中文+代码混合历史的摘要质量不可靠，且会引入未测试代码路径与事件
+# 循环阻塞风险。若未来要做压缩 A/B 实验，可在此处重新接入，但须补齐依赖锁定、异步包装
+# 与工具链完整性校验。
 # ---------------------------------------------------------------------------
-try:
-    from contextpilot.config import ContextPilotConfig
-    from contextpilot.pipeline import Pipeline
-
-    _HAS_CONTEXTPILOT = True
-except ImportError:
-    _HAS_CONTEXTPILOT = False
-
-_contextpilot_pipeline: Pipeline | None = None
-
-
-def _ensure_contextpilot_pipeline() -> Pipeline | None:
-    """Lazy singleton — init once, reuse across calls (sub-1ms on warm path)."""
-    global _contextpilot_pipeline
-    if _contextpilot_pipeline is not None:
-        return _contextpilot_pipeline
-    if not _HAS_CONTEXTPILOT:
-        return None
-    try:
-        cfg = ContextPilotConfig()
-        cfg.compression.level = "balanced"
-        cfg.compression.history_window = 6
-        cfg.compression.quality_threshold = 68.0  # slightly forgiving for CJK-mixed content
-        _contextpilot_pipeline = Pipeline(cfg)
-        logger.info("ContextPilot pipeline initialised (balanced mode, window=%d, q_threshold=%.1f)",
-                     cfg.compression.history_window, cfg.compression.quality_threshold)
-        return _contextpilot_pipeline
-    except Exception as exc:
-        logger.warning("ContextPilot init failed — falling through to built-in compaction: %s", exc)
-        return None
-
-
-def _messages_to_dicts(messages: list[BaseMessage]) -> list[dict]:
-    """Convert LangChain BaseMessage list → OpenAI-format dict list (ContextPilot input).
-
-    Preserves tool_calls so ContextPilot's strategies (which only touch `content`)
-    pass them through intact for recent verbatim turns.
-    """
-    result: list[dict] = []
-    for msg in messages:
-        role_map = {"human": "user", "ai": "assistant", "tool": "tool", "system": "system"}
-        d: dict = {"role": role_map.get(getattr(msg, "type", ""), "user")}
-        content = getattr(msg, "content", "") or ""
-        if isinstance(content, list):
-            content = " ".join(
-                c.get("text", "") if isinstance(c, dict) else str(c)
-                for c in content
-            )
-        d["content"] = content
-        name = getattr(msg, "name", None)
-        if name:
-            d["name"] = name
-        if getattr(msg, "type", "") == "tool":
-            d["tool_call_id"] = getattr(msg, "tool_call_id", "")
-        # Preserve tool_calls on assistant messages — ContextPilot leaves them alone
-        tc = getattr(msg, "tool_calls", None)
-        if tc:
-            d["tool_calls"] = [
-                {
-                    "id": t.get("id", ""),
-                    "type": "function",
-                    "function": {
-                        "name": t.get("name", ""),
-                        "arguments": str(t.get("args", {})),
-                    },
-                }
-                for t in tc
-            ]
-        result.append(d)
-    return result
-
-
-def _dicts_to_messages(dicts: list[dict]) -> list[BaseMessage]:
-    """Reverse of _messages_to_dicts — reconstruct BaseMessage list."""
-    result: list[BaseMessage] = []
-    for d in dicts:
-        role = d.get("role", "user")
-        content = d.get("content", "")
-        if role == "system":
-            result.append(SystemMessage(content=content))
-        elif role == "user":
-            result.append(HumanMessage(content=content))
-        elif role == "assistant":
-            tc_raw = d.get("tool_calls")
-            kwargs: dict = {"content": content}
-            if tc_raw:
-                kwargs["tool_calls"] = [
-                    {"id": t["id"], "name": t["function"]["name"],
-                     "args": _safe_parse_args(t["function"].get("arguments", "{}"))}
-                    for t in tc_raw
-                ]
-            result.append(AIMessage(**kwargs))
-        elif role == "tool":
-            result.append(ToolMessage(content=content, tool_call_id=d.get("tool_call_id", "")))
-    return result
-
-
-def _safe_parse_args(raw: str) -> dict:
-    """Parse JSON string to dict; return {} on failure."""
-    import json
-    try:
-        return json.loads(raw)
-    except (json.JSONDecodeError, TypeError):
-        return {}
-
-
-def _contextpilot_compress(messages: list[BaseMessage]) -> list[BaseMessage] | None:
-    """Try ContextPilot compression. Returns compressed msgs or None (skipped/fallback)."""
-    pipeline = _ensure_contextpilot_pipeline()
-    if pipeline is None:
-        return None
-
-    dicts = _messages_to_dicts(messages)
-    try:
-        compressed_dicts, _, event = pipeline.optimize(dicts)
-    except Exception as exc:
-        logger.debug("ContextPilot.optimize() raised: %s", exc)
-        return None
-
-    if event.fallback_triggered:
-        return None  # quality gate didn't pass — keep original
-
-    result = _dicts_to_messages(compressed_dicts)
-
-    # Strip orphan tool messages that arose from history_window boundary:
-    # ContextPilot summarises older turns — if the boundary left a ToolMessage
-    # without its parent AI(tool_calls), drop it to avoid INVALID_CHAT_HISTORY.
-    cleaned: list[BaseMessage] = []
-    pending_tc_ids: set[str] = set()
-    for m in result:
-        t = getattr(m, "type", "")
-        if t == "ai":
-            tc = getattr(m, "tool_calls", None) or []
-            if tc:
-                pending_tc_ids.update(obj["id"] for obj in tc)
-            cleaned.append(m)
-        elif t == "tool":
-            tid = getattr(m, "tool_call_id", "")
-            if tid in pending_tc_ids:
-                pending_tc_ids.discard(tid)
-                cleaned.append(m)
-            # else: orphan → drop silently
-        else:
-            cleaned.append(m)
-
-    return cleaned
 
 
 DEFAULT_CONTEXT_WINDOW_TOKENS = 64000
@@ -213,8 +72,10 @@ def estimate_tokens_for_text(text: str) -> int:
         return 0
     ascii_count = sum(1 for ch in text if ord(ch) < 128)
     non_ascii_count = len(text) - ascii_count
-    # Conservative mixed-language approximation. Chinese/log-heavy text often tokenizes denser than English.
-    return max(1, ascii_count // 4 + non_ascii_count)
+    # 英文 ~4 字符/token；中文/CJK 在主流模型（DeepSeek/Qwen/GLM/GPT 系）下约 1.5~1.8 token/字，
+    # 这里取保守的 1.6。旧实现把每个非 ASCII 字符算 1 token，会严重低估中文上下文，导致长中文
+    # 会话在真正逼近窗口上限前都不触发压缩。统一改用同一估算后，should_compact 与日志更贴近真实。
+    return max(1, ascii_count // 4 + int(non_ascii_count * 1.6))
 
 
 def estimate_message_tokens(message: BaseMessage) -> int:
@@ -243,41 +104,34 @@ def compact_messages(messages: list[BaseMessage], model: str, configured_window:
     if not messages:
         return []
 
-    # Phase 0 — ContextPilot multi-strategy compression (≥5% token reduction, quality-gated)
-    # Falls through silently on import error, quality miss, or negligible gain.
-    if _HAS_CONTEXTPILOT:
-        try:
-            cp_result = _contextpilot_compress(messages)
-            if cp_result is not None:
-                orig_tok = estimate_messages_tokens(messages)
-                comp_tok = estimate_messages_tokens(cp_result)
-                if comp_tok < orig_tok * 0.95:
-                    logger.debug("ContextPilot: %d → %d tok (%.0f%%), using compressed",
-                                 orig_tok, comp_tok, (1 - comp_tok / orig_tok) * 100)
-                    return cp_result
-        except Exception as exc:
-            logger.debug("ContextPilot phase skipped: %s", exc)
-
     threshold = compaction_threshold_tokens(model, configured_window)
+    # 初始 recent 窗口：消息数的 1/3，封顶 36、保底 8。
+    # 从后往前逐步收紧 recent（每次砍最老两轮，并重做 tool 边界对齐），目标是让
+    # 「recent(verbatim) + 旧轮摘要」总 token 明显低于阈值（< 85%，留余量防抖动），
+    # 或 recent 已收紧到最小保底（避免全部变成摘要、丢失近期细节）。极长历史单轮压不动时
+    # 返回尽力结果，交由后续轮次逐步消化，而非无限循环。
     recent_count = min(MAX_RECENT_MESSAGES, max(MIN_RECENT_MESSAGES, len(messages) // 3))
-    recent = messages[-recent_count:]
-    while len(recent) > MIN_RECENT_MESSAGES and estimate_messages_tokens(recent) > threshold * 0.65:
-        recent = recent[1:]
-
-    # 边界对齐：recent 不能以 tool 消息开头——其父 AIMessage(tool_calls) 会落入 older 被
-    # 摘要成纯文本，留下的 tool 结果就成了孤儿，触发 INVALID_CHAT_HISTORY。把开头的
-    # tool 消息推回 older（一并摘要），保证 recent 从一条非 tool 消息开始。
-    split = len(messages) - len(recent)
-    while split < len(messages) and getattr(messages[split], "type", "") == "tool":
-        split += 1
-    recent = messages[split:]
-
-    older = messages[:split]
-    if not older:
-        return recent
-
-    summary = _summarize_messages(older)
-    return [AIMessage(content=summary), *recent]
+    start = max(0, len(messages) - recent_count)
+    # 边界对齐：recent 不以 tool 消息开头——其父 AIMessage(tool_calls) 会落入 older 被摘要，
+    # 留下的 tool 结果就成了孤儿，触发 INVALID_CHAT_HISTORY。
+    while start < len(messages) and getattr(messages[start], "type", "") == "tool":
+        start += 1
+    min_recent = min(MIN_RECENT_MESSAGES, len(messages))
+    while True:
+        recent = messages[start:]
+        older = messages[:start]
+        if not older:
+            return recent
+        summary = _summarize_messages(older)
+        compressed = [AIMessage(content=summary), *recent]
+        if estimate_messages_tokens(compressed) <= threshold * 0.85:
+            return compressed
+        # 仍超阈值：继续砍最老两轮并重对齐（近期细节的丢失，以「压缩幅度」换「不抖动」）。
+        if len(recent) <= max(4, min_recent):
+            return compressed  # 触底，返回尽力结果
+        start = min(len(messages) - 1, start + 2)
+        while start < len(messages) and getattr(messages[start], "type", "") == "tool":
+            start += 1
 
 
 def checkpoint_replacement(messages: list[BaseMessage]) -> list[BaseMessage]:
