@@ -172,7 +172,8 @@
     background:rgba(0,0,0,0.06); color:#555;
     opacity:0; transition:opacity .15s ease, background .15s ease, color .15s ease;
   }
-  .msg:hover .msg-copy-btn { opacity:1; }
+  .msg:hover .msg-copy-btn,
+  .agent-final-output:hover .msg-copy-btn { opacity:1; }
   .msg-copy-btn:hover { background:rgba(0,0,0,0.12); color:#111; }
   .msg-copy-btn.copied { opacity:1; color:#16a34a; background:rgba(22,163,74,0.12); }
   .msg.user .msg-copy-btn { background:rgba(255,255,255,0.25); color:#fff; }
@@ -406,7 +407,7 @@
 
   /* 最终输出区域（done 后替换进度行为） */
   .agent-final-output {
-    padding: 10px 14px 12px; font-size: 14px; line-height: 1.6;
+    position: relative; padding: 10px 14px 12px; font-size: 14px; line-height: 1.6;
     word-break: break-word; color: #1d1d1f;
     border-top: 1px solid #f0f0f0;
   }

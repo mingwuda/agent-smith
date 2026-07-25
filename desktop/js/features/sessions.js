@@ -210,6 +210,7 @@ function addBotMessagePlaceholder(content, contentPreview, elapsedMs, sessionId,
     const ans = document.createElement('div');
     ans.className = 'agent-final-output';
     ans.innerHTML = renderMarkdown(content || contentPreview || '');
+    attachCopyButton(ans);
     responseCard.appendChild(ans);
     currentBotMsgEl = ans;
   }
@@ -315,6 +316,7 @@ async function expandBotMessagePlaceholder(responseCard, sessionId, messageIndex
     const ans = document.createElement('div');
     ans.className = 'agent-final-output';
     ans.innerHTML = renderMarkdown(content);
+    attachCopyButton(ans);
     currentBotMsgEl = ans;
     responseCard.appendChild(ans);
 
@@ -410,6 +412,7 @@ function addBotMessageWithSteps(content, steps, todoList, elapsedMs) {
     const ans = document.createElement('div');
     ans.className = 'agent-final-output';
     ans.innerHTML = renderMarkdown(content);
+    attachCopyButton(ans);
     currentBotMsgEl = ans;
     if (responseCard) {
       responseCard.appendChild(ans);

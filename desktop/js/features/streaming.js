@@ -1576,11 +1576,14 @@ function handleStreamEvent(data) {
         currentBotMsgEl.innerHTML = finalHtml;
         currentBotMsgEl.className = 'agent-final-output';
         currentBotMsgEl.classList.remove('streaming-final');
+        // ponytail: 流式最终输出附上复制按钮（仅在还没有时挂一次）
+        if (!currentBotMsgEl.querySelector('.msg-copy-btn')) attachCopyButton(currentBotMsgEl);
         finalOutputEl = currentBotMsgEl;
       } else if (!_isReplaying) {
         finalOutputEl = document.createElement('div');
         finalOutputEl.className = 'agent-final-output';
         finalOutputEl.innerHTML = finalHtml;
+        attachCopyButton(finalOutputEl);
         if (_answerBodyEl) {
           _answerBodyEl.appendChild(finalOutputEl);
         } else if (responseCard) {
