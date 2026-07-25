@@ -462,7 +462,7 @@
           <div class="form-group">
             <label for="s-llm-hard-timeout">单轮硬超时（秒）</label>
             <input id="s-llm-hard-timeout" type="number" min="30" max="900" step="10" />
-            <div class="hint">单次 LLM 调用累计超过该时长（即使有心跳 / 重试）强制终止本次回复。建议 120~300；需小于前端等待超时（默认 300s）以免提前中断。</div>
+            <div class="hint">单次 LLM 调用累计超过该时长（即使有心跳 / 重试）强制终止本次回复。建议 300~600；前端等待超时会自动设为「硬超时 + 30s」余量，无需手动对齐。</div>
           </div>
 
           <hr style="margin:16px 0;border:0;border-top:1px solid #333;" />

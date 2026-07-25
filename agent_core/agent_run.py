@@ -449,7 +449,7 @@ class AgentRunMixin:
             llm_timeout = getattr(self.config, "llm_timeout_seconds", 90)
             # fix #1: 单次 LLM 调用的硬墙钟上限（秒）。上游挂起（连接开着但无首 token/无结束）时，
             # 即便心跳与 RetryableLLM 重试不断刷新现有计时器，此墙钟也会强制终止该轮。
-            llm_hard_timeout = getattr(self.config, "llm_hard_timeout_seconds", 180.0)
+            llm_hard_timeout = getattr(self.config, "llm_hard_timeout_seconds", 600.0)
             async for event in self._stream_events_with_heartbeat(
                 graph, input_data, run_config, timeout=llm_timeout
             ):

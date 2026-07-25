@@ -303,9 +303,9 @@ async function saveSettings() {
         review_provider_id: document.getElementById('s-review-provider').value,
         review_model: document.getElementById('s-review-model').value,
         update_server: document.getElementById('s-update-server') ? document.getElementById('s-update-server').value : '',
-        llm_idle_timeout_seconds: Number(document.getElementById('s-llm-idle-timeout').value || 45),
+        llm_idle_timeout_seconds: Number(document.getElementById('s-llm-idle-timeout').value || 60),
         llm_idle_max_retries: Number(document.getElementById('s-llm-idle-retries').value || 2),
-        llm_hard_timeout_seconds: Number(document.getElementById('s-llm-hard-timeout').value || 200),
+        llm_hard_timeout_seconds: Number(document.getElementById('s-llm-hard-timeout').value || 600),
       }),
     });
     const data = await res.json();
@@ -549,9 +549,9 @@ function renderParamsFields(data) {
   const idle = document.getElementById('s-llm-idle-timeout');
   const retries = document.getElementById('s-llm-idle-retries');
   const hard = document.getElementById('s-llm-hard-timeout');
-  if (idle) idle.value = data.llm_idle_timeout_seconds ?? 45;
+  if (idle) idle.value = data.llm_idle_timeout_seconds ?? 60;
   if (retries) retries.value = data.llm_idle_max_retries ?? 2;
-  if (hard) hard.value = data.llm_hard_timeout_seconds ?? 200;
+  if (hard) hard.value = data.llm_hard_timeout_seconds ?? 600;
 
   // ── 任务控制 ──
   const recursion = document.getElementById('s-recursion-limit');

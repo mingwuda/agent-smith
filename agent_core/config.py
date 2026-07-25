@@ -124,7 +124,7 @@ class AgentConfig:
     llm_idle_max_retries: int = 2
     # 单次 LLM 调用的硬墙钟上限（秒）：即便是有效进展也会刷新，作为兜底，
     # 必须明显大于 idle 重试总预算（idle × (retries+1) + 退避），否则会抢在重试序列结束前杀掉调用。
-    llm_hard_timeout_seconds: float = 200.0
+    llm_hard_timeout_seconds: float = 600.0
     api_host_ips: str = ""
     context_window_tokens: int = 0
     tavily_search_enabled: bool = False
