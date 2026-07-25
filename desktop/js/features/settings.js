@@ -293,7 +293,6 @@ async function saveSettings() {
         recursion_limit: Number(document.getElementById('s-recursion-limit').value || 60),
         enable_loop_guard: document.getElementById('s-enable-loop-guard').checked,
         api_max_retries: settingsData?.api_max_retries ?? 3,
-        api_timeout_seconds: Number(document.getElementById('s-api-timeout').value || 120),
         api_host_ips: settingsData?.api_host_ips || '',
         context_window_tokens: settingsData?.context_window_tokens || 0,
         tavily_search_enabled: document.getElementById('s-tavily-enabled').checked,
@@ -556,10 +555,8 @@ function renderParamsFields(data) {
   // ── 任务控制 ──
   const recursion = document.getElementById('s-recursion-limit');
   const loopGuard = document.getElementById('s-enable-loop-guard');
-  const apiTimeout = document.getElementById('s-api-timeout');
   if (recursion) recursion.value = data.recursion_limit || 60;
   if (loopGuard) loopGuard.checked = data.enable_loop_guard !== false;
-  if (apiTimeout) apiTimeout.value = data.api_timeout_seconds || 120;
 
   // ── 搜索 ──
   const tavilyEnabled = document.getElementById('s-tavily-enabled');
