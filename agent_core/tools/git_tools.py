@@ -30,6 +30,8 @@ _ALLOWED_SUBCOMMANDS = {
 }
 _BLOCKED_ARGS = {"--output", "--output=", "-o", "--exec", "--ext-diff"}
 _MAX_OUTPUT_CHARS = 20000
+_HEAD_CHARS = 8000
+_TAIL_CHARS = 8000
 _TIMEOUT_SECONDS = 20
 
 
@@ -93,8 +95,18 @@ def _run_git(args: list[str], repo_path: str = "") -> str:
 
     output = (completed.stdout or "") + (completed.stderr or "")
     output = output.strip() or "（无输出）"
+    # ponytail: 截断过长 git 输出，保留头尾，避免撑爆上下文
     if len(output) > _MAX_OUTPUT_CHARS:
-        output = output[:_MAX_OUTPUT_CHARS] + "\n...（输出过长，已截断）"
+        head_chars = _HEAD_CHARS
+        tail_chars = _TAIL_CHARS
+        output = (
+            f"⚠️ 输出过长（共 {len(output)} 字符），上下文仅保留头尾各 {head_chars} 字符。\n"
+            f"关键信息（如错误堆栈末尾、退出码）通常位于结尾部分。\n\n"
+            f"--- 开头 {head_chars} 字符 ---\n"
+            f"{output[:head_chars]}\n\n"
+            f"--- 结尾 {tail_chars} 字符 ---\n"
+            f"{output[-tail_chars:]}"
+        )
     prefix = "✅" if completed.returncode == 0 else f"❌ 退出码 {completed.returncode}"
     return f"{prefix} git {' '.join(args)}\n{output}"
 

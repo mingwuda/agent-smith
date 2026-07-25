@@ -1605,6 +1605,11 @@ function handleStreamEvent(data) {
         responseCard.appendChild(finalOutputEl);
       }
 
+      // 为最终输出添加复制按钮
+      if (finalOutputEl) {
+        _addCopyButtonToMessage(finalOutputEl, 'bot');
+      }
+
       // 第一段「工作耗时」折叠区填充汇总（共 N 步 · 耗时 X）
       if (responseCard) {
         var sumEl = responseCard.querySelector('.seg-time-summary');

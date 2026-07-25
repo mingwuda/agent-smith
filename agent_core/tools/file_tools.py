@@ -287,10 +287,24 @@ def read_file(path: str, start_line: int = 0, max_lines: int = 500) -> str:
     lines = all_lines[start_line:end_line]
     body = "".join(lines).rstrip("\n")
 
+    # ponytail: 截断过长的文件内容，保留头尾，防止撑爆上下文
+    total_chars = sum(len(l) for l in lines)
+    if len(body) > MAX_FILE_RETURN_CHARS:
+        head_chars = FILE_HEAD_CHARS
+        tail_chars = FILE_TAIL_CHARS
+        body = (
+            f"⚠️ 文件内容过长（共 {total_chars} 字符），上下文仅保留头尾各 {head_chars} 字符。\n"
+            f"关键信息（如错误堆栈末尾、退出码）通常位于结尾部分。\n\n"
+            f"--- 开头 {head_chars} 字符 ---\n"
+            f"{body[:head_chars]}\n\n"
+            f"--- 结尾 {tail_chars} 字符 ---\n"
+            f"{body[-tail_chars:]}"
+        )
+
     header = (
         f"📄 {rel}\n"
         f"行范围: {start_line}–{end_line} / {total_lines} 行 | "
-        f"字符数: {sum(len(l) for l in lines)} | 字节数: {file_size}\n"
+        f"字符数: {total_chars} | 字节数: {file_size}\n"
         f"{'─' * 60}\n"
     )
 

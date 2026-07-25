@@ -160,9 +160,29 @@
     background: rgba(0, 122, 255, 1);
     box-shadow: 0 4px 12px rgba(0,0,0,0.2);
   }
-  .msg { margin-bottom:16px; max-width:85%; padding:12px 18px; border-radius:14px; font-size:14px; line-height:1.6; word-break:break-word; }
+  .msg { margin-bottom:16px; max-width:85%; padding:12px 18px; border-radius:14px; font-size:14px; line-height:1.6; word-break:break-word; position:relative; }
   .msg.user { background:#007aff; color:#fff; margin-left:auto; border-bottom-right-radius:4px; white-space:pre-wrap; }
   .msg.bot { background:#e8e8ed; color:#1d1d1f; border-bottom-left-radius:4px; }
+  /* ponytail: 消息右下角一键复制按钮，hover 消息时浮现 */
+  .msg-copy-btn {
+    position:absolute; right:6px; bottom:6px;
+    width:24px; height:24px; padding:0;
+    display:flex; align-items:center; justify-content:center;
+    border:none; border-radius:6px; cursor:pointer;
+    background:rgba(0,0,0,0.06); color:#555;
+    opacity:0; transition:opacity .15s ease, background .15s ease, color .15s ease;
+  }
+  .msg:hover .msg-copy-btn { opacity:1; }
+  .msg-copy-btn:hover { background:rgba(0,0,0,0.12); color:#111; }
+  .msg-copy-btn.copied { opacity:1; color:#16a34a; background:rgba(22,163,74,0.12); }
+  .msg.user .msg-copy-btn { background:rgba(255,255,255,0.25); color:#fff; }
+  .msg.user .msg-copy-btn:hover { background:rgba(255,255,255,0.4); color:#fff; }
+  .msg.user .msg-copy-btn.copied { color:#fff; background:rgba(22,163,74,0.5); }
+  /* ponytail: 触屏设备无 hover，复制按钮常驻显示（桌面端仍靠 hover 浮现） */
+  @media (hover: none) {
+    .msg-copy-btn { opacity:1; background:rgba(0,0,0,0.08); }
+    .msg.user .msg-copy-btn { background:rgba(255,255,255,0.3); }
+  }
   .msg.bot.streaming-final { display:block; margin-left:0; clear:both; }
   .msg.bot h1, .msg.bot h2, .msg.bot h3 { margin:8px 0 4px; font-size:inherit; font-weight:600; }
   .msg.bot h1 { font-size:18px; }

@@ -27,9 +27,50 @@ function addMessage(text, role, index) {
   } else {
     div.textContent = text;
   }
+  // ponytail: 右下角一键复制按钮（用户消息与最终输出都挂）
+  attachCopyButton(div);
   messages.appendChild(div);
   smartScroll(messages);
   return div;
+}
+
+// ponytail: 给任意消息元素挂右下角复制按钮，复制消息纯文本（bot 用 textContent 避免带 HTML 标签）。
+// 抽成独立函数，供 addMessage 与流式/重放路径的 bot 消息复用，避免重复逻辑。
+function attachCopyButton(el) {
+  const copyBtn = document.createElement('button');
+  copyBtn.type = 'button';
+  copyBtn.className = 'msg-copy-btn';
+  copyBtn.setAttribute('aria-label', currentLanguage === 'en' ? 'Copy message' : '复制消息');
+  copyBtn.title = currentLanguage === 'en' ? 'Copy message' : '复制消息';
+  copyBtn.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
+  copyBtn.addEventListener('click', () => {
+    const plain = el.textContent || '';
+    const done = () => {
+      copyBtn.classList.add('copied');
+      copyBtn.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+      setTimeout(() => {
+        copyBtn.classList.remove('copied');
+        copyBtn.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
+      }, 1500);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(plain).then(done).catch(() => fallbackCopy(plain, done));
+    } else {
+      fallbackCopy(plain, done);
+    }
+  });
+  el.appendChild(copyBtn);
+}
+
+// ponytail: clipboard API 不可用时（非 https / 旧浏览器）的兜底复制
+function fallbackCopy(text, done) {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.cssText = 'position:fixed;top:-9999px;left:-9999px;opacity:0;';
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand('copy'); done(); } catch (e) { /* 复制失败静默 */ }
+  document.body.removeChild(ta);
 }
 
 function addUserMessage(text, attachments = [], index) {
