@@ -133,7 +133,7 @@
   .scroll-to-bottom-btn {
     position: fixed;
     left: 50%;
-    bottom: 100px;
+    bottom: 60px;
     transform: translateX(-50%) translateY(8px);
     width: 36px;
     height: 36px;
