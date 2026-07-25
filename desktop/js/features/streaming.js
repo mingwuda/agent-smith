@@ -578,15 +578,15 @@ function _finalizeReasoning() {
   }
   el.classList.add('done');
   _reasoningEl = null;
-  // 思考完成：延时 3s 后淡出关闭（用户明确要求）
+  // 思考完成：延时 5s 后淡出关闭（用户要求由 3s 延长）
   clearTimeout(_reasoningFadeTimer);
   _reasoningFadeTimer = setTimeout(function() {
     el.classList.add('fading');                 // 触发 CSS opacity 过渡
     setTimeout(function() { if (el.isConnected) el.remove(); }, 550);  // 真正从 DOM 移除（关闭）
-  }, 3000);
+  }, 5000);
 }
 
-// thought 事件在第二段顶部临时显示的思考面板：标记完成并延时 3s 淡出关闭。
+// thought 事件在第二段顶部临时显示的思考面板：标记完成并延时 5s 淡出关闭。
 // 与 reasoning 面板逻辑类似，但 thought 内容还会以 .thought-block 形式保留进历史。
 // immediate=true 时立即开始淡出（用于新 thought 开始时替换旧面板，避免堆叠）。
 function _finalizeThinking(immediate) {
@@ -597,7 +597,7 @@ function _finalizeThinking(immediate) {
   el.classList.add('done');
   _thinkingEl = null;
   clearTimeout(_thinkingFadeTimer);
-  const fadeDelay = immediate ? 0 : 3000;
+  const fadeDelay = immediate ? 0 : 5000;
   _thinkingFadeTimer = setTimeout(function() {
     el.classList.add('fading');
     setTimeout(function() { if (el.isConnected) el.remove(); }, 550);
