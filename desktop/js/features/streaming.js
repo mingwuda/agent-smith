@@ -588,7 +588,8 @@ function _finalizeReasoning() {
 
 // thought 事件在第二段顶部临时显示的思考面板：标记完成并延时 3s 淡出关闭。
 // 与 reasoning 面板逻辑类似，但 thought 内容还会以 .thought-block 形式保留进历史。
-function _finalizeThinking() {
+// immediate=true 时立即开始淡出（用于新 thought 开始时替换旧面板，避免堆叠）。
+function _finalizeThinking(immediate) {
   if (!_thinkingEl || !_thinkingEl.isConnected) { _thinkingEl = null; return; }
   const el = _thinkingEl;
   const stateEl = el.querySelector('.reasoning-state');
@@ -596,10 +597,11 @@ function _finalizeThinking() {
   el.classList.add('done');
   _thinkingEl = null;
   clearTimeout(_thinkingFadeTimer);
+  const fadeDelay = immediate ? 0 : 3000;
   _thinkingFadeTimer = setTimeout(function() {
     el.classList.add('fading');
     setTimeout(function() { if (el.isConnected) el.remove(); }, 550);
-  }, 3000);
+  }, fadeDelay);
 }
 
 // ---------- 流式事件处理（巨型 switch） ----------
@@ -969,8 +971,8 @@ function handleStreamEvent(data) {
     }
 
     case 'thought': {
-      _finalizeReasoning();  // 思考阶段结束（本轮为工具轮）
-      _finalizeThinking();   // 结束上一个 thought 顶部面板
+      _finalizeReasoning();       // 思考阶段结束（本轮为工具轮）
+      _finalizeThinking(true);    // 结束上一个 thought 顶部面板，立即淡出避免堆叠
       _promoteCurrentToHistory();  // 新 step 开始：把上一个 step 提升进完整历史
       hideTyping();
       removeThinkingHint();
@@ -992,6 +994,10 @@ function handleStreamEvent(data) {
 
       // ── 在第二段顶部临时显示「AI 正在思考...」面板（仅实时流；历史回放只保留记录）
       if (!_isReplaying) {
+        // 兜底：清除已脱离 _thinkingEl 引用的旧顶部面板，防止连续 thought 事件堆叠
+        if (currentStepsEl) {
+          currentStepsEl.querySelectorAll('.thinking-block').forEach(el => el.remove());
+        }
         const thinkBlock = document.createElement('div');
         thinkBlock.className = 'reasoning-block thinking-block';
         thinkBlock.innerHTML =
