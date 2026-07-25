@@ -48,6 +48,9 @@ class SettingsRequest(BaseModel):
     review_provider_id: str = ""
     review_model: str = ""
     update_server: str = ""
+    llm_idle_timeout_seconds: float = 45.0
+    llm_idle_max_retries: int = 2
+    llm_hard_timeout_seconds: float = 200.0
 
 
 class UserInfo(BaseModel):
@@ -135,6 +138,9 @@ def save_settings(req: SettingsRequest, request: Request):
     cfg.self_healing_interval_seconds = max(10, int(req.self_healing_interval_seconds or 600))
     cfg.api_max_retries = max(0, int(req.api_max_retries or 0))
     cfg.api_timeout_seconds = max(60.0, float(req.api_timeout_seconds or 120.0))
+    cfg.llm_idle_timeout_seconds = max(5.0, float(req.llm_idle_timeout_seconds or 45.0))
+    cfg.llm_idle_max_retries = max(0, int(req.llm_idle_max_retries or 2))
+    cfg.llm_hard_timeout_seconds = max(30.0, float(req.llm_hard_timeout_seconds or 200.0))
     cfg.api_host_ips = req.api_host_ips or cfg.api_host_ips
     cfg.context_window_tokens = max(0, int(req.context_window_tokens or 0))
     # 审核模型：仅在显式提交时更新，避免未提交此字段的请求（如 quickSwitch）清空
@@ -165,6 +171,9 @@ def save_settings(req: SettingsRequest, request: Request):
     os.environ["AGENT_SELF_HEALING_INTERVAL"] = str(cfg.self_healing_interval_seconds)
     os.environ["AGENT_API_MAX_RETRIES"] = str(cfg.api_max_retries)
     os.environ["AGENT_API_TIMEOUT_SECONDS"] = str(cfg.api_timeout_seconds)
+    os.environ["AGENT_LLM_IDLE_TIMEOUT_SECONDS"] = str(cfg.llm_idle_timeout_seconds)
+    os.environ["AGENT_LLM_IDLE_MAX_RETRIES"] = str(cfg.llm_idle_max_retries)
+    os.environ["AGENT_LLM_HARD_TIMEOUT_SECONDS"] = str(cfg.llm_hard_timeout_seconds)
     if cfg.api_host_ips:
         os.environ["AGENT_API_HOST_IPS"] = cfg.api_host_ips
     else:

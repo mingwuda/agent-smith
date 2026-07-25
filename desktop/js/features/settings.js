@@ -277,6 +277,7 @@ function openSettings() {
     populateProviderSelect(data);
     refreshHeaderProviderDropdown(data);
     renderProviderFields(data.active_provider || 'openai');
+    renderParamsFields(data);
   }).catch(() => {});
 }
 
@@ -315,6 +316,9 @@ async function saveSettings() {
         review_provider_id: document.getElementById('s-review-provider').value,
         review_model: document.getElementById('s-review-model').value,
         update_server: document.getElementById('s-update-server') ? document.getElementById('s-update-server').value : '',
+        llm_idle_timeout_seconds: Number(document.getElementById('s-llm-idle-timeout').value || 45),
+        llm_idle_max_retries: Number(document.getElementById('s-llm-idle-retries').value || 2),
+        llm_hard_timeout_seconds: Number(document.getElementById('s-llm-hard-timeout').value || 200),
       }),
     });
     const data = await res.json();
@@ -548,6 +552,21 @@ function showToast(message, type) {
     el.classList.remove('show');
     setTimeout(function() { if (el.parentNode) el.parentNode.removeChild(el); }, 300);
   }, 2500);
+}
+
+// 把模型超时参数回填到「参数设置」tab 的输入框
+function renderParamsFields(data) {
+  if (!data) return;
+  const idle = document.getElementById('s-llm-idle-timeout');
+  const retries = document.getElementById('s-llm-idle-retries');
+  const hard = document.getElementById('s-llm-hard-timeout');
+  if (idle) idle.value = data.llm_idle_timeout_seconds ?? 45;
+  if (retries) retries.value = data.llm_idle_max_retries ?? 2;
+  if (hard) hard.value = data.llm_hard_timeout_seconds ?? 200;
+  // 联动前端 fetch 总超时：留 30s 余量，且不小于 5 分钟，避免前端比后端硬超时先掐断
+  if (typeof setFrontendFetchTimeoutMs === 'function' && data.llm_hard_timeout_seconds) {
+    setFrontendFetchTimeoutMs((Number(data.llm_hard_timeout_seconds) + 30) * 1000);
+  }
 }
 
 // ---------- 设置弹窗 Tab 切换 ----------

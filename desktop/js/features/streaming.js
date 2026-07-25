@@ -20,6 +20,8 @@ var _reasoningEl = null;       // 当前轮正在实时填充的「思考过程�
 var _reasoningFadeTimer = null;// 思考完成后「延时 3s 淡出关闭」的定时器
 var _thinkingEl = null;        // thought 事件在第二段顶部临时显示的「AI 正在思考...」面板
 var _thinkingFadeTimer = null; // thought 面板「延时 3s 淡出关闭」的定时器
+var _frontendFetchTimeoutMs = 300000; // 前端 fetch 总超时（ms），由「参数设置」的单轮硬超时联动放大
+function setFrontendFetchTimeoutMs(ms) { if (Number(ms) > 0) _frontendFetchTimeoutMs = Number(ms); }
 var _answerBodyEl = null;      // 第三段（最终回答）的 body 容器，token 最终答案挂载于此
 var _historyBodyEl = null;     // 第一段（工作耗时）的「完整历史」容器，承载所有 step
 var _indicatorsEl = null;      // 第二段（当前执行）的固定指示器区（当前动作+进度行），永不被提升进历史
@@ -371,11 +373,10 @@ async function send() {
   if (typeof updateRunIndicators === 'function') updateRunIndicators();
   currentAbortController = rt.controller;  // 兼容旧引用
   // 前端总超时：兜底保护，避免后端/网络异常导致 fetch 永久挂起。
-  // 后端硬墙钟 200s，且 idle 重试预算约 45s×(2+1)=135s；前端必须给足余量，
-  // 否则后端还在重试恢复，前端 180s 就先掐断连接，导致每次都卡整 3 分钟。
-  // 这里设 5 分钟，确保后端重试序列有机会跑完，同时仍把最坏白屏压在可接受范围。
+  // 基础 5 分钟（300000ms）确保后端重试序列有机会跑完；若「参数设置」里的单轮硬超时更大，
+  // 则通过 setFrontendFetchTimeoutMs 联动放大，避免前端比后端先掐断（否则又会卡满超时）。
   let fetchTimedOut = false;
-  const fetchTimeoutMs = 300000; // 5min，必须 > 后端 llm_hard_timeout_seconds
+  const fetchTimeoutMs = Math.max(300000, _frontendFetchTimeoutMs); // 至少 5min，且跟随后端硬超时
   const fetchTimeout = setTimeout(() => {
     fetchTimedOut = true;
     if (rt.controller) rt.controller.abort();
