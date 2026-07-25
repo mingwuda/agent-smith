@@ -629,6 +629,7 @@ function handleStreamEvent(data) {
     for (const kid of kids) {
       if (kid.classList && kid.classList.contains('reasoning-block')) continue;  // 思考面板单独管理，不进历史
       if (kid.classList && kid.classList.contains('thinking-step')) continue;    // 「继续分析」动画只留在当前执行区，不进历史
+      if (kid.classList && kid.classList.contains('streaming-final')) continue;  // 正在流式的临时正文由 thought/tool_start/done 归位，不进历史
       if (kid === _reasoningEl) continue;
       _historyBodyEl.appendChild(kid);
     }
@@ -1458,13 +1459,22 @@ function handleStreamEvent(data) {
       // 逐字流式渲染最终答案（复用 currentBotMsgEl 机制，done 时会迁移到 agent-final-output）
       if (!currentBotMsgEl) {
         currentBotMsgEl = document.createElement('div');
-        currentBotMsgEl.className = 'msg bot streaming-final';
-        if (_answerBodyEl) {
-          _answerBodyEl.appendChild(currentBotMsgEl);
-        } else if (currentStepsEl) {
-          currentStepsEl.after(currentBotMsgEl);
+        if (hasToolCalls && currentStepsEl) {
+          // 本次请求已出现过工具调用 → 中间轮次的正文大概率是推理，
+          // 不再乐观流入最终输出区（避免「先进答案区→thought 归位→闪烁」），
+          // 改为以思考样式流入步骤区；若本轮实为最终答案，done 事件会
+          // 复用该节点、改为 agent-final-output 并迁回答案区（见 done 的兜底迁移）。
+          currentBotMsgEl.className = 'thought-block streaming-final';
+          currentStepsEl.appendChild(currentBotMsgEl);
         } else {
-          container.appendChild(currentBotMsgEl);
+          currentBotMsgEl.className = 'msg bot streaming-final';
+          if (_answerBodyEl) {
+            _answerBodyEl.appendChild(currentBotMsgEl);
+          } else if (currentStepsEl) {
+            currentStepsEl.after(currentBotMsgEl);
+          } else {
+            container.appendChild(currentBotMsgEl);
+          }
         }
       }
       currentFinalContent += data.content;
