@@ -6,8 +6,23 @@
 """
 from agent_core.main import app  # noqa: F401  触发 sys.path 注入
 from agent_core.agent_helpers import _drop_dangling_tool_call_messages
-from agent_core.context_manager import compact_messages, estimate_messages_tokens
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from agent_core.context_manager import (
+    compact_messages,
+    estimate_messages_tokens,
+    _count_tokens,
+)
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+
+
+def _find_summary(messages):
+    for m in messages:
+        if getattr(m, "type", "") == "ai" and isinstance(getattr(m, "content", ""), str) and "摘要" in m.content:
+            return m.content
+    return ""
+
+
+def _assert_no_pairing_violation(messages):
+    assert not _has_pairing_violation(messages)
 
 
 def _ai_tool_call(cid: str, text: str = "") -> AIMessage:
@@ -110,6 +125,81 @@ def test_compact_reduces_tokens():
     assert not _has_pairing_violation(final)
 
 
+def test_p0_system_message_preserved():
+    # P0：system 消息必须原样保留，且排在结果最前（不被压缩触碰）。
+    sys_msg = SystemMessage(content="你是一个严格遵循指令的桌面助手")
+    msgs = [sys_msg]
+    for i in range(18):
+        msgs.append(HumanMessage(content=f"用户{i}" + "中文" * 400))
+        msgs.append(AIMessage(content=f"助手{i}" + "中文" * 400))
+    compacted = compact_messages(msgs, model="deepseek-chat")
+    # system 消息仍在，且数量/内容不变
+    sys_in_result = [m for m in compacted if isinstance(m, SystemMessage)]
+    assert len(sys_in_result) == 1 and sys_in_result[0].content == sys_msg.content
+    assert isinstance(compacted[0], SystemMessage), "system 消息应排在第一位"
+
+
+def test_p2_old_section_discards_tool_and_assistant():
+    # P2：最早段（old）仅保留用户关键指令，丢弃工具结果与助手回复。
+    msgs = [HumanMessage(content="start")]
+    for i in range(25):
+        msgs.append(HumanMessage(content=f"用户第{i}步任务" + "中文" * 400))
+        msgs.append(AIMessage(content="", tool_calls=[{"id": f"c{i}", "name": "read_file", "args": {}}]))
+        msgs.append(ToolMessage(content=f"结果{i}" + "X" * 2000, tool_call_id=f"c{i}"))
+        msgs.append(AIMessage(content=f"助手回复{i}" + "中文" * 400))
+    compacted = compact_messages(msgs, model="deepseek-chat")
+    summary = _find_summary(compacted)
+    assert summary, "应生成历史摘要"
+    # 存在「早期摘要」段
+    assert "早期摘要" in summary
+    old_part = summary.split("早期摘要", 1)[1]
+    # old 段不应出现「助手[工具结果]」行（工具结果已丢弃）
+    assert "助手[工具结果]" not in old_part, "old 段不应保留工具结果"
+    # old 段只应出现 用户(第…轮) 行
+    assert "用户(第" in old_part, "old 段应保留用户关键指令"
+    # 工具链完整（old 段已被转成文本，recent 段工具组原子完整）
+    final, _ = _drop_dangling_tool_call_messages(compacted)
+    assert not _has_pairing_violation(final)
+
+
+def test_p3_summary_has_round_structure():
+    # P3：摘要按「角色 + 轮次号」结构化，保留时序。
+    msgs = [HumanMessage(content="start")]
+    for i in range(12):
+        msgs.append(HumanMessage(content=f"用户第{i}轮" + "中文" * 700))
+        msgs.append(AIMessage(content=f"助手第{i}轮" + "中文" * 700))
+    compacted = compact_messages(msgs, model="deepseek-chat")
+    summary = _find_summary(compacted)
+    assert summary, "历史应超过阈值并触发压缩，生成摘要"
+    assert "用户(第" in summary and "助手(第" in summary, "摘要应带轮次号与角色"
+
+
+def test_p4_token_counting_cjk_costs_more():
+    # P4：精确计数（tiktoken 或回退启发式）下，中文 token 数应明显多于等长的 ASCII。
+    # 无论 tiktoken 是否可用，此单调性都应成立。
+    ascii_text = "a" * 400
+    cjk_text = "中" * 400
+    assert _count_tokens(cjk_text, "deepseek-chat") > _count_tokens(ascii_text, "deepseek-chat")
+    assert _count_tokens("hello world", "gpt-4o") >= 1
+
+
+def test_compact_is_idempotent_no_thrash():
+    # 防抖动：对压缩结果再压缩，总 token 不应显著增大（不会每轮都重新压缩）。
+    msgs = [HumanMessage(content="start")]
+    for i in range(25):
+        msgs.append(HumanMessage(content=f"用户{i}" + "中文" * 400))
+        msgs.append(AIMessage(content="", tool_calls=[{"id": f"c{i}", "name": "read_file", "args": {}}]))
+        msgs.append(ToolMessage(content=f"r{i}" + "X" * 2000, tool_call_id=f"c{i}"))
+        msgs.append(AIMessage(content=f"助手{i}" + "中文" * 400))
+    c1 = compact_messages(msgs, model="deepseek-chat")
+    c2 = compact_messages(c1, model="deepseek-chat")
+    a1 = estimate_messages_tokens(c1, "deepseek-chat")
+    a2 = estimate_messages_tokens(c2, "deepseek-chat")
+    assert a2 <= a1 * 1.2, f"再压缩后 token 暴涨 {a1} -> {a2}，存在抖动"
+    final, _ = _drop_dangling_tool_call_messages(c2)
+    assert not _has_pairing_violation(final)
+
+
 if __name__ == "__main__":
     test_drop_dangling_ai_tool_calls()
     test_drop_orphan_tool_message()
@@ -117,4 +207,9 @@ if __name__ == "__main__":
     test_partial_tool_results_dropped()
     test_compact_never_produces_orphan_tool()
     test_compact_reduces_tokens()
+    test_p0_system_message_preserved()
+    test_p2_old_section_discards_tool_and_assistant()
+    test_p3_summary_has_round_structure()
+    test_p4_token_counting_cjk_costs_more()
+    test_compact_is_idempotent_no_thrash()
     print("ALL PASS")

@@ -21,3 +21,4 @@ playwright>=1.40.0
 Pillow>=10.0.0
 mcp>=1.27,<2  # 官方 MCP SDK(stdio/SSE/HTTP 传输,支持协议版本协商)
 langchain-anthropic>=0.3.0
+tiktoken>=0.8.0  # 精确 token 计数（压缩预算 / should_compact 判定）；缺失时自动回退启发式估算
