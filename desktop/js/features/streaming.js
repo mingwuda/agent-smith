@@ -22,6 +22,21 @@ var _thinkingEl = null;        // thought 事件在第二段顶部临时显示�
 var _thinkingFadeTimer = null; // thought 面板「延时 3s 淡出关闭」的定时器
 var _frontendFetchTimeoutMs = 300000; // 前端 fetch 总超时（ms），由「参数设置」的单轮硬超时联动放大
 function setFrontendFetchTimeoutMs(ms) { if (Number(ms) > 0) _frontendFetchTimeoutMs = Number(ms); }
+
+// 页面加载时自动从后端读取硬超时配置，避免前端比后端先掐断
+async function initFrontendFetchTimeout() {
+  try {
+    const res = await fetch('/users/me/settings');
+    if (res.ok) {
+      const data = await res.json();
+      if (data.llm_hard_timeout_seconds) {
+        setFrontendFetchTimeoutMs((Number(data.llm_hard_timeout_seconds) + 30) * 1000);
+      }
+    }
+  } catch (e) {
+    // 读取失败时保持默认 5 分钟，不影响核心功能
+  }
+}
 var _answerBodyEl = null;      // 第三段（最终回答）的 body 容器，token 最终答案挂载于此
 var _historyBodyEl = null;     // 第一段（工作耗时）的「完整历史」容器，承载所有 step
 var _indicatorsEl = null;      // 第二段（当前执行）的固定指示器区（当前动作+进度行），永不被提升进历史

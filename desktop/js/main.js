@@ -31,6 +31,8 @@ setInterval(loadSessions, 60000);
   resetBlockingOverlays();
   // 初始化悬浮「滚动到底部」按钮
   if (typeof initScrollToBottomBtn === 'function') initScrollToBottomBtn();
+  // 初始化前端 fetch 超时（从后端读取硬超时配置）
+  if (typeof initFrontendFetchTimeout === 'function') await initFrontendFetchTimeout();
   const ok = await checkHealth();
   await loadCurrentUser();
   await loadSettingsForSwitcher();

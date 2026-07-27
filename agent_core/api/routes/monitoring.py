@@ -3,6 +3,7 @@ import asyncio
 import hashlib
 import json
 import os
+import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -297,6 +298,7 @@ async def subagent_progress_stream(capsule_id: int, request: Request):
 
     async def generator():
         seen = 0
+        idle_start = None  # batch 为空时的起始时间
         while True:
             if await request.is_disconnected():
                 break
@@ -306,6 +308,14 @@ async def subagent_progress_stream(capsule_id: int, request: Request):
             seen = total
             if done:
                 break
+            if total == 0 and not _sm._current_batch:
+                # batch 尚未设置，开始计时
+                if idle_start is None:
+                    idle_start = time.monotonic()
+                elif time.monotonic() - idle_start > 30:
+                    break  # 30s 超时，避免泄漏
+            else:
+                idle_start = None  # batch 已设置，重置计时
             await asyncio.sleep(0.5)
 
     return StreamingResponse(

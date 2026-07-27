@@ -114,14 +114,21 @@ class SubagentManager:
         return self._tasks.get(task_id)
 
     def get_progress_logs(self, capsule_id: int) -> tuple[list[dict], int, bool]:
-        """获取指定 capsule 的增量日志。返回 (新日志行, 总行数, 是否已完成)。"""
+        """获取指定 capsule 的增量日志。返回 (新日志行, 总行数, 是否已完成)。
+
+        注意：当 _current_batch 尚未设置时，返回 done=False 让 EventSource 继续轮询。
+        一旦 delegate_tasks_parallel 创建了 items 并调用 start_batch，日志就能正常推送。
+        若 60 秒内 batch 仍未设置，自动断开避免泄漏。
+        """
         idx = capsule_id - 1  # capsule_id 从 1 开始
         if 0 <= idx < len(self._current_batch):
             task = self._current_batch[idx]
             lines, total = task.get_logs_since(0)
             done = task.status in ("done", "error")
             return lines, total, done
-        return [], 0, True
+        # batch 尚未设置（时序：前端 EventSource 比 tool 执行更快）
+        # 返回 done=False 让 SSE generator 继续轮询，不自闭
+        return [], 0, False
 
     def start_batch(self, tasks: list[SubagentTask]) -> None:
         self._current_batch = tasks
@@ -277,7 +284,7 @@ class SubagentManager:
 manager = SubagentManager()
 
 
-def _run_coro_in_thread(coro):
+def _run_coro_in_thread(coro, timeout: float = 60.0):
     result = {}
 
     def runner():
@@ -288,7 +295,9 @@ def _run_coro_in_thread(coro):
 
     thread = threading.Thread(target=runner, daemon=True)
     thread.start()
-    thread.join()
+    thread.join(timeout=timeout)
+    if thread.is_alive():
+        raise TimeoutError(f"子代理执行超过 {timeout}s")
     if "error" in result:
         raise result["error"]
     return result.get("value")
@@ -351,8 +360,25 @@ def delegate_tasks_parallel(tasks_json: str) -> str:
         try:
             item.status = "running"
             item.started_at = time.time()
-            _run_coro_in_thread(manager._run_agent(item))
-            item.status = "done"
+            # 用 run_sync 获得 wall_timeout + idle_timeout 保护
+            # 子代理常见跑 2~3 分钟，放宽到 3 分钟
+            completed = _run_coro_in_thread(
+                manager.run_sync(
+                    task=item.task,
+                    agent_type=item.agent_type,
+                    context=item.context,
+                    wall_timeout=180.0,
+                    idle_timeout=60.0,
+                ),
+                timeout=200.0,
+            )
+            item.result = completed.result
+            item.error = completed.error
+            item.status = completed.status
+        except TimeoutError as exc:
+            item.status = "error"
+            item.error = f"超时: {exc}"
+            item.result = f"❌ 子代理执行超时，可能是模型响应慢或任务太重。可以缩小任务范围重试。"
         except Exception as exc:
             item.status = "error"
             item.error = f"{type(exc).__name__}: {exc}"
