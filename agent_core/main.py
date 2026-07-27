@@ -519,6 +519,14 @@ if __name__ == "__main__":
         print(f"AGENT_LISTEN_URL=http://{host}:{actual_port}", flush=True)
         logger.info("🚀 Moss Agent 就绪: http://%s:%d", host, actual_port)
         try:
+            from context_manager import is_tiktoken_available
+            if is_tiktoken_available():
+                logger.info("[Context] tiktoken 已加载，使用精确 token 计数")
+            else:
+                logger.warning("[Context] tiktoken 不可用，回退启发式 token 估算（压缩预算精度下降）")
+        except Exception:
+            pass
+        try:
             await server.main_loop()
         finally:
             # 关停时清理 MCP 连接，避免孤儿进程泄漏

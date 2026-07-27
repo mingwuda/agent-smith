@@ -80,6 +80,14 @@ except Exception:
     tiktoken = None  # type: ignore
     _TIKTOKEN_AVAILABLE = False
 
+
+def is_tiktoken_available() -> bool:
+    """tiktoken 是否可用（已加载且编码器就绪）。"""
+    if not _TIKTOKEN_AVAILABLE:
+        return False
+    enc = _ensure_default_encoder()
+    return enc is not None
+
 _DEFAULT_ENCODER = None
 _DEFAULT_ENCODER_TRIED = False
 _ENCODERS: dict[str, object] = {}
@@ -293,7 +301,8 @@ def compact_messages(messages: list[BaseMessage], model: str, configured_window:
     system_msgs = [m for m in messages if isinstance(m, SystemMessage)]
     dialogue = [m for m in messages if not isinstance(m, SystemMessage)]
     threshold = compaction_threshold_tokens(model, configured_window)
-    if estimate_messages_tokens(messages, model) < threshold:
+    before_tok = estimate_messages_tokens(messages, model)
+    if before_tok < threshold:
         return messages
 
     groups = _group_messages(dialogue)
@@ -324,6 +333,14 @@ def compact_messages(messages: list[BaseMessage], model: str, configured_window:
         result = [*system_msgs, *([AIMessage(content=summary_text)] if summary_text else []), *recent]
         if (estimate_messages_tokens(result, model) <= threshold * 0.9
                 or len(recent_groups) <= 1 or guard >= len(recent_groups)):
+            after_tok = estimate_messages_tokens(result, model)
+            recent_cnt = sum(len(g[0]) for g in recent_groups)
+            logger.info(
+                "[Context] 压缩完成: %d tok → %d tok (阈值 %d, 降幅 %.0f%%) | 最近轮 verbatim %d 条, 中段摘要 %d 组, 早期摘要 %d 组",
+                before_tok, after_tok, threshold,
+                (1 - after_tok / before_tok) * 100,
+                recent_cnt, len(medium_entries), len(old_entries),
+            )
             return result
         demoted.append(recent_groups.pop(0))
         guard += 1
