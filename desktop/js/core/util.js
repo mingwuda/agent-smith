@@ -7,16 +7,13 @@ function escapeHtml(text) {
   return d.innerHTML;
 }
 
-// 将字符串中字面量的 \n \t \r \\ 还原为实际换行/制表符/反斜杠，用于展示后端 JSON 转义后的文本
+// ponytail: 保留函数签名供 callers 调用，但改为无操作恒等返回。
+// 之前做 `\t`→实际Tab、`\n`→实际换行、`\r`→回车、`\\`→`\` 的二次反转义，
+// 但所有内容到达此函数前已经过 JSON.parse 正确处理。二次反转义破坏了
+// 路径 `C:\tools`（\t→Tab→空白）、`C:\newfolder`（\n→换行→断行）等合法文本。
+// 保留函数是为了不破坏其他位置的调用点，返回值不再被修改。
 function unescapeDisplay(text) {
-  if (typeof text !== 'string') return text;
-  const placeholder = '\u0000';
-  return text
-    .replace(/\\\\/g, placeholder)
-    .replace(/\\n/g, '\n')
-    .replace(/\\t/g, '\t')
-    .replace(/\\r/g, '\r')
-    .replace(new RegExp(placeholder, 'g'), '\\');
+  return text;
 }
 
 /* escHtml：与 escapeHtml 不同，不转义引号。

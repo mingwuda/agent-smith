@@ -719,205 +719,94 @@ function handleStreamEvent(data) {
     if (_currentProgressLine) _currentProgressLine.style.display = 'none';
   }
 
-  // 子代理胶囊渲染（按 cap.id diff 复用/创建/删除）
+  // 子代理卡片渲染（tool-card 样式，与主 agent 工具调用一致）
   const _subagentStreams = new Map();  // capId -> EventSource
 
-  function renderSubagentCapsules(capsules, forcedStatus, anchorStep) {
-    if (!capsules) return;
-    let row = anchorStep !== undefined && anchorStep !== null
-      ? container.querySelector('.subagent-row[data-for-step="' + anchorStep + '"]')
-      : container.querySelector('.subagent-row');
-    if (!row) {
-      row = document.createElement('div');
-      row.className = 'subagent-row';
-      if (anchorStep !== undefined && anchorStep !== null) {
-        row.dataset.forStep = anchorStep;
-      }
-      let anchorCard = null;
-      if (anchorStep !== undefined && anchorStep !== null) {
-        anchorCard = currentStepsEl ? currentStepsEl.querySelector('.tool-card[data-step="' + anchorStep + '"]') : null;
-      }
-      if (anchorCard) {
-        anchorCard.after(row);            // 锚定到对应工具卡片之后
-      } else if (currentStepsEl) {
-        currentStepsEl.appendChild(row);  // ponytail: 子代理输出放入工作耗时区域（agent-body），而非 messages 底部
-      } else {
-        container.appendChild(row);
-      }
-      // 折叠 toggle
-      const toggle = document.createElement('div');
-      toggle.className = 'subagent-row-toggle';
-      toggle.innerHTML = '<span class="subagent-row-arrow">▶</span><span class="subagent-row-title">子代理执行</span><span class="subagent-row-count"></span>';
-      toggle.onclick = function() {
-        row.classList.toggle('collapsed');
-        const arrow = toggle.querySelector('.subagent-row-arrow');
-        if (arrow) arrow.style.transform = row.classList.contains('collapsed') ? '' : 'rotate(90deg)';
-      };
-      row.parentNode.insertBefore(toggle, row);
-    }
+  function renderSubagentCards(capsules, forcedStatus, step) {
+    if (!capsules || !currentStepsEl) return;
     const iconMap = { searcher: '🔍', coder: '<>', reviewer: '👁', debugger: '🐛' };
-
-    // 删除不再存在的子代理组
     const incomingIds = new Set(capsules.map(c => String(c.id)));
-    Array.from(row.querySelectorAll('.subagent-group[data-cap-id]')).forEach(el => {
+
+    // 清理本轮已不存在的子代理卡片
+    Array.from(currentStepsEl.querySelectorAll('.tool-card[data-sa-card]')).forEach(el => {
       if (!incomingIds.has(el.dataset.capId)) el.remove();
     });
 
     capsules.forEach(cap => {
       const capId = String(cap.id);
       const status = forcedStatus || cap.status || 'running';
-
-      // 找或创建子代理组（每个组包含胶囊+日志，横向排列的一列）
-      let group = row.querySelector(`.subagent-group[data-cap-id="${capId}"]`);
-      if (!group) {
-        group = document.createElement('div');
-        group.className = 'subagent-group';
-        group.dataset.capId = capId;
-        row.appendChild(group);
-      }
-
-      // 找或创建组内的胶囊节点
-      let capEl = group.querySelector('.subagent-capsule');
-      if (!capEl) {
-        capEl = document.createElement('div');
-        capEl.className = 'subagent-capsule';
-        capEl.dataset.capId = capId;
-        capEl.onclick = (e) => {
-          if (e.target.closest('.subagent-log-inline')) return;
-          const logEl = group.querySelector('.subagent-log-inline');
-          if (logEl) {
-            logEl.classList.toggle('collapsed');
-            smartScroll(container);
-          }
-        };
-        group.appendChild(capEl);
-      }
       const icon = iconMap[cap.agent_type] || '⚙';
-      const initial = (cap.agent_type || '?')[0].toUpperCase();
-      const statusHtml = status === 'running'
-        ? '<span class="sa-status running"></span>'
-        : status === 'done'
-        ? '<span class="sa-status done">✓</span>'
-        : '<span class="sa-status error">✗</span>';
-      capEl.innerHTML = `
-        <span class="sa-icon ${escapeHtml(cap.agent_type || '')}">${initial}</span>
-        <span class="sa-task">${escapeHtml(cap.task || cap.agent_type)}</span>
-        ${statusHtml}
-        <span class="sa-badge">${icon} ${escapeHtml(cap.agent_type || '')} #${cap.id}</span>
-      `;
 
-      // 找或创建组内的日志节点
-      let logEl = group.querySelector('.subagent-log-inline');
-      if (!logEl) {
-        logEl = document.createElement('div');
-        logEl.className = 'subagent-log-inline';
-        logEl.dataset.capId = capId;
-        logEl.innerHTML = '<pre></pre>';
-        group.appendChild(logEl);
-      }
-      // 运行中默认展开，完成后保持展开状态
-      if (status === 'running' && !logEl.dataset.collapsedByUser) {
-        logEl.classList.remove('collapsed');
-      }
-      // 写最终结果摘要
-      const preEl = logEl.querySelector('pre');
-      if (preEl) {
-        if (status === 'done' && cap.result && !preEl.dataset.hasResult) {
-          const tail = `\n─── 完成 ───\n${unescapeDisplay(String(cap.result)).slice(0, 2000)}`;
-          preEl.textContent += tail;
-          preEl.dataset.hasResult = '1';
-        } else if (status === 'error' && cap.result && !preEl.dataset.hasResult) {
-          preEl.textContent += `\n─── 失败 ───\n${unescapeDisplay(String(cap.result)).slice(0, 800)}`;
-          preEl.dataset.hasResult = '1';
+      // 复用或创建卡片
+      let card = currentStepsEl.querySelector(`.tool-card[data-cap-id="${capId}"]`);
+      if (!card) {
+        card = document.createElement('div');
+        card.className = 'tool-card open';
+        card.dataset.capId = capId;
+        card.dataset.saCard = '1';
+        if (step !== undefined && step !== null) card.dataset.step = String(step);
+
+        card.innerHTML = `
+          <div class="tool-card-header" onclick="toggleToolCard(this)">
+            <span class="arrow">▶</span>
+            <span class="tool-icon">${icon}</span>
+            <span class="tool-label">子代理:</span>
+            <span class="tool-name-inline">${escapeHtml(cap.agent_type)} #${cap.id}</span>
+            <span class="tool-duration"></span>
+            <span class="tool-status-dot running"></span>
+          </div>
+          <div class="tool-card-body">
+            <div class="tool-section-label">任务</div>
+            <pre class="tool-code-block">${escapeHtml(cap.task || '')}</pre>
+            <div class="subagent-live-log"><pre class="sa-log-pre"></pre></div>
+          </div>`;
+        currentStepsEl.appendChild(card);
+
+        // 启动实时日志流
+        _ensureCapsuleStream(capId, card);
+      } else {
+        // 更新状态
+        const dot = card.querySelector('.tool-status-dot');
+        if (dot) dot.className = 'tool-status-dot ' + (status === 'done' ? 'done' : status === 'error' ? 'error' : 'running');
+
+        // 写最终结果
+        if (status === 'done' && cap.result) {
+          const logPre = card.querySelector('.sa-log-pre');
+          if (logPre && !logPre.dataset.hasResult) {
+            logPre.textContent += `\n─── 完成 ───\n${unescapeDisplay(String(cap.result)).slice(0, 2000)}`;
+            logPre.dataset.hasResult = '1';
+          }
+        } else if (status === 'error' && cap.result) {
+          const logPre = card.querySelector('.sa-log-pre');
+          if (logPre && !logPre.dataset.hasResult) {
+            logPre.textContent += `\n─── 失败 ───\n${unescapeDisplay(String(cap.result)).slice(0, 800)}`;
+            logPre.dataset.hasResult = '1';
+          }
         }
       }
-
-      // 启动或维持 EventSource
-      _ensureCapsuleStream(capId, logEl);
     });
-
-    // 更新折叠 toggle 计数
-    const subRow = container.querySelector('.subagent-row');
-    const toggle = subRow && subRow.parentNode.querySelector('.subagent-row-toggle');
-    const countEl = toggle && toggle.querySelector('.subagent-row-count');
-    if (countEl && capsules && capsules.length) {
-      countEl.textContent = '(' + capsules.length + ')';
-    }
     smartScroll(container);
   }
 
-  function _ensureCapsuleStream(capId, logEl) {
-    // 已存在则不重建
+  function _ensureCapsuleStream(capId, cardEl) {
     if (_subagentStreams.has(capId)) return;
-    // 历史回放模式下不建立 EventSource，避免为已结束的子代理创建无效连接
     if (_isReplaying) return;
-    const preEl = logEl.querySelector('pre');
-    if (!preEl) return;
+    const logPre = cardEl.querySelector('.sa-log-pre');
+    if (!logPre) return;
     const es = new EventSource(`/subagent-progress/${capId}`);
     es.onmessage = (e) => {
       try {
         const d = JSON.parse(e.data || '{}');
         const prefix = d.cat === 'tool' ? '🔧 ' : d.cat === 'ai' ? '💭 ' : d.cat === 'error' ? '❌ ' : d.cat === 'done' ? '✅ ' : '';
-        preEl.textContent += `[${d.cat}] ${prefix}${unescapeDisplay(d.text)}\n`;
-        if (!logEl.classList.contains('collapsed')) smartScroll(container);
+        logPre.textContent += `[${d.cat}] ${prefix}${unescapeDisplay(d.text)}\n`;
+        smartScroll(container);
       } catch {}
     };
     es.onerror = () => {
-      // 后端在 done=True 时会主动断开；这里保险起见也关闭
       es.close();
       _subagentStreams.delete(capId);
     };
     _subagentStreams.set(capId, es);
-  }
-
-  // 子代理胶囊详情弹窗
-  function showCapsuleDetail(cap) {
-    let overlay = document.getElementById('capsule-detail-overlay');
-    if (!overlay) {
-      overlay = document.createElement('div');
-      overlay.id = 'capsule-detail-overlay';
-      overlay.className = 'capsule-detail-overlay';
-      overlay.innerHTML = `
-        <div class="capsule-detail-card">
-          <div class="capsule-detail-header">
-            <h3 id="capsule-detail-title"></h3>
-            <button class="capsule-detail-close" onclick="document.getElementById('capsule-detail-overlay').classList.remove('show')">✕</button>
-          </div>
-          <div class="capsule-detail-body" id="capsule-detail-body"></div>
-        </div>`;
-      overlay.addEventListener('click', (e) => {
-        if (e.target === overlay) overlay.classList.remove('show');
-      });
-      document.body.appendChild(overlay);
-    }
-    const iconMap = { searcher: '🔍', coder: '<>', reviewer: '👁', debugger: '🐛' };
-    document.getElementById('capsule-detail-title').textContent =
-      `${iconMap[cap.agent_type] || ''} ${cap.agent_type} #${cap.id}: ${cap.task || ''}`;
-    const statusLabel = cap.status === 'running' ? '执行中...' : cap.status === 'done' ? '✅ 完成' : '❌ 失败';
-    document.getElementById('capsule-detail-body').innerHTML =
-      `<p>类型: ${escapeHtml(cap.agent_type)} #${cap.id}</p>
-       <p>任务: ${escapeHtml(cap.task)}</p>
-       <p>状态: ${statusLabel}</p>
-       <div id="sa-log-${cap.id}" class="subagent-log"><pre></pre></div>
-       ${cap.result ? '<hr><p><strong>结果:</strong></p><pre>' + escapeHtml(String(cap.result).slice(0, 2000)) + '</pre>' : ''}`;
-    overlay.classList.add('show');
-
-    // 打开子代理实时日志流
-    if (cap.status === 'running') {
-      const logPre = document.querySelector(`#sa-log-${cap.id} pre`);
-      const es = new EventSource(`/subagent-progress/${cap.id}`);
-      es.onmessage = (e) => {
-        try {
-          const d = JSON.parse(e.data || '{}');
-          const prefix = d.cat === 'tool' ? '🔧 ' : d.cat === 'ai' ? '💭 ' : d.cat === 'error' ? '❌ ' : d.cat === 'done' ? '✅ ' : '';
-          if (logPre) logPre.textContent += `[${d.cat}] ${prefix}${d.text}\n`;
-        } catch {}
-      };
-      es.onerror = () => { es.close(); };
-      // 关闭弹窗时断开 EventSource
-      const origClose = () => { es.close(); overlay.classList.remove('show'); overlay.removeEventListener('_close_', origClose); };
-      overlay.addEventListener('_close_', origClose);
-    }
   }
 
   // 工具函数：添加分析中提示
@@ -947,17 +836,15 @@ function handleStreamEvent(data) {
       hideTyping();
       _promoteCurrentToHistory();  // 新 step 开始：把上一个 step 提升进完整历史
       hasToolCalls = true;
-      console.log('[胶囊] subagent_start 收到:', data);
       if (!data.capsules || !data.capsules.length) {
-        console.warn('[胶囊] subagent_start 无胶囊数据:', data);
-        addMessage('⚠️ 触发子代理但无胶囊数据', 'system');
+        console.warn('[子代理] subagent_start 无胶囊数据:', data);
         break;
       }
-      renderSubagentCapsules(data.capsules, 'running', _subagentToolStep);
+      renderSubagentCards(data.capsules, 'running', _subagentToolStep);
       break;
 
     case 'subagent_end':
-      renderSubagentCapsules(data.capsules, 'done', _subagentToolStep);
+      renderSubagentCards(data.capsules, 'done', _subagentToolStep);
       _subagentToolStep = null;
       showGeneratingBadge('🔄 正在汇总...');
       break;
