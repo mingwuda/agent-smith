@@ -8,7 +8,8 @@ let currentSessionSource = '';  // 当前会话来源: "web" / "wechat" / ""
 let _sessionLoadToken = 0;      // 会话加载请求令牌: 单调递增, 仅最后一次 loadSessionMessages 可写回 DOM(防切/建会话时旧请求晚到回写)
 
 function _sessionKey(s) {
-  return s.id + '_' + s.source;
+  // source 为空时与 getOrCreateRuntime 保持一致，避免侧边栏 data-key 和 runtime key 不匹配
+  return (s.id || '') + '_' + (s.source || 'web');
 }
 
 function renderSessionList(sessions, currentId) {

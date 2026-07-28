@@ -568,6 +568,13 @@ async function send() {
     // 派生态：可见/加载态、运行指示器、侧边栏列表
     syncStreamingActive();
     updateRunIndicators();
+    // 兜底：如果 data-key 与 runtime key 因 source 回退不一致，导致 updateRunIndicators 没清掉，
+    // 直接按 rt.key 找到对应侧边栏会话项并移除 running 状态。
+    if (rt.key) {
+      document.querySelectorAll('.session-item, .psession-item').forEach(function(el) {
+        if (el.dataset.key === rt.key) el.classList.remove('running');
+      });
+    }
     refreshStats();
     loadSessions().finally(updateRunIndicators);
   }
