@@ -242,16 +242,20 @@
   /* 文本附件双击展开面板 */
   .text-expand-panel { margin:8px 0 0; padding:10px 12px; background:#f7f7f9; border:1px solid #e3e3e8; border-radius:8px; max-height:320px; overflow:auto; white-space:pre-wrap; word-break:break-word; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12.5px; line-height:1.55; color:#1c1c1e; }
 
-  #composer { display:flex; align-items:flex-end; gap:8px; background:#f5f5f7; border:1px solid #e0e0e3; border-radius:16px; padding:6px 8px; }
+  #composer { display:flex; flex-direction:column; align-items:stretch; gap:4px; background:#f5f5f7; border:1px solid #e0e0e3; border-radius:16px; padding:8px 10px; }
   #composer:focus-within { border-color:#007aff; box-shadow:0 0 0 3px rgba(0,122,255,.12); }
-  #attach-btn { width:36px; height:36px; border:none; border-radius:50%; background:#e8e8ed; color:#555; font-size:22px; font-weight:300; cursor:pointer; flex-shrink:0; display:flex; align-items:center; justify-content:center; transition:background .15s; line-height:1; padding:0; }
+  #composer-toolbar { display:flex; align-items:center; justify-content:space-between; gap:8px; padding-top:2px; }
+  .toolbar-spacer { flex:1; }
+  #attach-btn { width:32px; height:32px; border:none; border-radius:50%; background:#e8e8ed; color:#555; font-size:20px; font-weight:300; cursor:pointer; flex-shrink:0; display:flex; align-items:center; justify-content:center; transition:background .15s; line-height:1; padding:0; }
   #attach-btn:hover { background:#ddd; color:#333; }
-  #send { width:36px; height:36px; border:none; border-radius:50%; background:#007aff; color:#fff; cursor:pointer; flex-shrink:0; display:flex; align-items:center; justify-content:center; transition:all .15s; padding:0; }
+  #composer-provider-select { height:32px; border:1px solid #d1d1d6; border-radius:8px; background:#fff; padding:0 24px 0 10px; font-size:13px; color:#333; cursor:pointer; outline:none; flex-shrink:0; max-width:160px; appearance:none; -webkit-appearance:none; background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23666' stroke-width='1.5'/%3E%3C/svg%3E"); background-repeat:no-repeat; background-position:right 8px center; }
+  #composer-provider-select:focus { border-color:#007aff; }
+  #send { width:32px; height:32px; border:none; border-radius:50%; background:#007aff; color:#fff; cursor:pointer; flex-shrink:0; display:flex; align-items:center; justify-content:center; transition:all .15s; padding:0; }
   #send:hover { background:#0062cc; }
   #send:disabled { opacity:.45; cursor:not-allowed; }
   #send.stop { background:#ff3b30; }
   #send svg { width:16px; height:16px; color:#fff; }
-  #composer textarea#input { flex:1; min-width:0; border:none; outline:none; background:transparent; resize:none; font-size:15px; line-height:1.5; padding:6px 4px; font-family:inherit; max-height:160px; min-height:24px; }
+  #composer textarea#input { width:100%; box-sizing:border-box; flex:none; border:none; outline:none; background:transparent; resize:none; font-size:15px; line-height:1.5; padding:6px 2px; font-family:inherit; max-height:160px; min-height:24px; }
   #send.stop:hover { background:#d70015; }
   #send:disabled { background:#999; cursor:not-allowed; }
 

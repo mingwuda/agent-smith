@@ -133,8 +133,7 @@
     <div class="left">
       <button id="sidebar-toggle">☰</button>
       <span id="status-dot"></span>
-      <span id="status-text" data-i18n="connecting" style="cursor:pointer;" onclick="toggleProviderDropdown(event)">连接中...</span>
-      <div id="header-provider-dropdown" class="header-dropdown" style="display:none;"></div>
+      <span id="status-text" data-i18n="connecting">连接中...</span>
       <span id="workspace-display" style="display:none;font-size:11px;color:#8e8e93;margin-left:10px;cursor:pointer;" onclick="promptSetWorkspace()" title="点击修改工作目录">📁</span>
     </div>
     <div class="right">
@@ -190,11 +189,15 @@
   <div id="input-area">
     <div id="attachment-preview"></div>
     <div id="composer">
-      <button id="attach-btn" title="上传文件或图片" data-i18n-title="attachButton">+</button>
       <textarea id="input" placeholder="说点什么...（Enter 发送，⌘/Ctrl+Enter 换行，可直接粘贴图片）" data-i18n-placeholder="composerPlaceholder" autocomplete="off" rows="1"></textarea>
-      <button id="send" data-i18n="sendButton">
-        <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M2 9l14-7-7 14-2-5-5-2z" fill="currentColor"/></svg>
-      </button>
+      <div id="composer-toolbar">
+        <button id="attach-btn" title="上传文件或图片" data-i18n-title="attachButton">+</button>
+        <div class="toolbar-spacer"></div>
+        <select id="composer-provider-select" title="选择模型"></select>
+        <button id="send" data-i18n="sendButton">
+          <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M2 9l14-7-7 14-2-5-5-2z" fill="currentColor"/></svg>
+        </button>
+      </div>
     </div>
     <input type="file" id="file-input" accept="image/*,.zip,.md,.txt,.json,.yaml,.yml,.xml,.html,.css,.js,.ts,.jsx,.tsx,.py,.java,.c,.cpp,.h,.hpp,.go,.rs,.rb,.php,.sh,.bash,.sql,.csv,.log,.env,.toml,.ini,.cfg,.conf" multiple style="display:none" />
   </div>

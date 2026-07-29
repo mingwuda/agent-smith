@@ -50,39 +50,47 @@ function populateProviderSelect(data) {
   reviewSelect.value = data.review_provider_id || curVal || '';
 }
 
-// ── 顶部状态栏 Provider 切换下拉菜单 ──
+// ── 底部发送区 Provider 选择器 ──
+// 模型选择已从头部的"已连接"下拉迁移到输入框底部工具栏。
 
-function refreshHeaderProviderDropdown(data) {
+function refreshProviderSelects(data) {
   settingsData = data;
-  const dropdown = document.getElementById('header-provider-dropdown');
-  if (!dropdown) return;
-  dropdown.innerHTML = '';
-  const active = data.active_provider || 'openai';
+  const select = document.getElementById('composer-provider-select');
+  if (!select) return;
+  select.innerHTML = '';
+  const active = data.active_provider || '';
   const entries = Object.entries(data.providers || {});
-  
+
   // 只显示已配置 API Key 的 provider（当前选中项始终显示，避免空列表）
-  const filtered = entries.filter(([id, p]) => id === active || p.api_key_configured);
-  
-  // 有可切换项时才让状态栏可点击
-  const statusText = document.getElementById('status-text');
-  if (statusText) {
-    statusText.classList.toggle('clickable', filtered.length > 1);
-  }
-  
+  const filtered = entries.filter(([id, p]) => id === active || (p.model && p.api_key_configured));
+
   filtered.forEach(([id, provider]) => {
-    const item = document.createElement('div');
-    item.className = 'header-dropdown-item' + (id === active ? ' active' : '');
-    const label = providerLabel(provider, id);
-    item.textContent = id === active && !provider.api_key_configured
-      ? label + ' ' + (currentLanguage === 'en' ? '(no key)' : '(未配置 Key)')
-      : label;
-    item.onclick = function(e) {
-      e.stopPropagation();
-      dropdown.style.display = 'none';
-      quickSwitchProvider(id);
-    };
-    dropdown.appendChild(item);
+    const option = document.createElement('option');
+    option.value = id;
+    option.textContent = providerLabel(provider, id) +
+      (id === active && !provider.api_key_configured
+        ? ' ' + (currentLanguage === 'en' ? '(no key)' : '(未配置 Key)')
+        : '');
+    if (id === active) option.selected = true;
+    select.appendChild(option);
   });
+
+  // 没有可选项时给出占位提示
+  if (!filtered.length) {
+    const option = document.createElement('option');
+    option.value = '';
+    option.textContent = t('statusConfiguredMissing');
+    select.appendChild(option);
+  }
+
+  // 旧版顶部下拉已废弃：如果还存在则清空隐藏
+  const dropdown = document.getElementById('header-provider-dropdown');
+  if (dropdown) {
+    dropdown.innerHTML = '';
+    dropdown.style.display = 'none';
+  }
+  const statusText = document.getElementById('status-text');
+  if (statusText) statusText.classList.remove('clickable');
 }
 
 function toggleProviderDropdown(event) {
@@ -105,7 +113,7 @@ async function loadSettingsForSwitcher() {
     const res = await fetch('/users/me/settings');
     if (!res.ok) return null;
     const data = await res.json();
-    refreshHeaderProviderDropdown(data);
+    refreshProviderSelects(data);
     return data;
   } catch {
     return null;
@@ -262,7 +270,7 @@ function openSettings() {
   fetch('/settings').then(r => r.json()).then(data => {
     settingsData = data;
     populateProviderSelect(data);
-    refreshHeaderProviderDropdown(data);
+    refreshProviderSelects(data);
     renderProviderFields(data.active_provider || 'openai');
     renderParamsFields(data);
   }).catch(() => {});
@@ -413,14 +421,9 @@ async function quickSwitchProvider(providerId) {
     }
     await loadSettingsForSwitcher();
     await checkHealth();  // 后台确认（可能返回滞后数据）
-    // 在 checkHealth 之后强制执行更新，确保状态文本准确
+    // 状态栏只保留"已连接"，模型名显示已迁移到底部发送区选择器
     var statusText = document.getElementById('status-text');
-    if (statusText) {
-      statusText.textContent = t('connectedWithModel', {
-        provider: provider.name || providerId,
-        model: provider.model || t('statusConfiguredMissing'),
-      });
-    }
+    if (statusText) statusText.textContent = t('connected');
   } catch {
     showToast('⚠️ ' + t('switchProviderNetworkFailed'), 'error');
   }
@@ -592,3 +595,12 @@ function switchSettingsTab(tabId) {
   document.querySelectorAll('.settings-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tabId));
   document.querySelectorAll('.settings-tab-panel').forEach(p => p.classList.toggle('active', p.id === 'panel-' + tabId));
 }
+
+// ── 底部发送区模型选择器事件绑定 ──
+(function initComposerProviderSelect() {
+  const select = document.getElementById('composer-provider-select');
+  if (!select) return;
+  select.addEventListener('change', function() {
+    if (this.value) quickSwitchProvider(this.value);
+  });
+})();

@@ -17,13 +17,13 @@ async function checkHealth() {
       const providerName = data.provider_name || data.provider || t('statusModel');
       if (data.status === 'ok') {
         setStatus('ok');
-        statusText.textContent = t('connectedWithModel', { provider: providerName, model: modelName });
+        statusText.textContent = t('connected');
       } else if (data.error && data.error.includes('credentials')) {
         setStatus('ok');
         statusText.textContent = t('needsApiKey', { provider: providerName, model: modelName });
       } else {
         setStatus('ok');
-        statusText.textContent = t('connectedWithModel', { provider: providerName, model: modelName });
+        statusText.textContent = t('connected');
       }
       return true;
     }
