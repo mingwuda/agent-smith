@@ -52,6 +52,7 @@ class RunRequest(BaseModel):
     thread_id: str = "default"
     attachments: list[AttachmentRequest] = Field(default_factory=list)
     project_id: str = ""
+    provider: str = ""  # 可选：指定本次请求使用的 provider id（覆盖全局 active_provider，仅本次生效）
 
 
 class RunResponse(BaseModel):
@@ -98,6 +99,8 @@ async def run_agent(req: RunRequest, request: Request):
     display_text = _display_user_message(uid, req.message, attachments)
     session_store.add_message(uid, session_id, "user", display_text)
     model_override = _image_model_override(attachments)
+    # 解析可选的 provider 覆盖：仅当该 provider 在配置中存在时才生效（否则回退到全局 active_provider）
+    provider_override = req.provider if (req.provider and agent and req.provider in (getattr(agent.config, "providers", {}) or {})) else ""
     # ── 解析文本文件内容，直接嵌入 agent 消息 ──
     agent_message = req.message
     if attachments:
@@ -140,6 +143,7 @@ async def run_agent(req: RunRequest, request: Request):
         attachments=attachments,
         model_override=model_override,
         thread_id=session_id,
+        provider_override=provider_override,
     )
     # 从 todo store 取出清单（非流式模式）
     todo_list_r = None
@@ -185,7 +189,8 @@ async def run_agent_stream(req: RunRequest, request: Request):
     display_text = _display_user_message(uid, req.message, attachments)
     session_store.add_message(uid, session_id, "user", display_text)
     model_override = _image_model_override(attachments)
-
+    # 解析可选的 provider 覆盖：仅当该 provider 在配置中存在时才生效（否则回退到全局 active_provider）
+    provider_override = req.provider if (req.provider and agent and req.provider in (getattr(agent.config, "providers", {}) or {})) else ""
     # ── 解析文本文件内容，直接嵌入 agent 消息 ──
     agent_message = req.message
     if attachments:
@@ -248,6 +253,7 @@ async def run_agent_stream(req: RunRequest, request: Request):
             attachments=attachments,
             model_override=model_override,
             thread_id=session_id,
+            provider_override=provider_override,
         )
         try:
             async for sse_event in stream:

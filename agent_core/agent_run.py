@@ -143,15 +143,15 @@ class AgentRunMixin:
         self._graph = self._create_graph()
 
 
-    def _get_graph(self, model_override: str = ""):
+    def _get_graph(self, model_override: str = "", provider_override: str = ""):
         """获取当前可用的编译图，统一处理两种取图场景。
 
-        - model_override 给定时总是重新编译（用于按请求切换模型），不缓存。
+        - model_override / provider_override 给定时总是重新编译（用于按请求切换模型/provider），不缓存。
         - 否则若缓存的 self._graph 为 None（例如 set_workspace 使其失效），
           则惰性重建并缓存，避免重复编译。
         """
-        if model_override:
-            return self._create_graph(model_override)
+        if model_override or provider_override:
+            return self._create_graph(model_override, provider_override)
         if self._graph is None:
             self._graph = self._create_graph()
         return self._graph
@@ -164,16 +164,18 @@ class AgentRunMixin:
         attachments: Optional[list[dict]] = None,
         model_override: str = "",
         thread_id: str = "",
+        provider_override: str = "",
     ) -> tuple[str, list[dict]]:
         """处理用户消息，返回 (最终回复, 中间步骤列表)
 
         参数:
           thread_id: 当前会话 ID，取代全局 self._thread_id（支持并发）
+          provider_override: 可选的 provider id，覆盖本次请求使用的模型后端（不改动全局 active_provider）
         """
         tid = thread_id or self._thread_id
         config = self._run_config(tid)
-        # 取可用 graph：model_override 时重建，缺失时惰性重建（见 _get_graph）
-        graph = self._get_graph(model_override)
+        # 取可用 graph：model_override / provider_override 时重建，缺失时惰性重建（见 _get_graph）
+        graph = self._get_graph(model_override, provider_override)
         # 为本请求建立独立的 LLM 重试通知队列（非流式调用也会走 RetryableLLM）
         _retry_notif_token = _retry_notifications_ctx.set([])
         input_messages = []
@@ -197,8 +199,10 @@ class AgentRunMixin:
                 )
 
         logger.info(
-            "[run] 开始: tid=%s, thread_key=%s, model=%s, message_len=%d",
-            tid, thread_key, model_override or self.config.model, len(message),
+            "[run] 开始: tid=%s, thread_key=%s, provider=%s, model=%s, message_len=%d",
+            tid, thread_key,
+            provider_override or self.config.active_provider,
+            model_override or self.config.model, len(message),
         )
         _run_started_at = time.time()
 
@@ -231,8 +235,8 @@ class AgentRunMixin:
                         self._record_model_usage(input_tok, output_tok, cached_tok, source="agent_response", thread_id=tid)
                     else:
                         self._tracker.record_model_call(
-                            provider=self.config.active_provider,
-                            model=self.config.model,
+                            provider=provider_override or self.config.active_provider,
+                            model=model_override or self.config.model,
                             input_tokens=0,
                             output_tokens=0,
                             thread_id=tid,
@@ -358,16 +362,18 @@ class AgentRunMixin:
         attachments: Optional[list[dict]] = None,
         model_override: str = "",
         thread_id: str = "",
+        provider_override: str = "",
     ) -> AsyncGenerator[str, None]:
         """流式处理用户消息，yield SSE 格式事件
 
         参数:
           thread_id: 当前会话 ID，取代全局 self._thread_id（支持并发）
+          provider_override: 可选的 provider id，覆盖本次请求使用的模型后端（不改动全局 active_provider）
         """
         tid = thread_id or self._thread_id
         run_config = self._run_config(tid)
-        # 取可用 graph：model_override 时重建，缺失时惰性重建（见 _get_graph）
-        graph = self._get_graph(model_override)
+        # 取可用 graph：model_override / provider_override 时重建，缺失时惰性重建（见 _get_graph）
+        graph = self._get_graph(model_override, provider_override)
         # 为本请求建立独立的 LLM 重试通知队列（并发安全：每个会话各自隔离）
         _retry_notif_list: list = []
         _retry_notif_token = _retry_notifications_ctx.set(_retry_notif_list)
@@ -438,8 +444,9 @@ class AgentRunMixin:
         
         try:
             logger.info(
-                "[stream_run] 开始: tid=%s, thread_key=%s, model=%s, timeout=%s, message_len=%d",
+                "[stream_run] 开始: tid=%s, thread_key=%s, provider=%s, model=%s, timeout=%s, message_len=%d",
                 tid, thread_key,
+                provider_override or self.config.active_provider,
                 model_override or self.config.model,
                 self.config.api_timeout_seconds,
                 len(message),

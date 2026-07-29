@@ -106,24 +106,41 @@ class AgentInitMixin:
         self._rebuild_graph()
 
 
-    def _build_llm(self, model_override: str = ""):
+    def _resolve_provider_config(self, model_override: str = "", provider_override: str = ""):
+        """根据可选的 provider 覆盖解析本次 LLM 调用的有效参数。
+
+        不修改 self.config（active_provider 保持不变），仅用于本次请求临时选用指定 provider。
+        返回 (provider_id, model, api_key, base_url, is_anthropic)。
+        """
+        pid = provider_override or self.config.active_provider
+        prov = (self.config.providers or {}).get(pid, {})
+        is_anthropic = (pid == "anthropic")
+        model = model_override or prov.get("model") or self.config.model
+        api_key = prov.get("api_key") or self.config.api_key or "sk-no-key-required"
+        base_url = prov.get("base_url") or ""
+        return pid, model, api_key, base_url, is_anthropic
+
+    def _build_llm(self, model_override: str = "", provider_override: str = ""):
+        pid, model, api_key, base_url, is_anthropic = self._resolve_provider_config(
+            model_override, provider_override
+        )
         kwargs = {
-            "model": model_override or self.config.model,
-            "api_key": self.config.api_key or "sk-no-key-required",
+            "model": model,
+            "api_key": api_key,
             "temperature": 0,
             "max_retries": self.config.api_max_retries,
             "timeout": self.config.api_timeout_seconds,
         }
-        if self.config.base_url:
-            kwargs["base_url"] = self.config.base_url
-            host = urlparse(self.config.base_url).hostname
+        if base_url:
+            kwargs["base_url"] = base_url
+            host = urlparse(base_url).hostname
             if host:
                 configure_host_resolution(host, self.config.api_host_ips)
-        if self.config.active_provider == "anthropic":
+        if is_anthropic:
             return ChatAnthropic(
-                model=kwargs["model"],
-                api_key=self.config.api_key,
-                base_url=self.config.base_url or None,
+                model=model,
+                api_key=api_key,
+                base_url=base_url or None,
                 temperature=kwargs["temperature"],
                 max_retries=kwargs["max_retries"],
                 timeout=kwargs["timeout"],
@@ -161,8 +178,8 @@ class AgentInitMixin:
         )
 
 
-    def _create_graph(self, model_override: str = ""):
-        llm = self._build_llm(model_override)
+    def _create_graph(self, model_override: str = "", provider_override: str = ""):
+        llm = self._build_llm(model_override, provider_override)
         # 包裹「首 token 空闲看门狗 + 仅重发 LLM 调用」的健壮层：
         # 模型卡住时快速失败并重试，不动已执行的工具，也不重跑整轮。
         llm = RetryableLLM(

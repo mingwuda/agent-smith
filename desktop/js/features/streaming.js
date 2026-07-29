@@ -419,6 +419,7 @@ async function send() {
         thread_id: threadId,
         attachments,
         project_id: (typeof currentProjectId !== 'undefined' ? currentProjectId : '') || '',
+        provider: (typeof composerProvider !== 'undefined' ? composerProvider : '') || '',
       }),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);

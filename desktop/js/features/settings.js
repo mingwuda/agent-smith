@@ -15,6 +15,9 @@ if (newSessionBtn) newSessionBtn.onclick = newSession;
 
 // ---------- Provider 工具函数 ----------
 
+// 底部发送区当前选中的 provider（仅本地状态，随消息作为参数传给后端，不切换全局 active_provider）
+var composerProvider = '';
+
 function providerLabel(provider, id) {
   const name = provider.name || id;
   const model = provider.model || t('modelNotConfigured');
@@ -55,6 +58,8 @@ function populateProviderSelect(data) {
 
 function refreshProviderSelects(data) {
   settingsData = data;
+  // 底部发送区默认选中当前激活 provider（除非用户已另行选择）
+  composerProvider = data.active_provider || '';
   const select = document.getElementById('composer-provider-select');
   if (!select) return;
   select.innerHTML = '';
@@ -600,7 +605,8 @@ function switchSettingsTab(tabId) {
 (function initComposerProviderSelect() {
   const select = document.getElementById('composer-provider-select');
   if (!select) return;
+  // 仅本地记录选择，随消息以 provider 参数传给后端；不切换全局 active_provider，也不弹提示
   select.addEventListener('change', function() {
-    if (this.value) quickSwitchProvider(this.value);
+    composerProvider = this.value || '';
   });
 })();
