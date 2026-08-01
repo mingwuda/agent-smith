@@ -14,8 +14,8 @@ def _value_to_text(value: Any) -> str:
 
 
 @tool
-def remember(key: str, value: str) -> str:
-    """显式保存一条长期记忆。仅当用户明确要求“记住/以后记得/保存为偏好”时使用。不要保存密码、API Key、Cookie、Token 等敏感信息。"""
+def remember(key: str, value: str, ttl: int = 0) -> str:
+    """显式保存一条长期记忆。仅当用户明确要求“记住/以后记得/保存为偏好”时使用。不要保存密码、API Key、Cookie、Token 等敏感信息。ttl 为可选有效期（秒），0 表示永不过期。"""
     if not key.strip():
         return "❌ 记忆 key 不能为空"
     if not value.strip():
@@ -24,7 +24,7 @@ def remember(key: str, value: str) -> str:
     text = f"{key} {value}".lower()
     if any(word in text for word in blocked):
         return "❌ 这看起来像敏感凭据，不会写入长期记忆"
-    return get_memory().set(key.strip(), value.strip())
+    return get_memory().set(key.strip(), value.strip(), ttl=ttl if ttl and ttl > 0 else None)
 
 
 @tool

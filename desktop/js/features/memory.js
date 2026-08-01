@@ -22,14 +22,25 @@ function renderMemories(items) {
     const key = escapeHtml(item.key || '');
     const encodedKey = encodeURIComponent(item.key || '');
     const value = escapeHtml(typeof item.value === 'string' ? item.value : JSON.stringify(item.value, null, 2));
+    const updated = item.updated_at ? t('memoryUpdatedAt', { time: fmtTimestamp(item.updated_at) }) : '';
     return `<div class="memory-item">
       <div class="memory-key">
         <span>${key}</span>
         <button class="memory-delete" onclick="deleteMemory(decodeURIComponent('${encodedKey}'))">${escapeHtml(t('deleteMemory'))}</button>
       </div>
       <div class="memory-value">${value}</div>
+      ${updated ? `<div class="memory-meta">${escapeHtml(updated)}</div>` : ''}
     </div>`;
   }).join('');
+}
+
+function fmtTimestamp(ts) {
+  try {
+    const d = new Date(typeof ts === 'number' ? ts * 1000 : ts);
+    if (isNaN(d.getTime())) return '';
+    const pad = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  } catch { return ''; }
 }
 
 async function loadMemories() {
