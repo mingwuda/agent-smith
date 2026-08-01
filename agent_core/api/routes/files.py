@@ -324,6 +324,22 @@ async def get_stash_list(request: Request, project_id: str = Query("", descripti
     return {"repo_root": str(base), "stashes": entries}
 
 
+@router.post("/files/stash-pop")
+async def stash_pop(request: Request, payload: dict = Body(...)):
+    """将指定 stash 恢复到工作区（git stash pop）。"""
+    ref = (payload or {}).get("ref", "").strip()
+    project_id = (payload or {}).get("project_id", "").strip()
+    if not ref:
+        raise HTTPException(status_code=400, detail="ref 不能为空")
+    if not ref.startswith("stash@") or not ref.endswith("}"):
+        raise HTTPException(status_code=400, detail="ref 格式错误，应为 stash@{N}")
+    base = _resolve_repo_root(request, project_id)
+    _, err, code = _git_rc(str(base), "stash", "pop", ref, timeout=30)
+    if code != 0:
+        return {"success": False, "output": err or "git stash pop 失败"}
+    return {"success": True, "output": "已恢复到工作区"}
+
+
 @router.get("/files/unpushed-count")
 async def get_unpushed_count(
     request: Request,

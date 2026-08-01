@@ -744,6 +744,9 @@ function renderStashList(data) {
     html += '    <span class="cf-name">' + escapeHtml(s.message || s.ref) + '</span>';
     html += '    <span class="cf-status">' + escapeHtml(s.relative_time || '') + '</span>';
     html += '  </span>';
+    html += '  <span class="cf-actions">';
+    html += '    <button class="cf-action-btn restore-btn" title="恢复到工作区" onclick="event.stopPropagation(); restoreStash(\'' + escAttr(s.ref) + '\')">↩️ 恢复</button>';
+    html += '  </span>';
     html += '</div>';
   });
 
