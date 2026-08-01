@@ -846,6 +846,7 @@ class AgentRunMixin:
                                 "step": step_for_tool,
                                 "content": _tail_chunk,
                             })
+                    is_error = bool(output_str.strip().startswith("❌"))
                     self._record_tool_call(tool_name, thread_id=tid)
 
                     # ── Todo 清单事件：manage_todo 工具调用结束后推送 ──
