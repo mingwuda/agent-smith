@@ -753,6 +753,30 @@ function renderStashList(data) {
   treeEl.innerHTML = html;
 }
 
+/** 恢复指定 stash 到工作区（git stash pop），成功后刷新暂存清单与变更视图 */
+async function restoreStash(ref) {
+  if (!confirm('确定要将 ' + ref + ' 恢复到工作区吗？')) return;
+  try {
+    const res = await fetch('/files/stash-pop', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project_id: currentProjectId || '', ref: ref }),
+    });
+    const d = await res.json();
+    if (d.success) {
+      if (typeof showToast === 'function') showToast('✅ ' + (d.output || '已恢复到工作区'));
+      loadStashList();
+      loadChangedFiles();
+      prefetchChangesCount();
+      if (typeof checkUnpushedCommits === 'function') checkUnpushedCommits();
+    } else {
+      alert('恢复失败：\n' + (d.output || '未知错误'));
+    }
+  } catch (e) {
+    alert('恢复失败：' + (e && e.message ? e.message : e));
+  }
+}
+
 /* ───────────────────────── 提交变更对话框 ───────────────────────── */
 
 function openCommitDialog() {

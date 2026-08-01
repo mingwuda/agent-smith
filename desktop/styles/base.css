@@ -273,6 +273,12 @@
     white-space: pre-wrap; word-break: break-all;
   }
 
+  /* 子代理内部工具调用卡片（嵌套在胶囊卡片内，与主 agent 工具卡片同款） */
+  .sa-tools { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+  .sa-inner-tool { margin: 0 !important; border-left: 3px solid #c8c8cc; }
+  .sa-inner-tool .tool-card-body { padding: 8px 10px !important; }
+  .sa-inner-tool .tool-code-block { max-height: 180px; overflow-y: auto; }
+
   /* ═══════════════ Agent 三段式输出卡片 ═══════════════ */
   /* 外层包装：头像+耗时行 + 可折叠内容 + 执行状态行 + 进度指示 */
   .agent-response {

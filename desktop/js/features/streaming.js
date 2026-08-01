@@ -766,6 +766,7 @@ function handleStreamEvent(data) {
           <div class="tool-card-body">
             <div class="tool-section-label">任务</div>
             <pre class="tool-code-block">${escapeHtml(cap.task || '')}</pre>
+            <div class="sa-tools"></div>
             <div class="subagent-live-log"><pre class="sa-log-pre"></pre></div>
           </div>`;
         currentStepsEl.appendChild(card);
@@ -805,9 +806,16 @@ function handleStreamEvent(data) {
     es.onmessage = (e) => {
       try {
         const d = JSON.parse(e.data || '{}');
-        const prefix = d.cat === 'tool' ? '🔧 ' : d.cat === 'ai' ? '💭 ' : d.cat === 'error' ? '❌ ' : d.cat === 'done' ? '✅ ' : '';
-        logPre.textContent += `[${d.cat}] ${prefix}${unescapeDisplay(d.text)}\n`;
-        smartScroll(container);
+        if (d.event === 'tool_start') {
+          _renderSubagentToolCard(cardEl, d);
+        } else if (d.event === 'tool_end') {
+          _updateSubagentToolCard(cardEl, d);
+        } else {
+          // 文本日志：ai/error/done 加图标前缀；tool 类结构化事件已走卡片分支，不进文本
+          const prefix = d.cat === 'ai' ? '💭 ' : d.cat === 'error' ? '❌ ' : d.cat === 'done' ? '✅ ' : '';
+          logPre.textContent += `[${d.cat}] ${prefix}${unescapeDisplay(d.text)}\n`;
+          smartScroll(container);
+        }
       } catch {}
     };
     es.onerror = () => {
@@ -815,6 +823,64 @@ function handleStreamEvent(data) {
       _subagentStreams.delete(capId);
     };
     _subagentStreams.set(capId, es);
+  }
+
+  // 子代理内部工具调用：在胶囊卡片内渲染与主 agent 同款的工具卡片
+  function _renderSubagentToolCard(cardEl, d) {
+    const toolsBox = cardEl.querySelector('.sa-tools');
+    if (!toolsBox) return;
+    const tid = String(d.tool_id || '');
+    if (!tid) return;
+    let exists = false;
+    toolsBox.querySelectorAll('.tool-card[data-tool-id]').forEach(function (el) {
+      if (el.dataset.toolId === tid) exists = true;
+    });
+    if (exists) return;
+    const icon = getToolIcon(d.tool_name);
+    let argsText = d.tool_args;
+    if (typeof argsText !== 'string') argsText = JSON.stringify(argsText || {}, null, 2);
+    const div = document.createElement('div');
+    div.className = 'tool-card open sa-inner-tool';
+    div.dataset.toolId = tid;
+    div.innerHTML = `
+      <div class="tool-card-header" onclick="toggleToolCard(this)">
+        <span class="arrow">▶</span>
+        <span class="tool-icon">${icon}</span>
+        <span class="tool-label">调用工具:</span>
+        <span class="tool-name-inline">${escapeHtml(d.tool_name)}</span>
+        <span class="tool-status-dot running"></span>
+      </div>
+      <div class="tool-card-body">
+        <div class="tool-section-label">参数</div>
+        <pre class="tool-code-block">${escapeHtml(unescapeDisplay(argsText))}</pre>
+        <div class="sa-tool-output"></div>
+      </div>`;
+    toolsBox.appendChild(div);
+    smartScroll(container);
+  }
+
+  function _updateSubagentToolCard(cardEl, d) {
+    const toolsBox = cardEl.querySelector('.sa-tools');
+    if (!toolsBox) return;
+    const tid = String(d.tool_id || '');
+    if (!tid) return;
+    let div = null;
+    toolsBox.querySelectorAll('.tool-card[data-tool-id]').forEach(function (el) {
+      if (el.dataset.toolId === tid) div = el;
+    });
+    if (!div) return;
+    const dot = div.querySelector('.tool-status-dot');
+    const failed = d.tool_status === 'error';
+    if (dot) dot.className = 'tool-status-dot ' + (failed ? 'error' : 'done');
+    const outBox = div.querySelector('.sa-tool-output');
+    if (!outBox) return;
+    let outText = d.tool_output;
+    if (typeof outText !== 'string') outText = JSON.stringify(outText);
+    if (outText && outText !== '""' && outText !== 'undefined') {
+      outBox.innerHTML = '<div class="tool-section-label">输出</div><pre class="tool-code-block">' +
+        escapeHtml(unescapeDisplay(outText)).slice(0, 8000) + '</pre>';
+    }
+    smartScroll(container);
   }
 
   // 工具函数：添加分析中提示

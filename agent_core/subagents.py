@@ -38,9 +38,11 @@ class SubagentTask:
     _log_lines: list[dict] = field(default_factory=list)
     _log_lock: threading.Lock = field(default_factory=threading.Lock)
 
-    def append_log(self, text: str, cat: str = "info") -> None:
+    def append_log(self, text: str, cat: str = "info", **extra) -> None:
         with self._log_lock:
-            self._log_lines.append({"ts": time.time(), "cat": cat, "text": text})
+            line = {"ts": time.time(), "cat": cat, "text": text}
+            line.update(extra)
+            self._log_lines.append(line)
 
     def get_logs_since(self, index: int) -> tuple[list[dict], int]:
         with self._log_lock:
@@ -59,6 +61,11 @@ SUBAGENT_PROMPTS = {
     "debugger": (
         "你是 debugger 子代理，负责系统化排查问题。先列假设，再给验证步骤和最可能根因。"
     ),
+    "analysis": (
+        "你是 analysis 子代理，负责分析与探索：代码结构、模块依赖、性能瓶颈、数据分布、可行性评估等。\n"
+        "只做只读探查（读文件、搜索、git 查看、运行只读命令/脚本），绝不修改文件、绝不执行写操作。\n"
+        "输出结构化分析报告：结论先行，附证据（文件:行号 / 命令输出），最后给建议。"
+    ),
     "searcher": (
         "你是 searcher 子代理，专精互联网搜索。你的唯一任务是：\n"
         "1. 调用 web_search 搜索指定关键词，获取结果摘要\n"
@@ -71,10 +78,25 @@ SUBAGENT_PROMPTS = {
 }
 
 
-# 各子代理类型可用的工具（None 表示全部可用，除了委托工具）
+# 各子代理类型可用的工具（whitelist 优先；None 表示默认全量但排除联网类工具）
 SUBAGENT_TOOL_WHITELIST: dict[str, Optional[list[str]]] = {
     "searcher": ["web_search", "web_fetch"],
+    # analysis 只做只读探查：文件/搜索/git 查看/系统信息/数据库只读/记忆只读 + run_python/run_shell（prompt 约束只读）。
+    # 不包含任何写文件/写 git/写记忆/委派/联网工具，天然杜绝分析过程中误改代码。
+    "analysis": [
+        "read_file", "read_bytes", "list_files", "search_files", "get_workspace_path",
+        "run_python", "run_shell",
+        "git_status", "git_diff", "git_log", "git_show", "git_command",
+        "get_system_info", "list_loaded_skills",
+        "db_schema", "db_query", "db_connections",
+        "recall_memory", "list_memories",
+    ],
 }
+
+# 非 searcher 子代理默认排除的联网类工具前缀：
+# 本地文件/代码/系统任务不需要联网，coder/reviewer/debugger 不应拿到 web_search/web_fetch/浏览器工具，
+# 否则 LLM 会把本地任务误判成需要联网搜索（如"清理目录"任务跑去 web_search）。
+SUBAGENT_TOOL_EXCLUDE_PREFIXES: tuple[str, ...] = ("web_", "browser_")
 
 
 class SubagentManager:
@@ -100,11 +122,16 @@ class SubagentManager:
         self._tools_by_type: dict[str, list] = {}
         for agent_type in SUBAGENT_PROMPTS:
             whitelist = SUBAGENT_TOOL_WHITELIST.get(agent_type)
-            if whitelist is None:
-                self._tools_by_type[agent_type] = all_tools
-            else:
+            if whitelist is not None:
                 self._tools_by_type[agent_type] = [
                     t for t in all_tools if getattr(t, "name", "") in whitelist
+                ]
+            else:
+                # 默认全量，但排除联网类工具（web_/browser_ 前缀）：
+                # 本地任务不需要联网，避免 coder/reviewer/debugger 误用搜索/浏览器
+                self._tools_by_type[agent_type] = [
+                    t for t in all_tools
+                    if not getattr(t, "name", "").startswith(SUBAGENT_TOOL_EXCLUDE_PREFIXES)
                 ]
 
     def list_agent_types(self) -> list[str]:
@@ -136,26 +163,36 @@ class SubagentManager:
     def clear_batch(self) -> None:
         self._current_batch = []
 
-    async def run_sync(self, task: str, agent_type: str = "coder", context: str = "", wall_timeout: float = 180.0, idle_timeout: float = 60.0) -> SubagentTask:
+    async def run_sync(self, task: str, agent_type: str = "coder", context: str = "", wall_timeout: float = 180.0, idle_timeout: float = 60.0, item: Optional[SubagentTask] = None) -> SubagentTask:
         if not self._config:
             raise RuntimeError("SubagentManager 尚未初始化")
         agent_type = agent_type if agent_type in SUBAGENT_PROMPTS else "coder"
-        item = SubagentTask(
-            id=f"subagent-{uuid.uuid4().hex[:12]}",
-            agent_type=agent_type,
-            task=task,
-            context=context,
-        )
-        self._tasks[item.id] = item
+        # ponytail: 支持复用外部传入的 item（前端 SSE 轮询依赖 _current_batch 里的同一对象）——
+        # 之前 run_sync 总是内部 new 一个新 SubagentTask，导致 batch 里预创建的 item 永远拿不到
+        # 执行期间的 append_log（只有初始"队列中，等待执行..."），前端子代理卡片一直显示等待中。
+        if item is None:
+            item = SubagentTask(
+                id=f"subagent-{uuid.uuid4().hex[:12]}",
+                agent_type=agent_type,
+                task=task,
+                context=context,
+            )
+            self._tasks[item.id] = item
+        else:
+            item.agent_type = agent_type
+            item.task = task
+            item.context = context
+            if item.id not in self._tasks:
+                self._tasks[item.id] = item
         item.status = "running"
         item.started_at = time.time()
         # 最后一个日志时间戳，用于检测 idle timeout
         item._last_log_ts = time.time()
-        # 包装 append_log 记录活跃时间
+        # 包装 append_log 记录活跃时间（透传结构化 extra 字段）
         _orig_append = item.append_log
-        def _tracked_append_log(text: str, cat: str = "info") -> None:
+        def _tracked_append_log(text: str, cat: str = "info", **extra) -> None:
             item._last_log_ts = time.time()
-            _orig_append(text, cat)
+            _orig_append(text, cat, **extra)
         item.append_log = _tracked_append_log  # type: ignore[method-assign]
 
         # 启动 idle 监视后台任务
@@ -232,6 +269,12 @@ class SubagentManager:
             "保持聚焦，不要假装可以调用不存在的并行/团队工具。"
             "如果需要修改文件，说明建议和风险；如果已调用工具完成修改，列出验证结果。\n"
         )
+        if item.agent_type != "searcher":
+            prompt += (
+                "\n工具使用约束：你没有联网工具（web_search / web_fetch / 浏览器）可用，"
+                "本地文件/代码/系统任务不需要联网。需要最新外部信息时，"
+                "在最终输出中列出所需关键词，由主代理另行处理。\n"
+            )
         agent_tools = self._tools_by_type.get(item.agent_type, self._tools)
         graph = create_react_agent(llm, agent_tools, prompt=prompt)
         message = item.task
@@ -241,6 +284,8 @@ class SubagentManager:
         item.append_log(f"任务: {message[:200]}")
 
         final_text = ""
+        started_ids: set = set()   # 已发出 tool_start 的工具调用 id
+        ended_ids: set = set()     # 已发出 tool_end 的工具调用 id
         try:
             async for chunk in graph.astream(
                 {"messages": [HumanMessage(content=message)]},
@@ -250,17 +295,30 @@ class SubagentManager:
                 msgs = chunk.get("messages", [])
                 if not msgs:
                     continue
+                # 结构化工具事件（前端据此渲染工具卡片）
+                for ev in _collect_tool_events(msgs, started_ids, ended_ids):
+                    if ev["event"] == "tool_start":
+                        item.append_log(
+                            f"调用工具: {ev['name']}",
+                            "tool",
+                            event="tool_start",
+                            tool_id=ev["id"],
+                            tool_name=ev["name"],
+                            tool_args=ev["args"],
+                        )
+                    else:
+                        item.append_log(
+                            f"工具完成: {ev['name']}",
+                            "tool",
+                            event="tool_end",
+                            tool_id=ev["id"],
+                            tool_name=ev["name"],
+                            tool_output=ev["output"],
+                            tool_status=ev["status"],
+                        )
                 last = msgs[-1]
                 msg_type = getattr(last, "type", "")
-                if msg_type == "tool":
-                    tool_name = getattr(last, "name", "unknown")
-                    tool_status = getattr(last, "status", "success")
-                    # status 字段：success / error
-                    if tool_status == "error":
-                        item.append_log(f"❌ 工具失败: {tool_name}", "error")
-                    else:
-                        item.append_log(f"🔧 调用工具: {tool_name}", "tool")
-                elif msg_type == "ai":
+                if msg_type == "ai":
                     content = getattr(last, "content", "")
                     if content:
                         item.append_log(f"💭 {content[:300]}", "ai")
@@ -284,6 +342,44 @@ class SubagentManager:
 manager = SubagentManager()
 
 
+def _collect_tool_events(msgs, started: set, ended: set) -> list[dict]:
+    """从一条 values 状态（完整 messages 列表）中提取新增的工具事件。
+
+    stream_mode="values" 每轮返回完整消息列表，重复遍历需去重：
+    - AI 消息里的 tool_calls（含 name/args/id）→ tool_start 事件
+    - Tool 消息（含 tool_call_id/content/name）→ tool_end 事件
+    返回事件列表（纯函数，便于单测）。
+    """
+    events: list[dict] = []
+    for msg in msgs:
+        msg_type = getattr(msg, "type", "")
+        if msg_type == "ai":
+            for tc in getattr(msg, "tool_calls", None) or []:
+                tid = tc.get("id")
+                if not tid or tid in started:
+                    continue
+                started.add(tid)
+                events.append({
+                    "event": "tool_start",
+                    "id": tid,
+                    "name": tc.get("name", "unknown"),
+                    "args": tc.get("args") or {},
+                })
+        elif msg_type == "tool":
+            tid = getattr(msg, "tool_call_id", "")
+            if not tid or tid in ended or tid not in started:
+                continue
+            ended.add(tid)
+            events.append({
+                "event": "tool_end",
+                "id": tid,
+                "name": getattr(msg, "name", "unknown"),
+                "output": getattr(msg, "content", ""),
+                "status": getattr(msg, "status", "success"),
+            })
+    return events
+
+
 def _run_coro_in_thread(coro, timeout: float = 60.0):
     result = {}
 
@@ -305,8 +401,29 @@ def _run_coro_in_thread(coro, timeout: float = 60.0):
 
 @tool
 def delegate_task(task: str, agent_type: str = "coder", context: str = "") -> str:
-    """把一个子任务委派给子代理执行并同步等待结果。agent_type 可选 coder、reviewer、debugger、searcher。"""
-    item = _run_coro_in_thread(manager.run_sync(task=task, agent_type=agent_type, context=context))
+    """把一个子任务委派给子代理执行并同步等待结果。agent_type 可选 coder、reviewer、debugger、analysis、searcher。
+
+    选型提示：本地文件/代码/系统任务用 coder（无联网工具）；分析探索/可行性研究用 analysis（只读探查，不改代码）；
+    需要联网检索最新信息用 searcher（仅 web_search/web_fetch）。
+    """
+    if agent_type not in SUBAGENT_PROMPTS:
+        agent_type = "coder"
+    # ponytail: 单发子代理也走 start_batch，让 /subagent-progress SSE 能读到日志。
+    # 之前 delegate_task 从不设置 _current_batch，前端轮询永远返回空 → 胶囊无任何实时日志。
+    item = SubagentTask(
+        id=f"subagent-{uuid.uuid4().hex[:12]}",
+        agent_type=agent_type,
+        task=task,
+        context=context,
+    )
+    item.append_log("队列中，等待执行...")
+    manager._tasks[item.id] = item
+    manager.start_batch([item])
+    # timeout 与并行路径一致（200s）：单发子代理常见跑 2~3 分钟，默认 60s 会误杀
+    item = _run_coro_in_thread(
+        manager.run_sync(task=task, agent_type=agent_type, context=context, item=item),
+        timeout=200.0,
+    )
     return (
         f"子代理任务 {item.id} [{item.agent_type}] 状态：{item.status}\n\n"
         f"{item.result or item.error}"
@@ -329,7 +446,10 @@ def _parallel_task_wrapper(task_def: dict) -> str:
 @tool
 def delegate_tasks_parallel(tasks_json: str) -> str:
     """并行派发多个独立子任务。tasks_json 是一个 JSON 数组，每个元素包含 task/agent_type/context 字段。
-    适用于多个任务之间没有文件或数据依赖的场景。同一时间最多并行 4 个子代理。"""
+    适用于多个任务之间没有文件或数据依赖的场景。同一时间最多并行 4 个子代理。
+
+    选型提示：本地文件/代码/系统任务用 coder（无联网工具）；分析探索/可行性研究用 analysis（只读探查，不改代码）；
+    需要联网检索最新信息用 searcher（仅 web_search/web_fetch）。"""
     try:
         tasks = json.loads(tasks_json)
     except (json.JSONDecodeError, TypeError) as e:
@@ -369,6 +489,7 @@ def delegate_tasks_parallel(tasks_json: str) -> str:
                     context=item.context,
                     wall_timeout=180.0,
                     idle_timeout=60.0,
+                    item=item,  # 复用 batch item：日志/状态写入同一对象，前端 SSE 才能实时读到
                 ),
                 timeout=200.0,
             )

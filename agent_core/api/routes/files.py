@@ -305,7 +305,8 @@ async def stash_changes(request: Request, payload: dict = Body(...)):
 async def get_stash_list(request: Request, project_id: str = Query("", description="项目 ID")):
     """获取当前仓库的 stash 列表（git stash list）。"""
     base = _resolve_repo_root(request, project_id)
-    stdout, _ = _run_git(str(base), "stash", "list", "--pretty=format:%h|%s|%cr")
+    # %gd 输出 stash@{N}（而非 %h 短哈希），保证与 /files/stash-pop 的 ref 校验一致
+    stdout, _ = _run_git(str(base), "stash", "list", "--pretty=format:%gd|%s|%cr")
     entries = []
     for line in (stdout or "").splitlines():
         if not line.strip():
