@@ -793,6 +793,8 @@ function handleStreamEvent(data) {
           }
         }
       }
+      // 完成：折叠胶囊（与主 agent 一致，可点击展开查看）
+      if (status === 'done' || status === 'error') card.classList.remove('open');
     });
     smartScroll(container);
   }
@@ -873,14 +875,46 @@ function handleStreamEvent(data) {
     const failed = d.tool_status === 'error';
     if (dot) dot.className = 'tool-status-dot ' + (failed ? 'error' : 'done');
     const outBox = div.querySelector('.sa-tool-output');
-    if (!outBox) return;
-    let outText = d.tool_output;
-    if (typeof outText !== 'string') outText = JSON.stringify(outText);
-    if (outText && outText !== '""' && outText !== 'undefined') {
-      outBox.innerHTML = '<div class="tool-section-label">输出</div><pre class="tool-code-block">' +
-        escapeHtml(unescapeDisplay(outText)).slice(0, 8000) + '</pre>';
+    if (outBox) {
+      let outText = d.tool_output;
+      if (typeof outText !== 'string') outText = JSON.stringify(outText);
+      if (outText && outText !== '""' && outText !== 'undefined') {
+        outBox.innerHTML = '<div class="tool-section-label">输出</div><pre class="tool-code-block">' +
+          escapeHtml(unescapeDisplay(outText)).slice(0, 8000) + '</pre>';
+      }
     }
+    // 完成：折叠卡片并移入胶囊内「已完成工具」折叠区（执行区只留正在执行的卡片，避免占满屏幕）
+    div.classList.remove('open');
+    const doneBox = _ensureDoneToolsBox(cardEl);
+    doneBox.querySelector('.sa-done-body').appendChild(div);
+    _updateDoneToolsCount(doneBox);
     smartScroll(container);
+  }
+
+  // 子代理胶囊内「已完成工具调用」折叠容器：完成即归档，默认折叠只占一行
+  function _ensureDoneToolsBox(cardEl) {
+    let box = cardEl.querySelector('.sa-tools-done');
+    if (box) return box;
+    box = document.createElement('div');
+    box.className = 'sa-tools-done';
+    box.innerHTML =
+      '<div class="sa-done-header" onclick="toggleDoneTools(this)">' +
+        '<span class="arrow">▶</span>' +
+        '<span class="sa-done-label">已完成工具调用</span>' +
+        '<span class="sa-done-count">(0)</span>' +
+      '</div>' +
+      '<div class="sa-done-body"></div>';
+    const toolsBox = cardEl.querySelector('.sa-tools');
+    const body = cardEl.querySelector('.tool-card-body');
+    if (toolsBox && toolsBox.nextSibling) toolsBox.parentNode.insertBefore(box, toolsBox.nextSibling);
+    else if (body) body.appendChild(box);
+    return box;
+  }
+
+  function _updateDoneToolsCount(box) {
+    const n = box.querySelectorAll('.sa-done-body .tool-card').length;
+    const c = box.querySelector('.sa-done-count');
+    if (c) c.textContent = '(' + n + ')';
   }
 
   // 工具函数：添加分析中提示
@@ -1852,4 +1886,10 @@ function toggleStep(el) {
 function toggleToolCard(header) {
   const card = header.closest('.tool-card');
   if (card) card.classList.toggle('open');
+}
+
+// 子代理胶囊内「已完成工具调用」折叠区展开/收起
+function toggleDoneTools(header) {
+  const box = header.closest('.sa-tools-done');
+  if (box) box.classList.toggle('open');
 }

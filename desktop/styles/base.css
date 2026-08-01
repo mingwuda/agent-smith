@@ -279,6 +279,17 @@
   .sa-inner-tool .tool-card-body { padding: 8px 10px !important; }
   .sa-inner-tool .tool-code-block { max-height: 180px; overflow-y: auto; }
 
+  /* 子代理胶囊内「已完成工具调用」折叠区：完成即归档，默认折叠只占一行 */
+  .sa-tools-done { margin-top: 6px; border: 1px dashed #d4d4d8; border-radius: 6px; background: #fafafa; }
+  .sa-tools-done .sa-done-header { display: flex; align-items: center; gap: 6px; padding: 5px 10px; cursor: pointer; user-select: none; font-size: 12px; color: #888; }
+  .sa-tools-done .sa-done-header:hover { background: #f4f4f5; }
+  .sa-tools-done .sa-done-header .arrow { font-size: 9px; transition: transform .2s; }
+  .sa-tools-done.open .sa-done-header .arrow { transform: rotate(90deg); }
+  .sa-tools-done .sa-done-body { display: none; padding: 6px 10px 10px; }
+  .sa-tools-done.open .sa-done-body { display: block; }
+  .sa-tools-done .sa-inner-tool { border-left-color: #a1a1aa; }
+  .sa-tools-done .sa-done-count { font-size: 11px; color: #a1a1aa; }
+
   /* ═══════════════ Agent 三段式输出卡片 ═══════════════ */
   /* 外层包装：头像+耗时行 + 可折叠内容 + 执行状态行 + 进度指示 */
   .agent-response {
