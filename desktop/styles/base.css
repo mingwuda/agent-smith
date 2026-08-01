@@ -902,6 +902,7 @@
   .cf-action-btn:hover { background: #2c2c2e; color: #f5f5f7; }
   .track-btn:hover { color: #30d158; }
   .untrack-btn:hover { color: #ff453a; }
+  .restore-btn:hover { color: #007aff; }
   .fb-empty { padding: 24px 16px; color: #8e8e93; font-size: 12px; text-align: center; }
 
   /* ===== 右侧文件预览面板（浅色 chrome + 深色代码区，覆盖主区右侧） ===== */
