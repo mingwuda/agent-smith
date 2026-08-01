@@ -829,6 +829,20 @@ class AgentRunMixin:
                     run_id = event.get("run_id", "")
                     tinfo = running_tools.pop(run_id, None)
                     step_for_tool = tinfo["step"] if tinfo else 0
+                    # 兜底补发 run_shell 最后一块实时输出：心跳 drain 粒度 2s，工具结束前
+                    # 的残余（shell_tools 的 finally 已不再清空）在此 drain 发出，避免丢失；
+                    # 顺序在 tool_result 之前，前端先追加实时输出、再展示完整结果。
+                    if tool_name == "run_shell":
+                        try:
+                            _tail_chunk = drain_shell_output()
+                        except Exception:
+                            _tail_chunk = ""
+                        if _tail_chunk:
+                            yield _sse({
+                                "type": "tool_output",
+                                "step": step_for_tool,
+                                "content": _tail_chunk,
+                            })
                     is_error = bool(output_str.strip().startswith("❌"))
                     
                     self._record_tool_call(tool_name, thread_id=tid)

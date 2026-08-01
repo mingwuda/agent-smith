@@ -142,6 +142,20 @@ def _snapshot_meta(workspace: Path) -> dict[str, tuple]:
     return snap
 
 
+# ── 命令末尾 '| tail -N' 剥离 ──
+# LLM 常为控制输出量在命令末尾拼 '2>&1 | tail -N'，而 tail 全缓冲——进程结束前
+# 不输出任何字节，会掐死实时输出（reader 线程 read1 读不到数据，队列一直空）。
+# 输出量控制由 _truncate 兜底（保留头尾各 8000 字符，信息量比 tail 更全）。
+# ponytail: 只剥末尾管道段；'tail -N file'（读文件非管道）与 '| tail | wc'（中间段）
+# 语义不同，不误伤。若未来出现 '| tail -N > file' 等变体再扩展正则。
+_TAIL_PIPE_RE = re.compile(r"\|\s*tail\s+(?:-n\s*)?-?\d+\s*$")
+
+
+def _strip_tail_pipe(command: str) -> str:
+    """剥离命令末尾的 '| tail -N' 管道段（兼容 '2>&1 | tail -N' 与 '| tail -n N'）。"""
+    return _TAIL_PIPE_RE.sub("", command).rstrip()
+
+
 def _is_command_forbidden(command: str) -> tuple[bool, str]:
     """检查命令是否包含被禁止的模式。返回 (是否禁止, 原因)。"""
     for pattern in _FORBIDDEN_PATTERNS:
@@ -279,6 +293,9 @@ def run_shell(command: str, timeout: int = _DEFAULT_TIMEOUT) -> str:
     # ── 超时上限 ──
     timeout = min(max(1, int(timeout)), 600)
 
+    # ── 剥离末尾 '| tail -N' 管道（tail 全缓冲会掐死实时输出，见 _strip_tail_pipe 注释）──
+    cmd = _strip_tail_pipe(cmd)
+
     # ── 选择 shell ──
     shell_cmd = _detect_shell()
 
@@ -340,10 +357,10 @@ def run_shell(command: str, timeout: int = _DEFAULT_TIMEOUT) -> str:
         )
     except Exception as e:
         return f"❌ 执行失败: {e}"
-    finally:
-        # ponytail: 清掉未被心跳 drain 的残余输出——工具结束时 on_tool_end 会携带完整结果，
-        # 残余（心跳 2s 间隔内的最后一块）丢掉不影响最终展示。
-        _clear_shell_output()
+    # ponytail: 不再在 finally 清空队列——心跳 drain 粒度是 2s，工具结束前最后一块输出
+    # 若在这里清掉会永久丢失（on_tool_end 兜底 drain 也拿不到）。残余由 agent_run.on_tool_end
+    # 兜底 drain 并补发；即使 on_tool_end 未执行，下一次 run_shell 开头的 _clear_shell_output()
+    # 也会清掉，不会串扰到后续调用。
 
     # ── 对比工作区文件变更（基于 mtime/size，不读取文件内容）──
     workspace_changes = ""
