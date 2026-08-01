@@ -382,6 +382,7 @@ async function restartBackend() {
     showToast('✅ ' + t('restartBackendSuccess'), 'success');
     await checkHealth();
     await loadSettingsForSwitcher();
+    closeSettings();
   } else {
     showToast('⚠️ ' + (currentLanguage === 'en' ? 'Backend did not recover in time' : '后端未在预期时间内恢复'), 'error');
   }

@@ -766,6 +766,9 @@ class AgentRunMixin:
                         "tool": tool_name,
                         "args": args_preview,
                         "step": step_count,
+                        # 工具开始时间戳（毫秒）：随 SSE 事件一并收集进历史，
+                        # 历史回放时前端据此可展示真实耗时而非瞬时差值 0
+                        "ts": int(time.time() * 1000),
                     })
 
                     # 并行子代理：解析任务列表，发送子代理启动事件
@@ -901,6 +904,9 @@ class AgentRunMixin:
                         "error": is_error,
                         "diff": diff_data,
                         "diff_file_path": diff_file_path,
+                        # 工具实际耗时（毫秒）：随 SSE 事件收集进历史，
+                        # 历史回放直接展示真实耗时；实时流前端也优先用它
+                        "duration_ms": int((time.time() - tinfo["started_at"]) * 1000) if tinfo else 0,
                     })
 
                     # ── 工具调用结束日志 ──
@@ -926,6 +932,13 @@ class AgentRunMixin:
                                 if idx_in_output >= 0:
                                     end_idx = min(idx_in_output + 600, len(full_output))
                                     upd["result"] = full_output[idx_in_output:end_idx]
+                                # 打包子代理内部工具事件：随 subagent_end 进主流事件流，
+                                # 历史保存（collected_steps）时才有数据，回放才能重建工具卡片
+                                try:
+                                    from subagents import manager as _subagent_manager
+                                    upd["tools"] = _subagent_manager.get_capsule_tool_events(cap["id"])
+                                except Exception:
+                                    pass
                                 updated.append(upd)
                             _subagent_results = updated
                             yield _sse({
@@ -933,8 +946,14 @@ class AgentRunMixin:
                                 "capsules": updated,
                             })
                         except Exception:
-                            # 简化降级：只标记状态
+                            # 简化降级：只标记状态（同样带上工具事件，保证历史回放不丢）
                             _subagent_results = [dict(cap, status="done") for cap in subagent_capsules]
+                            try:
+                                from subagents import manager as _subagent_manager
+                                for _cap in _subagent_results:
+                                    _cap["tools"] = _subagent_manager.get_capsule_tool_events(_cap["id"])
+                            except Exception:
+                                pass
                             yield _sse({
                                 "type": "subagent_end",
                                 "capsules": _subagent_results,

@@ -248,3 +248,49 @@ def test_non_searcher_prompt_has_network_constraint():
 
     src = inspect.getsource(_mod.SubagentManager._run_agent)
     assert "工具使用约束" in src and "web_search" in src
+
+
+def test_get_capsule_tool_events_persistence_payload():
+    """subagent_end 持久化：get_capsule_tool_events 只提取 tool_start/tool_end 结构化事件。
+
+    历史回放依赖 subagent_end 的 capsules 携带 tools 数据重建工具卡片；
+    普通日志（ai/info）与无关字段不得混入，字段名与前端渲染约定一致。
+    """
+    m = _make_manager()
+    item = SubagentTask(id="subagent-t1", agent_type="searcher", task="t")
+    item.append_log("队列中，等待执行...", "info")
+    item.append_log("我先搜索一下", "ai")
+    item.append_log(
+        "调用工具: web_search", "tool",
+        event="tool_start", tool_id="call-1", tool_name="web_search",
+        tool_args={"query": "关键词"},
+    )
+    item.append_log(
+        "工具完成: web_search", "tool",
+        event="tool_end", tool_id="call-1", tool_name="web_search",
+        tool_output="搜索结果...", tool_status="success",
+    )
+    item.append_log("✅ searcher 完成", "done")
+    m.start_batch([item])
+
+    events = m.get_capsule_tool_events(1)
+    assert len(events) == 2
+    assert [e["event"] for e in events] == ["tool_start", "tool_end"]
+    assert events[0]["tool_id"] == "call-1" and events[0]["tool_name"] == "web_search"
+    assert events[0]["tool_args"] == {"query": "关键词"}
+    assert events[1]["tool_output"] == "搜索结果..." and events[1]["tool_status"] == "success"
+    # 不混入普通日志，不携带 ts/text/cat 等无关字段
+    for e in events:
+        assert "text" not in e and "ts" not in e and "cat" not in e
+
+
+def test_get_capsule_tool_events_empty_and_out_of_range():
+    """无工具事件 / 越界 capsule_id 返回空列表，不抛异常。"""
+    m = _make_manager()
+    item = SubagentTask(id="subagent-t2", agent_type="coder", task="t")
+    item.append_log("只是思考", "ai")
+    m.start_batch([item])
+
+    assert m.get_capsule_tool_events(1) == []   # 有任务但无工具事件
+    assert m.get_capsule_tool_events(99) == []  # 越界
+    assert m.get_capsule_tool_events(0) == []   # 非法（idx=-1）

@@ -20,9 +20,14 @@ from session_store import add_message, get_session, create_session, rename_sessi
 
 
 def _workspace_for_user(uid: str) -> Path:
-    # 微信 Bot 用户默认使用全局工作区，不按 uid 分子目录
-    if uid.startswith("wechat_"):
-        return user_manager.WORKSPACE_BASE
+    # 所有用户（含 wechat_*）一律按 uid 隔离：WORKSPACE_BASE/<uid>。
+    # 历史版本对 wechat_* 返回 WORKSPACE_BASE（共享根目录），导致所有微信用户
+    # 共用一个公共工作区：agent 在 /root/agent_workspace 里能扫到其他用户的
+    # 项目目录（曾发生 agent 读到 zhangcaixin/text-adventure-game 后把别人的
+    # 内容当"今天的改动"回复给 admin，答非所问 + 跨用户文件边界泄露）。
+    # 现在与 Web 用户一致落到 WORKSPACE_BASE/<uid>，如 wechat_admin →
+    # /root/agent_workspace/wechat_admin。显式项目目录（directory_path）与会话级
+    # workspace 优先于该默认值，不受影响。
     return Path(user_manager.user_workspace(uid)).expanduser().resolve()
 
 

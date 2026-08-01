@@ -177,22 +177,32 @@ def aes_decrypt_ecb(ciphertext: bytes, key_hex: str) -> bytes:
 
 # ── WeChat Bot 类 ─────────────────────────────────────────────────
 
-def _resolve_session_ref(wechat_uid: str, token: str, menu: Optional[dict]) -> Optional[str]:
+def _resolve_session_ref(wechat_uid: str, token: str, menu: Optional[dict], project_id: str = "") -> Optional[str]:
     """将 /switch /delete 的参数解析为真实 sessionId。
 
     - token 为数字 → 优先用 /list 时缓存的序号映射，否则回退到当前列表顺序
     - 非数字 → 当作原始 sessionId（需真实存在）
+    - project_id 非空时：无论序号映射还是原始 id，都要求会话属于该项目，
+      否则返回 None（用户切到项目后只操作该项目下的会话）
     - 无法解析返回 None
     """
     if token.isdigit():
         n = int(token)
         if menu and str(n) in menu:
-            return menu[str(n)]
-        sessions = session_store.list_sessions(wechat_uid)
+            sid = menu[str(n)]
+            if not project_id:
+                return sid
+            sess = session_store.get_session(wechat_uid, sid)
+            if sess and (sess.get("project_id") or "") == project_id:
+                return sid
+            # menu 序号指向其他项目的会话，回退到项目内列表重新解析
+        sessions = (session_store.list_sessions_by_project(wechat_uid, project_id)
+                    if project_id else session_store.list_sessions(wechat_uid))
         if 1 <= n <= len(sessions):
             return sessions[n - 1]["id"]
         return None
-    if session_store.get_session(wechat_uid, token):
+    sess = session_store.get_session(wechat_uid, token)
+    if sess and (not project_id or (sess.get("project_id") or "") == project_id):
         return token
     return None
 
@@ -217,11 +227,29 @@ def _resolve_project_ref(wechat_uid: str, token: str, menu: Optional[dict]) -> O
     return None
 
 
+# 全局串行锁：所有微信 Bot 共享，保证同一时刻只有一个用户的 agent 调用在飞。
+# 原因：agent 的工具工作区（file_tools/shell_tools 等）是模块级全局状态，
+# _apply_session_workspace 会改写它们；并发处理两个用户消息会互相覆盖工作区，
+# 导致 A 用户的任务读取 B 用户的文件。独立 agent 实例隔离了 checkpoint/记忆，
+# 但工具工作区仍共享，因此用锁串行化 agent 执行段。
+# ponytail: 串行化在个人部署（1~4 个测试号）下无感知；若未来多用户高并发，
+# 升级路径是把工具工作区改为 per-request ContextVar，去掉此锁。
+_WECHAT_AGENT_LOCK = asyncio.Lock()
+
+
 class WeChatBot:
     """微信 iLink Bot API 客户端（按用户隔离）"""
 
-    def __init__(self, agent, user_id: str = "default", data_dir: Optional[str] = None):
+    def __init__(self, agent=None, user_id: str = "default", data_dir: Optional[str] = None, tools: Optional[list] = None):
+        # agent 不传时懒创建该用户专属的独立实例（见 _ensure_agent）。
+        # 必须与 Web 端全局 agent 分离：全局 agent 的 _user_id / workspace /
+        # checkpoint 是共享可变状态，多微信用户 + Web 并发会互相覆盖，
+        # 曾导致「zhangcaixin 用户的项目内容发给 admin 微信用户」的跨用户泄露。
         self.agent = agent
+        # 独立 agent 的工具集：由 main._get_wechat_bot 显式传入（base_tools）。
+        # 不在此处 `from main import app`：python main.py 模式下 sys.modules["main"]
+        # 是第二次导入的双实例，其 state 依赖兜底 init 时序，不可靠。
+        self._base_tools = list(tools) if tools else []
         self.user_id = user_id
         self.data_dir = data_dir or str(Path.home() / ".desktop_agent" / f"wechat_{user_id}")
         self.bot_token: Optional[str] = None
@@ -238,9 +266,21 @@ class WeChatBot:
         self._wechat_current_project: dict[str, str] = {}
         # /projects 时缓存「序号 → project_id」映射，供 /project 按序号解析
         self._wechat_project_menu: dict[str, dict[str, str]] = {}
+        # /modals 时缓存「序号 → (provider_id, model)」映射，供 /modal 按序号切换
+        self._wechat_model_menu: dict[str, dict[str, tuple]] = {}
         # 暂存用户最近发送的图片（key=from_user），等待后续文本合并为图文消息
         # 值: {"data": dict, "time": float}，5 分钟后自动清理
         self._pending_images: dict[str, dict] = {}
+        # 步骤级即时回复开关：思考/工具执行分段推送（WECHAT_STEP_REPLY=0 关闭，回到一次性回复）
+        self.step_reply_enabled = os.environ.get("WECHAT_STEP_REPLY", "1") != "0"
+        # 发送节流：上一条消息发送完成的时间戳（微信短时高频发送会触发 prepare failed 频控）
+        self._last_send_at: float = 0.0
+        # 每轮任务 step 消息预算（默认 6 条）。实测微信 iLink sendmessage 有约 10 条/窗口的
+        # 硬配额：10 条内必成功，第 11 条起 prepare failed 且数十秒不恢复（21:39/21:52 两轮
+        # 均为第 11 条失败）。step 消息用尽预算即停止，把配额留给最终回复，避免"过程刷屏、结果丢失"。
+        self.step_msg_budget = int(os.environ.get("WECHAT_STEP_MSG_BUDGET", "6"))
+        # 本轮已发送的 step 消息计数（每次处理用户消息前重置为 0）
+        self._step_sent_count: int = 0
         # 自适应轮询间隔
         self._last_activity_at: float = time.time()
         self._poll_delay: float = 0.0  # 当前轮询间隔（秒），0=无延迟
@@ -261,6 +301,30 @@ class WeChatBot:
 
         self._load_token()
         self._load_current_project()
+
+    # ── Agent 实例（用户隔离）──────────────────────
+
+    def _ensure_agent(self):
+        """懒创建该微信用户专属的独立 DesktopAgent 实例。
+
+        - set_user(f"wechat_{user_id}")：checkpoint key 前缀为 wechat_<uid>，
+          与 Web 端 admin 等用户彻底隔离（之前共用全局 agent 时 _user_id 漂移
+          为 default，thread_key 与存储命名空间不匹配）。
+        - 工具集用 main 传入的 base_tools（不含 MCP），MCP 为 Web 端会话级高级功能，
+          微信渠道暂不加载（ponytail: 如需微信 MCP，在此按会话 workspace 重载）。
+        """
+        if self.agent is not None:
+            return self.agent
+        from agent import DesktopAgent
+        from config import AgentConfig
+        ag = DesktopAgent(AgentConfig.load())
+        if self._base_tools:
+            ag.set_tools(list(self._base_tools))
+        ag.set_user(f"wechat_{self.user_id}")
+        self.agent = ag
+        logger.info("[微信Bot:%s] 已创建用户专属 agent 实例 (user=%s, tools=%d)",
+                    self.user_id, f"wechat_{self.user_id}", len(self._base_tools))
+        return ag
 
     # ── 鉴权 ──────────────────────────────────────
 
@@ -426,9 +490,14 @@ class WeChatBot:
         return {"ret": data.get("ret", -1), "message_id": str(data.get("message_id", "")), "detail": data}
 
     async def send_message(
-        self, to_user_id: str, context_token: str, text: str
+        self, to_user_id: str, context_token: str, text: str,
+        max_retries: int = 0, retry_delay: float = 1.0,
     ) -> dict:
-        """发送文本消息"""
+        """发送文本消息。
+
+        max_retries: 失败后的重试次数（指数退避：delay, 2*delay, 4*delay...）。
+        微信对短时高频发送会返回 prepare failed（频控），指数退避重试可显著提高送达率。
+        """
         base = self.bot_base_url or ILINK_BASE_URL
         payload = {
             "msg": {
@@ -447,19 +516,60 @@ class WeChatBot:
             **self._auth_headers(),
             "Content-Length": str(len(raw_bytes)),
         }
-        async with httpx.AsyncClient(timeout=30, trust_env=False, verify=False) as client:
-            resp = await client.post(
-                f"{base}/ilink/bot/sendmessage",
-                content=raw_bytes,
-                headers=headers,
-            )
-            resp_text = resp.text.strip()
-            send_resp = self._parse_sendmessage_response(resp_text)
+        last_send_resp: dict = {"ret": -1, "detail": {}}
+        for attempt in range(max_retries + 1):
+            async with httpx.AsyncClient(timeout=30, trust_env=False, verify=False) as client:
+                resp = await client.post(
+                    f"{base}/ilink/bot/sendmessage",
+                    content=raw_bytes,
+                    headers=headers,
+                )
+                resp_text = resp.text.strip()
+                send_resp = self._parse_sendmessage_response(resp_text)
             if send_resp.get("ret", -1) == 0:
                 logger.info("[微信Bot] 文本消息发送成功: message_id=%s", send_resp.get("message_id", ""))
                 return {"ret": 0, "message_id": send_resp.get("message_id", "")}
+            last_send_resp = send_resp
             logger.warning("[微信Bot] sendmessage 文本消息失败: status=%s resp=%s", resp.status_code, json.dumps(send_resp, ensure_ascii=False)[:300])
-            return {"ret": -1, "detail": send_resp}
+            if attempt < max_retries:
+                delay = retry_delay * (2 ** attempt)
+                logger.info("[微信Bot] sendmessage 失败，%.1fs 后重试 (%d/%d)", delay, attempt + 1, max_retries)
+                await asyncio.sleep(delay)
+        return {"ret": -1, "detail": last_send_resp}
+
+    async def _throttle_send(self, min_interval: float = 1.5):
+        """发送节流：与上一条消息保持最小间隔，避免短时高频发送触发微信 prepare failed 频控。
+
+        由于 step 分段回复会在几十秒内连发十几条消息，微信侧短时 burst 会返回
+        prepare failed；这里在每条消息前按需等待，把发送节奏摊平。
+        """
+        wait = min_interval - (time.time() - self._last_send_at)
+        if wait > 0:
+            await asyncio.sleep(wait)
+        self._last_send_at = time.time()
+
+    async def _send_step_msg(self, to_user_id: str, context_token: str, text: str):
+        """发送步骤级进度消息（思考/工具执行分段），失败静默降级，不阻塞主流程。
+
+        step 消息受预算限制（self.step_msg_budget）：微信 sendmessage 有约 10 条/窗口的
+        硬配额，step 用尽预算即停止发送，把配额留给最终回复。某条 step 发送失败说明
+        配额已满（prepare failed），立即止损，不再尝试后续 step。
+        """
+        if self._step_sent_count >= self.step_msg_budget:
+            logger.debug("[微信Bot:%s] step 消息预算用尽，跳过: %s", self.user_id, text[:40])
+            return
+        try:
+            await self._throttle_send()
+            resp = await self.send_message(to_user_id, context_token, text)
+            if resp.get("ret", -1) != 0:
+                logger.warning("[微信Bot:%s] step 消息发送失败: %s", self.user_id, text[:60])
+                # 发送失败=微信侧配额已满，后续 step 大概率也失败，提前止损留配额给最终回复
+                self._step_sent_count = self.step_msg_budget
+            else:
+                self._step_sent_count += 1
+        except Exception as e:
+            logger.warning("[微信Bot:%s] step 消息发送异常: %s", self.user_id, e)
+            self._step_sent_count = self.step_msg_budget
 
     async def send_image(
         self, to_user_id: str, context_token: str, image_path: str
@@ -748,6 +858,60 @@ class WeChatBot:
         self._wechat_project_menu[from_user] = menu
         return "\n".join(lines)
 
+    def _build_model_list_text(self, from_user: str) -> str:
+        """构建带序号的可用模型清单，并刷新 from_user 的模型序号映射缓存。
+
+        只列出已配置 API Key 的 provider 的模型（未配置 Key 的切换了也调用失败）。
+        序号为跨 provider 扁平编号，供 /modal 按序号切换（模型名可能跨 provider 重复，
+        用扁平序号可精确定位）。超过微信单条消息长度上限时截断，其余在 Web 端查看。
+        """
+        cfg = self._ensure_agent().config
+        menu: dict[str, tuple[str, str]] = {}
+        cur_pid = cfg.active_provider
+        cur_model = cfg.model
+        cur_name = (cfg.providers or {}).get(cur_pid, {}).get("name", cur_pid)
+        all_lines: list[str] = []
+        for pid, prov in (cfg.providers or {}).items():
+            if not (prov or {}).get("api_key"):
+                continue  # 未配置 Key 的 provider 不可用，不列出
+            name = (prov or {}).get("name", pid)
+            for m in (prov or {}).get("models") or []:
+                idx = len(all_lines) + 1
+                key = str(idx)
+                menu[key] = (pid, m)
+                marker = " ← 当前" if (pid == cur_pid and m == cur_model) else ""
+                all_lines.append(f"{idx}. {m} @ {name}{marker}")
+        self._wechat_model_menu[from_user] = menu
+        if not all_lines:
+            return "🤖 暂无可用模型（所有 Provider 都未配置 API Key）。请先在 Web 端「设置-模型」中配置。"
+        # ponytail: 微信单条消息约 2KB 上限，模型超 30 个时截断提示，剩余在 Web 端查看；
+        # 个人部署一般 providers×models < 30，不会触发。
+        MAX_LINES = 30
+        if len(all_lines) > MAX_LINES:
+            shown = all_lines[:MAX_LINES]
+            shown.append(f"…共 {len(all_lines)} 个模型，仅显示前 {MAX_LINES} 个，其余请在 Web 端查看")
+            all_lines = shown
+        return (
+            f"🤖 可用模型（当前：{cur_model} @ {cur_name}）\n"
+            + "\n".join(all_lines)
+            + "\n💡 发送 /modal <序号> 切换模型"
+        )
+
+    def _switch_model(self, from_user: str, provider_id: str, model: str) -> str:
+        """切换当前微信用户的 agent 模型。
+
+        修改 agent 的配置（active_provider + model）→ 持久化到全局 config.json
+        （重启后保持）→ 重建 graph 使新模型立即生效。checkpointer 不变，
+        历史会话上下文保留。注意：config.json 是全局配置，Web 端重启后同样生效。
+        """
+        agent = self._ensure_agent()
+        agent.config.update_provider(provider_id, model=model)
+        agent.config.save()
+        agent._rebuild_graph()
+        prov = agent.config.providers[provider_id]
+        name = prov.get("name", provider_id)
+        return f"✅ 已切换到模型 {model}（{name}），后续对话生效"
+
     async def _handle_message(self, msg: dict):
         """处理单条微信消息：调用 agent 并回复，同时保存到会话存储"""
         from_user = msg.get("from_user_id", "")
@@ -855,19 +1019,26 @@ class WeChatBot:
             logger.info("[微信Bot:%s] 用户 %s 创建新会话 %s project=%s", self.user_id, from_user[:16], new_sid, current_pid)
             return
 
-        # ── /list 命令：列出所有会话（带序号，供 /switch /delete 按序号操作）──
+        # ── /list 命令：列出会话（带序号，供 /switch /delete 按序号操作）──
+        # 有当前项目时只列出该项目下的会话；无项目上下文时列出全部（原行为）
         if text.strip() == "/list":
-            list_text = self._build_session_list_text(wechat_uid, from_user)
+            list_text = self._build_session_list_text(
+                wechat_uid, from_user,
+                project_id=self._wechat_current_project.get(from_user, ""),
+            )
             await self.send_message(from_user, context_token, list_text)
             return
 
-        # ── /switch 命令：切换会话（支持序号或原始 sessionId）──
+        # ── /switch 命令：切换会话（支持序号或原始 sessionId，限当前项目内）──
         if text.strip().startswith("/switch "):
             arg = text.strip()[len("/switch "):].strip()
             if not arg:
                 await self.send_message(from_user, context_token, "❌ 请指定会话序号或 ID，格式：/switch &lt;序号|sessionId&gt;")
                 return
-            target_sid = _resolve_session_ref(wechat_uid, arg, self._wechat_session_menu.get(from_user))
+            target_sid = _resolve_session_ref(
+                wechat_uid, arg, self._wechat_session_menu.get(from_user),
+                self._wechat_current_project.get(from_user, ""),
+            )
             if target_sid is None:
                 await self.send_message(from_user, context_token, f"❌ 序号 {arg} 无效。发送 /list 查看可用会话。")
                 return
@@ -880,20 +1051,21 @@ class WeChatBot:
             logger.info("[微信Bot:%s] 用户 %s 切换到会话 %s", self.user_id, from_user[:16], target_sid)
             return
 
-        # ── /delete 命令：删除一个或多个历史会话（序号或 sessionId，空格分隔）──
+        # ── /delete 命令：删除一个或多个历史会话（序号或 sessionId，空格分隔，限当前项目内）──
         if text.strip().startswith("/delete "):
             raw = text.strip()[len("/delete "):].strip()
             if not raw:
                 await self.send_message(from_user, context_token, "❌ 请指定会话序号或 ID，格式：/delete &lt;序号|sessionId&gt; [&lt;...&gt;]")
                 return
             tokens = raw.split()
+            current_pid = self._wechat_current_project.get(from_user, "")
             deleted_sids: list[str] = []
             invalid: list[str] = []   # 序号无效，无法解析
             skipped: list[str] = []   # 解析到但不存在，跳过
             failed: list[str] = []    # 删除失败
             current_deleted = False
             for tok in tokens:
-                sid = _resolve_session_ref(wechat_uid, tok, self._wechat_session_menu.get(from_user))
+                sid = _resolve_session_ref(wechat_uid, tok, self._wechat_session_menu.get(from_user), current_pid)
                 if sid is None:
                     invalid.append(tok)
                     continue
@@ -979,23 +1151,133 @@ class WeChatBot:
             await self.send_message(from_user, context_token, list_text)
             return
 
+        # ── /modals 命令：列出可用模型（仅已配置 API Key 的 Provider）──
+        if text.strip() == "/modals":
+            model_text = self._build_model_list_text(from_user)
+            await self.send_message(from_user, context_token, model_text)
+            return
+
+        # ── /modal 命令：切换模型（按 /modals 序号，或直接按模型名）──
+        if text.strip() == "/modal" or text.strip().startswith("/modal "):
+            arg = text.strip()[len("/modal "):].strip()
+            if not arg:
+                await self.send_message(
+                    from_user, context_token,
+                    "❌ 请指定模型序号或名称，格式：/modal <序号|模型名>（先发 /modals 查看可用模型）",
+                )
+                return
+            entry = None
+            if arg.isdigit():
+                entry = self._wechat_model_menu.get(from_user, {}).get(arg)
+                if entry is None:
+                    # 序号缓存可能过期（配置在 Web 端改过），重新构建列表再试一次
+                    self._build_model_list_text(from_user)
+                    entry = self._wechat_model_menu.get(from_user, {}).get(arg)
+                if entry is None:
+                    await self.send_message(
+                        from_user, context_token,
+                        f"❌ 序号 {arg} 无效。发送 /modals 查看最新可用模型。",
+                    )
+                    return
+            else:
+                # 按模型名匹配：精确优先，其次模糊；多个匹配时列出候选让用户用序号精确定位
+                cfg = self._ensure_agent().config
+                all_models = [
+                    (pid, m)
+                    for pid, prov in (cfg.providers or {}).items()
+                    for m in (prov or {}).get("models") or []
+                ]
+                exact = [e for e in all_models if e[1] == arg]
+                fuzzy = [e for e in all_models if arg in e[1]]
+                candidates = exact or fuzzy
+                if len(candidates) == 1:
+                    entry = candidates[0]
+                elif len(candidates) > 1:
+                    shown = ", ".join(f"{m}@{p}" for p, m in candidates[:5])
+                    await self.send_message(
+                        from_user, context_token,
+                        f"❌ 模型名 '{arg}' 匹配到多个：{shown}。请用 /modals 的序号切换。",
+                    )
+                    return
+                else:
+                    await self.send_message(
+                        from_user, context_token,
+                        f"❌ 未找到模型 '{arg}'。发送 /modals 查看可用模型。",
+                    )
+                    return
+            provider_id, model = entry
+            result = self._switch_model(from_user, provider_id, model)
+            await self.send_message(from_user, context_token, result)
+            logger.info("[微信Bot:%s] 用户 %s 切换模型 -> %s @ %s",
+                        self.user_id, from_user[:16], model, provider_id)
+            return
+
+        # ── /help 命令：指令使用说明 ──
+        if text.strip() == "/help":
+            help_text = (
+                "📖 指令帮助\n"
+                "/projects — 列出所有项目\n"
+                "/project <序号|ID> — 切换项目\n"
+                "/unproject — 取消项目绑定\n"
+                "/list — 列出当前项目下的会话\n"
+                "/sessions — 列出会话（无项目时显示未归属）\n"
+                "/new — 创建新会话\n"
+                "/switch <序号|ID> — 切换会话\n"
+                "/delete <序号|ID> … — 删除会话\n"
+                "/modals — 列出可用模型\n"
+                "/modal <序号|模型名> — 切换模型\n"
+                "/help — 显示本帮助"
+            )
+            await self.send_message(from_user, context_token, help_text)
+            return
+
         # ── 会话管理 ──
         # 用户发起了真正的对话，会话列表可能已变化，序号映射失效
         self._wechat_session_menu.pop(from_user, None)
+        current_pid = self._wechat_current_project.get(from_user, "")
         session_id = self._wechat_sessions.get(from_user)
-        if session_id is None:
-            # 首次消息：用微信用户 ID 的 md5 作为稳定会话 ID
+        if current_pid:
+            # 有当前项目：对话必须落在该项目下的会话。
+            # 当前会话属于该项目 → 继续；否则自动切到项目下最近更新的会话，
+            # 无则新建一个归属该项目的会话（保证「切项目后指令都对项目执行」）。
+            if session_id:
+                _cur = session_store.get_session(wechat_uid, session_id)
+                if not (_cur and (_cur.get("project_id") or "") == current_pid):
+                    session_id = None
+            if session_id is None:
+                proj_sessions = session_store.list_sessions_by_project(wechat_uid, current_pid)
+                if proj_sessions:
+                    session_id = proj_sessions[0]["id"]
+                else:
+                    session_id = hashlib.md5((from_user + ":" + current_pid).encode()).hexdigest()[:8]
+                self._wechat_sessions[from_user] = session_id
+                if not session_store.get_session(wechat_uid, session_id):
+                    session_store.create_session(
+                        wechat_uid,
+                        title=text[:20],
+                        session_id=session_id,
+                        project_id=current_pid,
+                    )
+        elif session_id is None:
+            # 无项目：首次消息用微信用户 ID 的 md5 作为稳定会话 ID（原行为）
             session_id = hashlib.md5(from_user.encode()).hexdigest()[:8]
             self._wechat_sessions[from_user] = session_id
-            session = session_store.get_session(wechat_uid, session_id)
-            current_pid = self._wechat_current_project.get(from_user, "")
-            if session is None:
-                session = session_store.create_session(
+            if not session_store.get_session(wechat_uid, session_id):
+                session_store.create_session(
                     wechat_uid,
                     title=text[:20],
                     session_id=session_id,
-                    project_id=current_pid or None,
+                    project_id=None,
                 )
+
+        # ── 加载会话历史（必须在保存当前用户消息之前，否则当前消息会被算进历史导致重复）──
+        # agent 的 checkpoint（MemorySaver）是内存态、重启即丢；从 session_store 拉取
+        # 持久化历史传入 agent，保证重启后上下文不丢（Web 端同模式）。这是修复
+        # 「重启后上下文为空 → agent 乱逛共享工作区 → 串出别的用户内容」的关键。
+        session = session_store.get_session(wechat_uid, session_id)
+        history = (session or {}).get("messages", []) if session else []
+        if history:
+            logger.debug("[微信Bot:%s] 会话 %s 加载历史 %d 条", self.user_id, session_id, len(history))
 
         # ── 检查是否有暂存的图片，合并为图文消息 ──
         attachments = None
@@ -1034,28 +1316,95 @@ class WeChatBot:
         # 发送"正在输入"状态
         await self.send_typing(from_user, context_token)
 
-        # 根据当前会话/项目设置工作目录，保证 agent 与工具使用同一 cwd
+        # 流式调用 agent：思考与每步工具执行即时分段回复，最终回复收集后统一保存/发送。
+        # 开启 step 分段回复时，用户无需等 agent 全部处理完才看到第一条反馈。
+        # 注意：微信 sendmessage 有约 10 条/窗口硬配额（第 11 条起 prepare failed 且不恢复），
+        # 因此每个工具只发 1 条合并消息（💭思考+执行结果），不发"正在执行"，
+        # step 总条数受 step_msg_budget 限制，把配额留给最终回复。
+        reply = ""
+        pending_thought = ""  # 缓存 thought，合并到下一个 tool_result 一起发，减少消息条数
+        collected_steps: list[dict] = []  # 收集步骤卡片，随最终回复保存（Web 端回放渲染工具卡片）
+        self._step_sent_count = 0  # 每轮任务重置 step 消息预算计数
+        agent = self._ensure_agent()
         try:
-            from agent_core.services.agent_service import _apply_session_workspace
-            _apply_session_workspace(wechat_uid, session_id, self._wechat_current_project.get(from_user, ""))
-        except Exception:
-            pass
-
-        # 为当前会话设置独立的 agent 线程（显式传入，避免并发时覆盖共享的 _thread_id）
-        # 调用 agent 获取完整回复（支持图文消息）
-        try:
-            reply = await self.agent.chat_sync(text, attachments=attachments, thread_id=session_id)
+            # 串行化 agent 执行段：工具工作区（file_tools/shell_tools/browser_tools）是
+            # 模块级全局状态，_apply_session_workspace 会改写它。若两个用户的微信消息
+            # 并发处理，A 的工具调用会读到 B 的工作区文件（跨用户内容串扰的根因之一）。
+            # 用全局锁保证同一时刻只有一个用户在跑 agent。
+            async with _WECHAT_AGENT_LOCK:
+                # 根据当前会话/项目设置工具工作目录（全局工具工作区，与 agent 调用同锁）
+                try:
+                    from agent_core.services.agent_service import _apply_session_workspace
+                    _apply_session_workspace(wechat_uid, session_id, self._wechat_current_project.get(from_user, ""))
+                except Exception:
+                    pass
+                # 同步该用户专属 agent 的工作区（_apply_session_workspace 只设置全局 Web agent）
+                try:
+                    from services.workspace import _workspace_for_user
+                    eff_ws = session_store.get_session_workspace(wechat_uid, session_id) or str(_workspace_for_user(wechat_uid))
+                    agent.set_workspace(str(Path(eff_ws).expanduser().resolve()))
+                except Exception:
+                    pass
+                async for ev in agent.chat_stream_events(
+                    text, attachments=attachments, thread_id=session_id, history=history,
+                ):
+                    et = ev.get("type")
+                    # 步骤卡片一律收集（无论 step_reply_enabled），随最终回复保存，
+                    # 供 Web 端回放渲染工具卡片（与 Web 端 /run/stream 的 collected_steps 一致）
+                    if et == "thought":
+                        thought = str(ev.get("thought", "")).strip()
+                        if thought:
+                            collected_steps.append({"type": "thought", "thought": thought[:200]})
+                            if self.step_reply_enabled:
+                                pending_thought = thought[:200]
+                    elif et == "tool_start":
+                        collected_steps.append(ev)
+                    elif et == "tool_result":
+                        collected_steps.append(ev)
+                        if not self.step_reply_enabled:
+                            continue
+                        tool = ev.get("tool", "")
+                        result = str(ev.get("result", "") or "").strip()
+                        ok = not ev.get("error")
+                        dur = ev.get("duration_ms") or 0
+                        dur_txt = f"（{dur / 1000:.1f}s）" if dur else ""
+                        snippet = result[:150].replace("\n", " ")
+                        head = f"💭 {pending_thought}\n" if pending_thought else ""
+                        pending_thought = ""
+                        await self._send_step_msg(
+                            from_user, context_token,
+                            f"{head}{'✅' if ok else '❌'} {tool}{dur_txt}：{snippet or '完成'}",
+                        )
+                    elif et == "done":
+                        reply = ev.get("content", "")
+                    elif et == "error":
+                        content = ev.get("content", "")
+                        if not reply:
+                            reply = f"❌ {content}"
         except Exception as e:
             logger.exception("[微信Bot] agent 调用异常")
             reply = f"❌ 处理出错: {e}"
 
-        # 保存助手回复
+        # 保存助手回复：与 Web 端同格式（{"text":..., "steps":[...]} JSON），
+        # 使微信 bot 消息在 Web 端回放时也能渲染工具卡片。
+        # 复用 _save_assistant_result：内部 _strip_screenshot_urls 同时剥离过期截图引用
+        # （token 会清理，原样保存会在回放时渲染破图）。
         if reply:
-            reply_ret = session_store.add_message(wechat_uid, session_id, "assistant", reply)
-            if reply_ret is None:
-                logger.warning("[微信Bot:%s] 助手回复保存失败: session=%s 不存在", self.user_id, session_id)
-            else:
-                logger.info("[微信Bot:%s] 会话 %s 已保存助手回复 (%d 字符)", self.user_id, session_id, len(reply))
+            saved = False
+            try:
+                from services.agent_service import _save_assistant_result
+                _save_assistant_result(wechat_uid, session_id, text, reply, collected_steps or None)
+                saved = True
+                logger.info("[微信Bot:%s] 会话 %s 已保存助手回复+steps (%d 字符, %d 条步骤)",
+                            self.user_id, session_id, len(reply), len(collected_steps or []))
+            except Exception as e:
+                logger.warning("[微信Bot:%s] _save_assistant_result 保存失败，回退纯文本保存: %s", self.user_id, e)
+            if not saved:
+                reply_ret = session_store.add_message(wechat_uid, session_id, "assistant", reply)
+                if reply_ret is None:
+                    logger.warning("[微信Bot:%s] 助手回复保存失败: session=%s 不存在", self.user_id, session_id)
+                else:
+                    logger.info("[微信Bot:%s] 会话 %s 已保存助手回复 (%d 字符)", self.user_id, session_id, len(reply))
             sess = session_store.get_session(wechat_uid, session_id)
             if sess and sess.get("message_count", 0) <= 2:
                 short = text[:30] + ("..." if len(text) > 30 else "")
@@ -1081,7 +1430,7 @@ class WeChatBot:
 
             if screenshot_urls:
                 # 从 agent workspace 查找截图文件
-                ws = Path(self.agent.config.workspace) if self.agent and self.agent.config else None
+                ws = Path(self._ensure_agent().config.workspace)
                 for alt_text, token in screenshot_urls:
                     try:
                         if ws:
@@ -1103,22 +1452,16 @@ class WeChatBot:
                         logger.warning("[微信Bot:%s] 发送截图失败: %s", self.user_id, e)
 
             # 发送剩余的文本（去掉图片引用后的纯净文本）
+            # 最终回复发送前节流 + 指数退避重试（应对微信 prepare failed 频控，避免最终回复丢失）
             clean_text = re.sub(r'\n{3,}', '\n\n', text_reply).strip()
             if clean_text:
-                send_resp = await self.send_message(from_user, context_token, clean_text)
+                await self._throttle_send()
+                send_resp = await self.send_message(from_user, context_token, clean_text, max_retries=3)
                 send_ret = send_resp.get("ret", -1)
                 send_msg_id = send_resp.get("message_id", "")
                 if send_ret != 0:
-                    logger.warning("[微信Bot:%s] sendmessage 首次失败 ret=%s message_id=%s resp=%s",
-                                   self.user_id, send_ret, send_msg_id, json.dumps(send_resp, ensure_ascii=False)[:300])
-                    send_resp2 = await self.send_message(from_user, context_token, clean_text)
-                    send_ret2 = send_resp2.get("ret", -1)
-                    send_msg_id2 = send_resp2.get("message_id", "")
-                    if send_ret2 == 0:
-                        logger.info("[微信Bot:%s] 回复成功（重试）: message_id=%s text=%s", self.user_id, send_msg_id2, clean_text[:120])
-                    else:
-                        logger.warning("[微信Bot:%s] 重试仍失败 ret=%s message_id=%s resp=%s",
-                                       self.user_id, send_ret2, send_msg_id2, json.dumps(send_resp2, ensure_ascii=False)[:300])
+                    logger.warning("[微信Bot:%s] 最终回复发送失败（重试后仍失败）: resp=%s",
+                                   self.user_id, json.dumps(send_resp, ensure_ascii=False)[:300])
                 else:
                     logger.info("[微信Bot:%s] 回复: message_id=%s text=%s", self.user_id, send_msg_id, clean_text[:120])
             elif sent_image:

@@ -6,20 +6,20 @@
 前端必须用 msg.index（绝对）而非窗口内相对序号，否则会删错消息。
 """
 import shutil
-from pathlib import Path
 
 # 必须先导入 main 以触发 agent_core/main.py 顶部的 sys.path 注入，
 # 否则 session_store 里的顶层 `import user_manager` 会找不到模块。
 from agent_core.main import app  # noqa: F401
 from agent_core import session_store
+from agent_core import user_manager
 
 
 UID = "test_delete_msg_uid"
-SESSIONS_ROOT = Path.home() / ".desktop_agent" / "sessions"
 
 
 def _cleanup():
-    d = SESSIONS_ROOT / UID
+    # 会话数据目录：~/.desktop_agent/users/<uid>/ （含 sessions/memory/usage）
+    d = user_manager.session_dir(UID).parent
     if d.exists():
         shutil.rmtree(d)
 

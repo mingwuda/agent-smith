@@ -794,7 +794,15 @@ function handleStreamEvent(data) {
         }
       }
       // 完成：折叠胶囊（与主 agent 一致，可点击展开查看）
-      if (status === 'done' || status === 'error') card.classList.remove('open');
+      if (status === 'done' || status === 'error') {
+        card.classList.remove('open');
+        // 兜底归档：tool_end 未实时处理的残留工具卡片也折叠归档，执行区不留已完成卡片
+        _archiveResidualTools(card);
+      }
+      // 历史回放/补全：用持久化的工具事件重建工具卡片（实时流已渲染的按 tool_id 去重）
+      if (Array.isArray(cap.tools) && cap.tools.length) {
+        _renderSubagentToolsFromHistory(card, cap.tools);
+      }
     });
     smartScroll(container);
   }
@@ -906,7 +914,7 @@ function handleStreamEvent(data) {
       '<div class="sa-done-body"></div>';
     const toolsBox = cardEl.querySelector('.sa-tools');
     const body = cardEl.querySelector('.tool-card-body');
-    if (toolsBox && toolsBox.nextSibling) toolsBox.parentNode.insertBefore(box, toolsBox.nextSibling);
+    if (toolsBox) toolsBox.parentNode.insertBefore(box, toolsBox);
     else if (body) body.appendChild(box);
     return box;
   }
@@ -915,6 +923,89 @@ function handleStreamEvent(data) {
     const n = box.querySelectorAll('.sa-done-body .tool-card').length;
     const c = box.querySelector('.sa-done-count');
     if (c) c.textContent = '(' + n + ')';
+  }
+
+  // subagent_end 兜底：把执行区残留的已完成工具卡片（tool_end 未实时归档的）折叠移入归档区。
+  // ponytail: 折叠不再依赖 tool_end 事件时序——事件丢失/查找失败时，结束时刻统一收口。
+  function _archiveResidualTools(cardEl) {
+    const toolsBox = cardEl.querySelector('.sa-tools');
+    if (!toolsBox) return;
+    const leftovers = Array.from(toolsBox.querySelectorAll('.tool-card[data-tool-id]'));
+    if (!leftovers.length) return;
+    const doneBox = _ensureDoneToolsBox(cardEl);
+    leftovers.forEach(function (div) {
+      div.classList.remove('open');
+      const dot = div.querySelector('.tool-status-dot');
+      if (dot && dot.classList.contains('running')) dot.className = 'tool-status-dot done';
+      doneBox.querySelector('.sa-done-body').appendChild(div);
+    });
+    _updateDoneToolsCount(doneBox);
+  }
+
+  // 历史回放/补全：用持久化的工具事件（subagent_end 携带的 cap.tools）重建工具卡片。
+  // 实时流已渲染的卡片按 tool_id 去重；回放场景默认全部折叠进「已完成工具调用」归档区。
+  function _renderSubagentToolsFromHistory(cardEl, tools) {
+    if (!Array.isArray(tools) || !tools.length) return;
+    const toolsBox = cardEl.querySelector('.sa-tools');
+    if (!toolsBox) return;
+    const doneBox = _ensureDoneToolsBox(cardEl);
+    const doneBody = doneBox.querySelector('.sa-done-body');
+    const toolExists = function (tid) {
+      let found = false;
+      [toolsBox, doneBody].forEach(function (box) {
+        if (!box) return;
+        box.querySelectorAll('.tool-card[data-tool-id]').forEach(function (el) {
+          if (el.dataset.toolId === String(tid)) found = true;
+        });
+      });
+      return found;
+    };
+    tools.forEach(function (ev) {
+      const tid = String(ev.tool_id || '');
+      if (!tid) return;
+      if (ev.event === 'tool_start') {
+        if (toolExists(tid)) return;
+        const icon = getToolIcon(ev.tool_name);
+        let argsText = ev.tool_args;
+        if (typeof argsText !== 'string') argsText = JSON.stringify(argsText || {}, null, 2);
+        const div = document.createElement('div');
+        div.className = 'tool-card sa-inner-tool';  // 不带 open：归档区默认折叠
+        div.dataset.toolId = tid;
+        div.innerHTML =
+          '<div class="tool-card-header" onclick="toggleToolCard(this)">' +
+            '<span class="arrow">▶</span>' +
+            '<span class="tool-icon">' + icon + '</span>' +
+            '<span class="tool-label">调用工具:</span>' +
+            '<span class="tool-name-inline">' + escapeHtml(ev.tool_name || '') + '</span>' +
+            '<span class="tool-status-dot done"></span>' +
+          '</div>' +
+          '<div class="tool-card-body">' +
+            '<div class="tool-section-label">参数</div>' +
+            '<pre class="tool-code-block">' + escapeHtml(unescapeDisplay(argsText)) + '</pre>' +
+            '<div class="sa-tool-output"></div>' +
+          '</div>';
+        doneBody.appendChild(div);
+      } else if (ev.event === 'tool_end') {
+        let div = null;
+        doneBody.querySelectorAll('.tool-card[data-tool-id]').forEach(function (el) {
+          if (el.dataset.toolId === tid) div = el;
+        });
+        if (!div) return;
+        const failed = ev.tool_status === 'error';
+        const dot = div.querySelector('.tool-status-dot');
+        if (dot) dot.className = 'tool-status-dot ' + (failed ? 'error' : 'done');
+        const outBox = div.querySelector('.sa-tool-output');
+        if (outBox) {
+          let outText = ev.tool_output;
+          if (typeof outText !== 'string') outText = JSON.stringify(outText);
+          if (outText && outText !== '""' && outText !== 'undefined') {
+            outBox.innerHTML = '<div class="tool-section-label">输出</div><pre class="tool-code-block">' +
+              escapeHtml(unescapeDisplay(outText)).slice(0, 8000) + '</pre>';
+          }
+        }
+      }
+    });
+    _updateDoneToolsCount(doneBox);
   }
 
   // 工具函数：添加分析中提示
@@ -1166,8 +1257,15 @@ function handleStreamEvent(data) {
     case 'tool_result':
       closePythonProgress();
       const trStep = data.step !== undefined ? data.step : 0;
+      // 优先用后端下发的真实耗时（实时流与历史回放都带），
+      // 缺失时（旧历史数据）回退到前端 _toolTimers 估算
       const startedAt = _toolTimers[trStep];
-      const elapsed = startedAt ? Date.now() - startedAt : 0;
+      let elapsed = 0;
+      if (data.duration_ms !== undefined && data.duration_ms !== null && data.duration_ms >= 0) {
+        elapsed = data.duration_ms;
+      } else {
+        elapsed = startedAt ? Date.now() - startedAt : 0;
+      }
       const durText = elapsed > 1000 ? `${(elapsed/1000).toFixed(1)}s` : `${elapsed}ms`;
       delete _toolTimers[trStep];
 

@@ -3,11 +3,31 @@
 Slim entry point: app 创建、middleware、startup/shutdown、agent 全局实例。
 所有路由已拆分到 api/routes/ 各模块，使用 app.include_router() 注册。
 """
+import sys
+
+# ── 双实例根治：入口处对齐 sys.modules["main"] ──────────────────────────
+# python main.py 直跑时，本模块以 "__main__" 身份执行，sys.modules 里没有 "main"。
+# 代码库中有大量延迟导入 `from main import app / agent / _get_wechat_bot`
+# （services/agent_service.py、api/routes/*.py、tools/mcp_tools.py 等），它们会在
+# 请求时才执行——若此时 sys.modules["main"] 不存在，Python 会把 main.py 重新执行
+# 一遍作为独立的 "main" 模块，产生第二个 app / 第二个 agent（日志可见 __main__
+# 与 main 各打印一次 "✅ Agent 初始化完成"）。两个实例的 app.state / agent 引用
+# 彼此不一致，曾导致微信 Bot 与 Web 端拿到不同 agent、跨用户上下文串扰。
+# 这里在**任何业务 import 之前**把 "main" 指向自身，让所有 `from main import xxx`
+# 都拿到同一模块实例。必须放在最顶部：main.py 底部还有顶层
+# `from api.routes.agent import router` 等导入，若对齐晚了这些模块里若有顶层
+# `from main import` 仍可能触发二次执行。
+if __name__ == "__main__":
+    sys.modules["main"] = sys.modules["__main__"]
+elif "main" not in sys.modules:
+    # 被以 agent_core.main 方式导入（测试 `from agent_core.main import app` 等）时，
+    # 同样注册 "main" 别名指向自身，保证 agent_core 内部 `from main import` 一致。
+    sys.modules["main"] = sys.modules[__name__]
+
 import asyncio
 import json
 import os
 import secrets
-import sys
 import threading
 import time
 from pathlib import Path
@@ -19,8 +39,18 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 
-# 确保能找到 agent_core 内的模块
-sys.path.insert(0, str(Path(__file__).parent))
+# 确保能找到 agent_core 内的模块（扁平风格 import session_store / from services...
+# 需要 agent_core 在 sys.path；包风格 from agent_core... 需要项目根在 sys.path）。
+# 项目历史上两种风格混用，且存在 python main.py 与 python agent_core/main.py 两种
+# 启动方式（sys.path[0] 分别是项目根 / agent_core）——只加一个目录会在另一种启动
+# 方式下静默失败。曾因 python agent_core/main.py 启动时 from agent_core... 全部
+# ModuleNotFoundError 被 try/except 吞掉，微信 Bot 工作区同步失效：agent 在全局
+# 共享工作区 /root/agent_workspace 里找"今天的改动"，答非所问且误读其他用户目录。
+_HERE_DIR = Path(__file__).resolve().parent       # .../agent_core
+_PROJ_ROOT = _HERE_DIR.parent                     # 项目根（如 /opt/desktop-agent）
+for _p in (str(_HERE_DIR), str(_PROJ_ROOT)):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 from logger import setup_logging, get_logger, set_log_context, clear_log_context
 
@@ -390,7 +420,11 @@ def _get_wechat_bot(uid: str) -> WeChatBot:
     bots: dict[str, WeChatBot] = app.state.wechat_bots
     bot = bots.get(uid)
     if bot is None:
-        bot = WeChatBot(agent, user_id=uid)
+        # 不传全局 agent：WeChatBot 内部懒创建该用户专属的独立 agent 实例，
+        # 避免多微信用户 / Web 端共用全局 agent 导致跨用户上下文串扰（数据泄露）。
+        # tools 显式传基准工具集（本模块内直接引用 app/agent，无双实例导入问题）。
+        _tools = getattr(app.state, "base_tools", None) or (agent.tools if agent else [])
+        bot = WeChatBot(user_id=uid, tools=_tools)
         bots[uid] = bot
         if bot.is_logged_in:
             try:

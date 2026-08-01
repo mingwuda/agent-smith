@@ -140,6 +140,25 @@ class SubagentManager:
     def get_task(self, task_id: str) -> Optional[SubagentTask]:
         return self._tasks.get(task_id)
 
+    def get_capsule_tool_events(self, capsule_id: int) -> list[dict]:
+        """返回指定 capsule 已产生的结构化工具事件（tool_start/tool_end）。
+
+        subagent_end 时由 agent_run 打包进 capsules 一起持久化到历史：
+        子代理工具事件走 /subagent-progress 独立 SSE，不进主流事件流，
+        若不在此打包，历史回放时子代理的工具调用与结果将全部丢失。
+        """
+        idx = capsule_id - 1
+        if not (0 <= idx < len(self._current_batch)):
+            return []
+        task = self._current_batch[idx]
+        lines, _ = task.get_logs_since(0)
+        keys = ("event", "tool_id", "tool_name", "tool_args", "tool_output", "tool_status")
+        return [
+            {k: ln[k] for k in keys if k in ln}
+            for ln in lines
+            if ln.get("event") in ("tool_start", "tool_end")
+        ]
+
     def get_progress_logs(self, capsule_id: int) -> tuple[list[dict], int, bool]:
         """获取指定 capsule 的增量日志。返回 (新日志行, 总行数, 是否已完成)。
 

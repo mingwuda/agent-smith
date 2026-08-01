@@ -65,6 +65,26 @@ class AgentChatMixin:
         return full
 
 
+    async def chat_stream_events(self, message: str, attachments: Optional[list[dict]] = None, thread_id: str = "", history: Optional[list[dict]] = None) -> AsyncGenerator[dict, None]:
+        """流式运行 agent，逐条产出精简事件（thought/tool_start/tool_result/done/error）。
+
+        供非流式渠道（如微信）边执行边分段回复：思考与每步工具执行即时可见，
+        无需等 agent 全部处理完才拿到第一条反馈。done/error 事件携带最终回复。
+
+        history: 会话历史（session_store messages 格式），透传给 stream_run。
+        非流式渠道（微信）的 checkpoint 是内存态、重启即丢，必须显式传历史恢复上下文。
+        """
+        async for sse_line in self._stream_done_wrapper(message, attachments=attachments, thread_id=thread_id, history=history):
+            line = sse_line.strip()
+            if line.startswith("data: ") and not line.startswith("data: [DONE]"):
+                try:
+                    data = json.loads(line[6:])
+                except json.JSONDecodeError:
+                    continue
+                if data.get("type") in ("thought", "tool_start", "tool_result", "done", "error"):
+                    yield data
+
+
     async def reflect_on_task(
         self,
         user_message: str,
