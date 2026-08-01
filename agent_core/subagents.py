@@ -5,7 +5,6 @@ import json
 import threading
 import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Literal, Optional
 
@@ -107,6 +106,7 @@ class SubagentManager:
         self._config: Optional[AgentConfig] = None
         self._tools: list = []
         self._review_llm: Optional[ChatOpenAI] = None  # 审核子代理用独立模型
+        self._graph_cache: dict[str, object] = {}  # agent_type -> 预构建的 React 图（LLM/tools 复用）
         # 当前批次任务列表（按 capsule_id 索引），供前端 SSE 轮询用
         self._current_batch: list[SubagentTask] = []
 
@@ -133,6 +133,58 @@ class SubagentManager:
                     t for t in all_tools
                     if not getattr(t, "name", "").startswith(SUBAGENT_TOOL_EXCLUDE_PREFIXES)
                 ]
+        # 预构建各类型子代理的 React 图（LLM 实例 + prompt + 工具集一次成型），
+        # 运行期所有任务共享同一 graph 并发 astream —— langgraph 每次调用独立 state，并发安全。
+        # 这比之前每个任务新建 ChatOpenAI + create_react_agent 省掉重复建图开销，
+        # 也是并行改造的前提：并发任务共享同一连接池，I/O 真正并行。
+        # 预构建失败时静默降级（留 None，_run_agent 按需现建）——configure 的核心职责是工具过滤，
+        # 不能被建图阻塞（如测试/异常配置下传占位 config）。
+        self._graph_cache = {}
+        for agent_type in SUBAGENT_PROMPTS:
+            try:
+                self._graph_cache[agent_type] = self._build_subagent_graph(agent_type)
+            except Exception:
+                self._graph_cache[agent_type] = None
+
+    def _build_subagent_llm(self, agent_type: str):
+        """构建单个子代理类型的 LLM 实例（reviewer 用审核模型，其余用主模型配置）。"""
+        if agent_type == "reviewer" and self._review_llm is not None:
+            return self._review_llm
+        assert self._config is not None
+        if self._config.base_url:
+            host = urlparse(self._config.base_url).hostname
+            if host:
+                configure_host_resolution(host, self._config.api_host_ips)
+        return ChatOpenAI(
+            model=self._config.model,
+            api_key=self._config.api_key or "sk-no-key-required",
+            base_url=self._config.base_url or None,
+            temperature=0,
+            max_retries=self._config.api_max_retries,
+            timeout=self._config.api_timeout_seconds,
+        )
+
+    def _build_subagent_prompt(self, agent_type: str) -> str:
+        prompt = (
+            f"{SUBAGENT_PROMPTS[agent_type]}\n\n"
+            "你是主代理派发出的子代理。你的输出会返回给主代理整合。"
+            "保持聚焦，不要假装可以调用不存在的并行/团队工具。"
+            "如果需要修改文件，说明建议和风险；如果已调用工具完成修改，列出验证结果。\n"
+        )
+        if agent_type != "searcher":
+            prompt += (
+                "\n工具使用约束：你没有联网工具（web_search / web_fetch / 浏览器）可用，"
+                "本地文件/代码/系统任务不需要联网。需要最新外部信息时，"
+                "在最终输出中列出所需关键词，由主代理另行处理。\n"
+            )
+        return prompt
+
+    def _build_subagent_graph(self, agent_type: str):
+        llm = self._build_subagent_llm(agent_type)
+        agent_tools = self._tools_by_type.get(agent_type, self._tools)
+        return create_react_agent(
+            llm, agent_tools, prompt=self._build_subagent_prompt(agent_type)
+        )
 
     def list_agent_types(self) -> list[str]:
         return sorted(SUBAGENT_PROMPTS)
@@ -264,38 +316,10 @@ class SubagentManager:
         return item
 
     async def _run_agent(self, item: SubagentTask) -> str:
-        assert self._config is not None
-        # reviewer 子代理使用审核模型（如果已配置），其余使用主模型
-        is_reviewer = item.agent_type == "reviewer"
-        if is_reviewer and self._review_llm is not None:
-            llm = self._review_llm
-        else:
-            if self._config.base_url:
-                host = urlparse(self._config.base_url).hostname
-                if host:
-                    configure_host_resolution(host, self._config.api_host_ips)
-            llm = ChatOpenAI(
-                model=self._config.model,
-                api_key=self._config.api_key or "sk-no-key-required",
-                base_url=self._config.base_url or None,
-                temperature=0,
-                max_retries=self._config.api_max_retries,
-                timeout=self._config.api_timeout_seconds,
-            )
-        prompt = (
-            f"{SUBAGENT_PROMPTS[item.agent_type]}\n\n"
-            "你是主代理派发出的子代理。你的输出会返回给主代理整合。"
-            "保持聚焦，不要假装可以调用不存在的并行/团队工具。"
-            "如果需要修改文件，说明建议和风险；如果已调用工具完成修改，列出验证结果。\n"
-        )
-        if item.agent_type != "searcher":
-            prompt += (
-                "\n工具使用约束：你没有联网工具（web_search / web_fetch / 浏览器）可用，"
-                "本地文件/代码/系统任务不需要联网。需要最新外部信息时，"
-                "在最终输出中列出所需关键词，由主代理另行处理。\n"
-            )
-        agent_tools = self._tools_by_type.get(item.agent_type, self._tools)
-        graph = create_react_agent(llm, agent_tools, prompt=prompt)
+        graph = self._graph_cache.get(item.agent_type)
+        if graph is None:
+            # ponytail: 兜底 —— 若 configure 未构建（如测试直接改 _config），按需现建
+            graph = self._build_subagent_graph(item.agent_type)
         message = item.task
         if item.context:
             message = f"上下文：\n{item.context}\n\n任务：\n{item.task}"
@@ -449,16 +473,26 @@ def delegate_task(task: str, agent_type: str = "coder", context: str = "") -> st
     )
 
 
-def _parallel_task_wrapper(task_def: dict) -> str:
-    """Run a single subagent task in a thread pool worker."""
-    item = _run_coro_in_thread(manager.run_sync(
-        task=task_def["task"],
-        agent_type=task_def.get("agent_type", "coder"),
-        context=task_def.get("context", ""),
-    ))
-    return (
-        f"任务 {item.id} [{item.agent_type}] 状态：{item.status}\n\n"
-        f"{item.result or item.error}"
+async def _run_all_parallel(items: list[SubagentTask]) -> list[SubagentTask]:
+    """在一个事件循环里并发执行全部子代理任务。
+
+    与旧的 ThreadPoolExecutor + 每任务独立线程/asyncio.run 不同：
+    所有任务共享同一批预构建 graph（LLM 连接池），在单个事件循环里 gather，
+    HTTP 请求真正同时发出（I/O 并发），不再有每任务一个线程 + 一个事件循环的重复开销。
+    每个任务仍保留各自 run_sync 内的 wall_timeout(180s)/idle_timeout(60s) 保护。
+    """
+    return await asyncio.gather(
+        *(
+            manager.run_sync(
+                task=item.task,
+                agent_type=item.agent_type,
+                context=item.context,
+                wall_timeout=180.0,
+                idle_timeout=60.0,
+                item=item,  # 复用 batch item：日志/状态写入同一对象，前端 SSE 才能实时读到
+            )
+            for item in items
+        )
     )
 
 
@@ -495,59 +529,24 @@ def delegate_tasks_parallel(tasks_json: str) -> str:
 
     manager.start_batch(items)
 
-    def run_one(item: SubagentTask) -> str:
-        try:
-            item.status = "running"
-            item.started_at = time.time()
-            # 用 run_sync 获得 wall_timeout + idle_timeout 保护
-            # 子代理常见跑 2~3 分钟，放宽到 3 分钟
-            completed = _run_coro_in_thread(
-                manager.run_sync(
-                    task=item.task,
-                    agent_type=item.agent_type,
-                    context=item.context,
-                    wall_timeout=180.0,
-                    idle_timeout=60.0,
-                    item=item,  # 复用 batch item：日志/状态写入同一对象，前端 SSE 才能实时读到
-                ),
-                timeout=200.0,
-            )
-            item.result = completed.result
-            item.error = completed.error
-            item.status = completed.status
-        except TimeoutError as exc:
-            item.status = "error"
-            item.error = f"超时: {exc}"
-            item.result = f"❌ 子代理执行超时，可能是模型响应慢或任务太重。可以缩小任务范围重试。"
-        except Exception as exc:
-            item.status = "error"
-            item.error = f"{type(exc).__name__}: {exc}"
-            item.result = f"❌ 子代理执行失败：{item.error}"
-        finally:
-            item.finished_at = time.time()
-        return (
-            f"任务 {item.id} [{item.agent_type}] 状态：{item.status}\n\n"
-            f"{item.result or item.error}"
-        )
-
-    max_workers = min(len(items), 2)  # 最多同时 2 个，避免触发 API 速率限制
+    # 真正并发：单线程单事件循环里 gather 全部任务（见 _run_all_parallel）。
+    # 相比旧的 ThreadPoolExecutor(max_workers=2) + 任务间 sleep(1) 错峰：
+    #  - 最多 4 个任务同时发出 HTTP 请求（入口 tasks[:4] 已截断），I/O 并行
+    #  - 不再有每任务一个线程 + 一个事件循环的重复开销
+    #  - 若整体超时（200s），结果以各自 item.status 为准（线程 daemon 后台收尾）
     results = []
     errors = []
-
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = {}
-        for i, item in enumerate(items):
-            # 每个子代理启动间隔 1s，避免同时打爆 API 限流
-            if i > 0:
-                time.sleep(1)
-            futures[pool.submit(run_one, item)] = i
-        for future in as_completed(futures):
-            idx = futures[future]
-            try:
-                result = future.result()
-                results.append(result)
-            except Exception as e:
-                errors.append(f"任务 #{idx + 1} 失败: {type(e).__name__}: {e}")
+    try:
+        completed = _run_coro_in_thread(_run_all_parallel(items), timeout=200.0)
+        for item in completed:
+            results.append(
+                f"任务 {item.id} [{item.agent_type}] 状态：{item.status}\n\n"
+                f"{item.result or item.error}"
+            )
+    except TimeoutError as exc:
+        errors.append(f"并行批次整体超时: {exc}")
+    except Exception as exc:
+        errors.append(f"并行批次失败: {type(exc).__name__}: {exc}")
 
     manager.clear_batch()
     parts = [f"✅ 并行子代理执行完成（{len(results)}/{len(tasks)} 成功）\n"]

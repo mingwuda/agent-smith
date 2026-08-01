@@ -905,11 +905,17 @@ class WeChatBot:
         历史会话上下文保留。注意：config.json 是全局配置，Web 端重启后同样生效。
         """
         agent = self._ensure_agent()
-        agent.config.update_provider(provider_id, model=model)
+        # 保留原有 base_url / api_key，避免切换时把 provider 关键配置清空
+        prov = agent.config.providers.get(provider_id, {})
+        agent.config.update_provider(
+            provider_id,
+            model=model,
+            base_url=prov.get("base_url", ""),
+            api_key=prov.get("api_key", ""),
+        )
         agent.config.save()
         agent._rebuild_graph()
-        prov = agent.config.providers[provider_id]
-        name = prov.get("name", provider_id)
+        name = agent.config.providers[provider_id].get("name", provider_id)
         return f"✅ 已切换到模型 {model}（{name}），后续对话生效"
 
     async def _handle_message(self, msg: dict):

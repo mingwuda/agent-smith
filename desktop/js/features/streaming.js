@@ -1367,7 +1367,13 @@ function handleStreamEvent(data) {
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({path: dirPath}),
                   });
-                  inner.innerHTML = '<span style="font-size:12px;color:#30d158;">✅ 已授权，请在输入框输入「继续」重试</span>';
+                  inner.innerHTML = '<span style="font-size:12px;color:#30d158;">✅ 已授权，正在重试...</span>';
+                  // 自动补一条「继续」并发送，无需用户手动输入
+                  if (typeof input !== 'undefined') {
+                    input.value = '继续';
+                    if (typeof pendingAttachments !== 'undefined') pendingAttachments.length = 0;
+                    if (typeof send === 'function') send();
+                  }
                 } else {
                   this.textContent = '授权失败';
                 }
@@ -1416,7 +1422,13 @@ function handleStreamEvent(data) {
                     });
                     var actions = banner.querySelector('.perm-banner-actions');
                     if (actions) {
-                      actions.innerHTML = '<span class="perm-banner-ok">✅ 已授权，请在输入框输入「继续」重试</span>';
+                      actions.innerHTML = '<span class="perm-banner-ok">✅ 已授权，正在重试...</span>';
+                    }
+                    // 自动补一条「继续」并发送，无需用户手动输入
+                    if (typeof input !== 'undefined') {
+                      input.value = '继续';
+                      if (typeof pendingAttachments !== 'undefined') pendingAttachments.length = 0;
+                      if (typeof send === 'function') send();
                     }
                     setTimeout(function() { banner.remove(); }, 4000);
                   } catch(e) {

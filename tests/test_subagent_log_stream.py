@@ -242,11 +242,14 @@ def test_tool_filter_by_type():
 
 
 def test_non_searcher_prompt_has_network_constraint():
-    """非 searcher 子代理 prompt 明确告知无联网工具，避免误用。"""
+    """非 searcher 子代理 prompt 明确告知无联网工具，避免误用。
+
+    prompt 拼接逻辑在 _build_subagent_prompt（graph 预构建时绑定，运行期不再拼）。
+    """
     import inspect
     import subagents as _mod
 
-    src = inspect.getsource(_mod.SubagentManager._run_agent)
+    src = inspect.getsource(_mod.SubagentManager._build_subagent_prompt)
     assert "工具使用约束" in src and "web_search" in src
 
 
