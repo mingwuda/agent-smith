@@ -8,7 +8,7 @@ import socket
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, AsyncGenerator, Optional
+from typing import Any, AsyncGenerator, Callable, Optional
 from urllib.parse import urlparse
 
 from langchain_anthropic import ChatAnthropic
@@ -282,6 +282,7 @@ class AgentRunMixin:
         run_config: dict,
         heartbeat_interval: float = 2.0,
         timeout: float = 90.0,
+        is_busy: Optional[Callable[[], bool]] = None,
     ) -> AsyncGenerator[dict, None]:
         """流式获取 LangGraph 事件，并定期产生心跳事件。
 
@@ -291,6 +292,10 @@ class AgentRunMixin:
 
         如果 timeout 秒内无任何事件（LLM/工具卡死），产生 {"_timeout": True} 事件后结束，
         消费端应据此返回超时错误，避免无限挂起。
+
+        is_busy: 可选回调，每次超时检查时询问「是否正忙」。返回 True（如有工具正在执行）
+                则跳过空闲超时——工具执行期间 LangGraph 不产生任何事件（on_tool_start
+                与 on_tool_end 之间），时长由工具自身 timeout 控制，不应被 LLM 空闲超时误杀。
         """
         event_iter = graph.astream_events(input_data, run_config, version="v2").__aiter__()
         event_task = asyncio.create_task(event_iter.__anext__())
@@ -310,12 +315,18 @@ class AgentRunMixin:
                     now = time.time()
                     # 超时检查：距上次任何事件已超过 timeout 秒 → 强制结束
                     if now - last_event_at > timeout:
-                        logger.warning(
-                            "[stream_events] 超时: 距上次事件 %.1fs（阈值 %.1fs），强制结束",
-                            now - last_event_at, timeout,
-                        )
-                        yield {"_timeout": True, "reason": f"no event for {now - last_event_at:.1f}s"}
-                        return
+                        if is_busy and is_busy():
+                            # ponytail: 有工具正在执行（如 600s 的 run_shell）时，
+                            # LangGraph 在工具返回前不产生事件，空闲超时不适用；
+                            # 继续心跳等待工具结束（工具自身有 timeout 兜底）。
+                            logger.debug("[stream_events] 工具执行中，跳过空闲超时检查")
+                        else:
+                            logger.warning(
+                                "[stream_events] 超时: 距上次事件 %.1fs（阈值 %.1fs），强制结束",
+                                now - last_event_at, timeout,
+                            )
+                            yield {"_timeout": True, "reason": f"no event for {now - last_event_at:.1f}s"}
+                            return
                     logger.debug("[stream_run] 心跳")
                     yield {"_heartbeat": True}
                     heartbeat_task = asyncio.create_task(asyncio.sleep(heartbeat_interval))
@@ -458,7 +469,11 @@ class AgentRunMixin:
             # 即便心跳与 RetryableLLM 重试不断刷新现有计时器，此墙钟也会强制终止该轮。
             llm_hard_timeout = getattr(self.config, "llm_hard_timeout_seconds", 600.0)
             async for event in self._stream_events_with_heartbeat(
-                graph, input_data, run_config, timeout=llm_timeout
+                graph, input_data, run_config, timeout=llm_timeout,
+                # ponytail: 工具执行期间（on_tool_start→on_tool_end）LangGraph 不产生事件，
+                # 空闲超时会误杀长跑工具（如 600s 的 run_shell）。有工具在跑时跳过空闲超时，
+                # 工具时长由其自身 timeout 控制；无工具时仍按 llm_timeout 兜底防 LLM 挂起。
+                is_busy=lambda: bool(running_tools),
             ):
                 # ── 超时事件：LLM/工具长时间无响应 ──
                 if event.get("_timeout"):
@@ -927,7 +942,7 @@ class AgentRunMixin:
                     finish_reason = getattr(output, "response_metadata", {}).get("finish_reason", "") if output else ""
                     # ponytail: 主模型输出被 max_tokens 截断（finish_reason=length）且无工具调用时，
                     # 会被当成最终回答发出半截内容；此处仅标记，流结束处追加提示（自动续写需图层面支持）。
-                    if finish_reason == "length" and not tool_calls:
+                    if finish_reason == "length" and not has_tool_calls:
                         logger.warning("[LLM_END] 模型输出被截断 (finish_reason=length)，最终回答可能不完整")
                         truncated_final = True
 

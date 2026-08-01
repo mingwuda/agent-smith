@@ -1405,10 +1405,13 @@ function handleStreamEvent(data) {
       break;
 
     case 'llm_retry':
-      // 模型响应超时，已自动重试（仅重发 LLM 调用，不重跑工具）——界面上明确提示
+      // 模型响应超时，已自动重试（仅重发 LLM 调用，不重跑工具）
       markStreamActivity();
       showProgressLine(t('modelRetrying', { attempt: data.attempt, max: (data.max || 1) }));
-      addMessage(t('modelRetryingNote', { attempt: data.attempt, max: (data.max || 1) }), 'system');
+      // ponytail: 重试是临时状态，用 toast 提示，不污染消息区
+      if (typeof showToast === 'function') {
+        showToast(t('modelRetryingNote', { attempt: data.attempt, max: (data.max || 1) }), '');
+      }
       break;
 
     case 'model_switch':
