@@ -1152,6 +1152,57 @@ function handleStreamEvent(data) {
               }
             });
             outArea.appendChild(permBtn);
+
+            // ── 授权横幅：同步提到第二段「固定指示器区」──
+            // 卡片内的按钮会随卡片被 _promoteCurrentToHistory 提升进第一段「工作耗时」（默认折叠），
+            // 用户必须展开才能点。这里额外在 .seg-tool-indicators（永不被提升）顶部放一个醒目的横幅。
+            if (_indicatorsEl) {
+              // 去重：同一路径已有横幅则复用（遍历而非选择器，避免路径含特殊字符时抛错）
+              var existingBanner = null;
+              Array.prototype.forEach.call(_indicatorsEl.querySelectorAll('.perm-banner'), function(el) {
+                if (el.dataset.path === permPath) existingBanner = el;
+              });
+              if (!existingBanner) {
+                var banner = document.createElement('div');
+                banner.className = 'perm-banner';
+                banner.dataset.path = permPath;
+                banner.innerHTML =
+                  '<div class="perm-banner-title">⏳ 需要您的授权</div>' +
+                  '<div class="perm-banner-desc">该文件位于工作区外，点击下方按钮授权后，在输入框输入「继续」即可重试：</div>' +
+                  '<div class="perm-banner-path">📝 ' + escapeHtml(permPath) + '</div>' +
+                  '<div class="perm-banner-actions">' +
+                    '<button class="perm-banner-btn" data-path="' + escapeHtml(permPath) + '">授权写入</button>' +
+                  '</div>';
+                banner.querySelector('.perm-banner-btn').addEventListener('click', async function() {
+                  var path = this.dataset.path;
+                  try {
+                    var r = await fetch('/permissions/grant-path', {
+                      method: 'POST',
+                      headers: {'Content-Type': 'application/json'},
+                      body: JSON.stringify({path: path}),
+                    });
+                    // 同时授权目录级（与卡片内按钮行为一致）
+                    var dirPath = path;
+                    var lastSlash = dirPath.lastIndexOf('/');
+                    if (lastSlash > 0) dirPath = dirPath.substring(0, lastSlash);
+                    await fetch('/permissions/grant-path', {
+                      method: 'POST',
+                      headers: {'Content-Type': 'application/json'},
+                      body: JSON.stringify({path: dirPath}),
+                    });
+                    var actions = banner.querySelector('.perm-banner-actions');
+                    if (actions) {
+                      actions.innerHTML = '<span class="perm-banner-ok">✅ 已授权，请在输入框输入「继续」重试</span>';
+                    }
+                    setTimeout(function() { banner.remove(); }, 4000);
+                  } catch(e) {
+                    var bBtn = banner.querySelector('.perm-banner-btn');
+                    if (bBtn) bBtn.textContent = '网络错误';
+                  }
+                });
+                _indicatorsEl.insertBefore(banner, _indicatorsEl.firstChild);
+              }
+            }
           }
 
           // ── 高危命令执行确认 ──

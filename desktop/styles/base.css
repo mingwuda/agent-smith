@@ -307,6 +307,32 @@
   /* 第二段：仅承载「最新一个 step」；空时收起避免占位 */
   .seg-tool-current:empty { display: none; }
 
+  /* 工作区外写入授权横幅（第二段固定指示器区，始终可见，不被提升进历史） */
+  .perm-banner {
+    margin: 8px 12px 4px;
+    padding: 10px 12px;
+    border: 1.5px solid #ff9f0a;
+    border-radius: 8px;
+    background: #fffbf0;
+    font-size: 12px;
+    color: #333;
+    box-shadow: 0 1px 4px rgba(217,130,0,.15);
+  }
+  .perm-banner-title { font-weight: 600; color: #d98200; margin-bottom: 4px; }
+  .perm-banner-desc { color: #666; margin-bottom: 6px; line-height: 1.5; }
+  .perm-banner-path {
+    font-family: monospace; background: #fff; border: 1px solid #f0e2c8;
+    padding: 4px 8px; border-radius: 4px; margin-bottom: 8px;
+    word-break: break-all; font-size: 11px; color: #555;
+  }
+  .perm-banner-actions { display: flex; align-items: center; gap: 10px; }
+  .perm-banner-btn {
+    padding: 6px 18px; background: #007aff; color: #fff; border: none;
+    border-radius: 6px; font-size: 13px; font-weight: 500; cursor: pointer;
+  }
+  .perm-banner-btn:hover { background: #0062cc; }
+  .perm-banner-ok { color: #30d158; font-weight: 500; }
+
   /* 思考过程面板：思考完成后延时 3s 淡出关闭 */
   .reasoning-block { transition: opacity .5s ease; }
   .reasoning-block.fading { opacity: 0; }

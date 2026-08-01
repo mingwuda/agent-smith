@@ -56,23 +56,29 @@ def get_screenshot(token: str = "", path: str = "", request: Request = None):
     
     # 优先使用 token 查找（基于文件名的确定性方案）
     if token:
-        target = None
-        # 先尝试截图实际保存的路径（可能被会话工作目录覆盖）
+        # 候选目录：agent 实时工作区 → 当前用户工作区 → 全局兜底（agent 进程工作区）。
+        # ponytail: browser_workspace_ctx 是 ContextVar，在独立 HTTP 请求中恒为 None
+        # （它只在 agent 执行工具时被 set_workspace 设置），因此接口此前只能按用户
+        # 工作区查找，导致截图若保存到 agent 工作区（如 /opt/desktop-agent）时 404。
+        # 增加进程 cwd 作为全局兜底，解决截图保存位置与读取位置不一致的问题。
+        candidates: list[Path] = []
         if browser_workspace:
-            candidate = browser_workspace / ".browser_screenshots" / f"{token}.png"
-            if candidate.exists():
-                target = candidate.resolve()
-        # 回退到用户默认工作区
-        if not target:
-            workspace = _workspace_for_user(uid)
-            target = (workspace / ".browser_screenshots" / f"{token}.png").resolve()
+            candidates.append(browser_workspace)
+        candidates.append(_workspace_for_user(uid))
+        try:
+            candidates.append(Path.cwd())
+        except OSError:
+            pass
+        for ws in candidates:
             try:
-                target.relative_to(workspace)
-            except ValueError:
-                raise HTTPException(403, "不允许访问该路径")
-        if not target.exists() or not target.is_file():
-            raise HTTPException(404, "截图文件不存在")
-        return FileResponse(target, media_type="image/png")
+                ws_resolved = Path(ws).expanduser().resolve()
+                target = (ws_resolved / ".browser_screenshots" / f"{token}.png").resolve()
+                target.relative_to(ws_resolved)  # 路径安全校验：不得越出候选目录
+                if target.is_file():
+                    return FileResponse(target, media_type="image/png")
+            except (ValueError, RuntimeError, OSError):
+                continue
+        raise HTTPException(404, "截图文件不存在")
     
     # 兼容旧版 path 参数
     if path:
