@@ -10,7 +10,7 @@ import subprocess
 import sys
 import threading
 import time
-from collections import defaultdict
+from collections import defaultdict, deque
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Optional
@@ -45,6 +45,34 @@ _TAIL_CHARS = 8000
 
 # 默认超时（秒）
 _DEFAULT_TIMEOUT = 120
+
+# ── 实时输出缓冲（方案B：心跳注入）──
+# run_shell 执行期间，_reader() 线程把读取到的输出分块 push 到队列；
+# agent_run.py 的心跳循环每 ~2s drain 一次，通过 SSE 事件转发给前端实时展示。
+# ponytail: 分块 decode 用 utf-8+replace，多字节字符可能被切到中间产生个别乱码字符，
+# 但完整结果仍走 _smart_decode 全量解码，工具返回值不受影响（实时展示允许小瑕疵）。
+_SHELL_OUTPUT_QUEUE: deque = deque()
+_SHELL_OUTPUT_LOCK = threading.Lock()
+
+
+def drain_shell_output() -> str:
+    """取出并清空实时输出缓冲，返回拼接后的字符串（无新内容返回 ''）。
+
+    线程安全：被 agent_run.py 心跳循环（事件循环线程）与 _reader()（子线程）并发调用。
+    """
+    with _SHELL_OUTPUT_LOCK:
+        if not _SHELL_OUTPUT_QUEUE:
+            return ""
+        parts = []
+        while _SHELL_OUTPUT_QUEUE:
+            parts.append(_SHELL_OUTPUT_QUEUE.popleft())
+        return "".join(parts)
+
+
+def _clear_shell_output() -> None:
+    """清空实时输出缓冲。每次 run_shell 开始/结束时调用，防止残留混入下一次调用。"""
+    with _SHELL_OUTPUT_LOCK:
+        _SHELL_OUTPUT_QUEUE.clear()
 
 
 _SHELL_CMD_CACHE: Optional[list[str]] = None
@@ -263,6 +291,7 @@ def run_shell(command: str, timeout: int = _DEFAULT_TIMEOUT) -> str:
     # ── 执行 ──
     raw_bytes = b""
     start_time = time.time()
+    _clear_shell_output()  # 清空上残留输出，保证本次执行独立
     try:
         # Windows 下 cmd 默认使用 GBK/cp936 编码。
         # 强制切到 UTF-8 代码页让 Python 等命令中文不乱码；
@@ -280,10 +309,16 @@ def run_shell(command: str, timeout: int = _DEFAULT_TIMEOUT) -> str:
         def _reader():
             nonlocal raw_bytes
             while True:
-                chunk = proc.stdout.read(4096)
+                # ponytail: 必须用 read1() 而非 read(4096)——BufferedReader.read(n) 会阻塞到
+                # 凑满 n 字节或 EOF 才返回，长命令中间输出会被憋住直到进程结束（实时性全无）。
+                # read1() 有数据即返回当前可用字节，保证输出分块实时回流到队列。
+                chunk = proc.stdout.read1(4096)
                 if not chunk:
                     break
                 raw_bytes += chunk
+                # 分块入队，供 agent_run.py 心跳循环实时转发（utf-8+replace，见模块注释）
+                with _SHELL_OUTPUT_LOCK:
+                    _SHELL_OUTPUT_QUEUE.append(chunk.decode("utf-8", errors="replace"))
 
         reader_thread = threading.Thread(target=_reader, daemon=True)
         reader_thread.start()
@@ -305,6 +340,10 @@ def run_shell(command: str, timeout: int = _DEFAULT_TIMEOUT) -> str:
         )
     except Exception as e:
         return f"❌ 执行失败: {e}"
+    finally:
+        # ponytail: 清掉未被心跳 drain 的残余输出——工具结束时 on_tool_end 会携带完整结果，
+        # 残余（心跳 2s 间隔内的最后一块）丢掉不影响最终展示。
+        _clear_shell_output()
 
     # ── 对比工作区文件变更（基于 mtime/size，不读取文件内容）──
     workspace_changes = ""

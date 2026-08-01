@@ -533,6 +533,8 @@
   .step-details .thought p { margin:2px 0; }
   .python-progress { margin-top:6px; }
   .python-output { max-height:300px; overflow-y:auto; background:#1e1e1e; color:#d4d4d4; padding:10px 12px; border-radius:6px; font-size:12px; line-height:1.5; white-space:pre-wrap; word-break:break-word; margin:0; font-family:'SF Mono',Monaco,Menlo,Consolas,monospace; }
+  .tool-stream-wrap { margin-top:4px; }
+  .tool-stream-output { max-height:260px; overflow-y:auto; background:#1e1e1e; color:#d4d4d4; padding:10px 12px; border-radius:6px; font-size:12px; line-height:1.5; white-space:pre-wrap; word-break:break-word; margin:0; font-family:'SF Mono',Monaco,Menlo,Consolas,monospace; }
   .step-details .thought code { background:#d4d4d9; padding:1px 4px; border-radius:3px; font-size:12px; }
   .step-details .args { background:#1c1c1e; color:#e8e8ed; padding:8px; border-radius:6px; font-size:12px; font-family:"SF Mono",Menlo,monospace; overflow-x:auto; margin-bottom:6px; }
   .step-details .result { background:#e8f5e9; color:#2e7d32; padding:8px; border-radius:6px; font-size:12px; white-space:pre-wrap; word-break:break-word; }

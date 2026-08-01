@@ -44,6 +44,7 @@ from agent_helpers import (
     _tool_signature, _truncate,
 )
 from loop_guard import _detect_tool_loop  # 原版 agent.py:169 的文件中间导入,拆分时需显式补回
+from tools.shell_tools import drain_shell_output  # run_shell 实时输出（心跳循环 drain 队列）
 
 logger = get_logger(__name__)
 
@@ -542,6 +543,21 @@ class AgentRunMixin:
                             "elapsed": elapsed,
                             "message": f"{label}，已耗时 {elapsed}s",
                         })
+                    # run_shell 实时输出转发：drain 工具执行期间入队的输出块，SSE 推给前端
+                    # （方案B：心跳注入，粒度 ≈ heartbeat_interval，2s 一次）
+                    try:
+                        _shell_chunk = drain_shell_output()
+                    except Exception:
+                        _shell_chunk = ""
+                    if _shell_chunk:
+                        for _rid, _tinfo in list(running_tools.items()):
+                            if _tinfo["name"] == "run_shell":
+                                yield _sse({
+                                    "type": "tool_output",
+                                    "step": _tinfo["step"],
+                                    "content": _shell_chunk,
+                                })
+                                break
                     if running_tools:
                         last_progress_at = now
                     else:

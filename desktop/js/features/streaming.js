@@ -1037,6 +1037,32 @@ function handleStreamEvent(data) {
       }
       break;
 
+    case 'tool_output': {
+      // run_shell 实时输出：追加到独立流式容器，不覆盖 tool_result 的结果区
+      const outStep = data.step !== undefined ? data.step : 0;
+      const card = currentStepsEl.querySelector(`.tool-card[data-step="${outStep}"]`);
+      if (card) {
+        const body = card.querySelector('.tool-card-body');
+        let wrap = card.querySelector('.tool-stream-wrap');
+        if (!wrap) {
+          wrap = document.createElement('div');
+          wrap.className = 'tool-stream-wrap';
+          wrap.innerHTML = '<div class="tool-section-label">实时输出</div><pre class="tool-stream-output"></pre>';
+          const outArea = card.querySelector(`#tool-output-${outStep}`);
+          if (outArea) body.insertBefore(wrap, outArea);
+          else body.appendChild(wrap);
+        }
+        const txt = unescapeDisplay(String(data.content || ''));
+        if (txt) {
+          const pre = wrap.querySelector('.tool-stream-output');
+          pre.textContent += txt;
+          pre.scrollTop = pre.scrollHeight;
+          smartScroll(container);
+        }
+      }
+      break;
+    }
+
     case 'tool_result':
       closePythonProgress();
       const trStep = data.step !== undefined ? data.step : 0;
