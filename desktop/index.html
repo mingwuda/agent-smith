@@ -52,6 +52,12 @@
         <button class="fb-menu-item" id="fb-menu-changes" onclick="toggleChangesView()" title="变更文件">
           <span class="fb-menu-icon">📝</span> 变更文件
         </button>
+        <button class="fb-menu-item" id="fb-menu-stash" onclick="stashChanges()" title="将当前改动存入 git stash">
+          <span class="fb-menu-icon">📥</span> 暂存改动
+        </button>
+        <button class="fb-menu-item" id="fb-menu-stash-list" onclick="toggleStashListView()" title="查看暂存清单">
+          <span class="fb-menu-icon">📋</span> 暂存清单
+        </button>
         <button class="fb-menu-item" id="fb-menu-pull" onclick="pullCommits()" title="拉取代码">
           <span class="fb-menu-icon">⬇️</span> 拉取代码
         </button>

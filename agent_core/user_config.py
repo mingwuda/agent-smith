@@ -51,6 +51,10 @@ def get_user_effective_config(user_id: str) -> dict[str, Any]:
         "providers": enriched_providers,
         "review_provider_id": user_overrides.get("review_provider_id", global_cfg.review_provider_id),
         "review_model": user_overrides.get("review_model", global_cfg.review_model),
+        # 透传超时配置，供前端联动前端 fetch 超时
+        "llm_hard_timeout_seconds": global_cfg.llm_hard_timeout_seconds,
+        "llm_idle_timeout_seconds": global_cfg.llm_idle_timeout_seconds,
+        "api_timeout_seconds": global_cfg.api_timeout_seconds,
     }
     return merged
 

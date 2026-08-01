@@ -216,6 +216,7 @@ async function openFileBrowser(projectId) {
   currentProjectDir = (p && p.directory_path) ? p.directory_path : '';
   currentProjectId = projectId;
   _isChangesView = false;
+  _isStashListView = false;
   _resetChangesBtn();
 
   const listEl = document.getElementById('project-list');
@@ -243,8 +244,11 @@ function exitFileBrowser() {
   closeFilePreview();
   // 重置变更视图状态和角标
   _isChangesView = false;
+  _isStashListView = false;
   const btn = document.getElementById('fb-changes-btn');
   if (btn) btn.classList.remove('active');
+  const stashListBtn = document.getElementById('fb-menu-stash-list');
+  if (stashListBtn) stashListBtn.classList.remove('active');
   _updateChangesBadge(0);
   _resetChangesBtn();
 }
@@ -505,15 +509,32 @@ function formatSize(bytes) {
 // ---------- 变更文件视图 ----------
 
 let _isChangesView = false;   // 当前是否在变更文件视图
+let _isStashListView = false; // 当前是否在暂存清单视图
 
 function toggleChangesView() {
   _isChangesView = !_isChangesView;
+  if (_isChangesView) _isStashListView = false;   // 两个视图互斥
   const menuItem = document.getElementById('fb-menu-changes');
-  if (menuItem) {
-    menuItem.classList.toggle('active', _isChangesView);
-  }
+  const stashListBtn = document.getElementById('fb-menu-stash-list');
+  if (menuItem) menuItem.classList.toggle('active', _isChangesView);
+  if (stashListBtn) stashListBtn.classList.remove('active');
   if (_isChangesView) {
     loadChangedFiles();
+  } else {
+    refreshFileBrowser();
+  }
+}
+
+function toggleStashListView() {
+  _isStashListView = !_isStashListView;
+  if (_isStashListView) _isChangesView = false;   // 两个视图互斥
+  const menuItem = document.getElementById('fb-menu-stash-list');
+  const changesItem = document.getElementById('fb-menu-changes');
+  if (menuItem) menuItem.classList.toggle('active', _isStashListView);
+  if (changesItem) changesItem.classList.remove('active');
+  if (_isStashListView) {
+    _resetChangesBtn();
+    loadStashList();
   } else {
     refreshFileBrowser();
   }
@@ -627,10 +648,10 @@ function renderChangedFiles(data) {
 
     const isUntracked = c.status === 'untracked';
     const actionBtn = isUntracked
-      ? '<button class="cf-action-btn track-btn" title="加入跟踪" onclick="event.stopPropagation(); trackFile(\'' + escapeJsStr(c.path) + '\')">➕</button>'
-      : '<button class="cf-action-btn untrack-btn" title="取消跟踪" onclick="event.stopPropagation(); untrackFile(\'' + escapeJsStr(c.path) + '\')">📤</button>';
+      ? '<button class="cf-action-btn track-btn" title="加入跟踪" onclick="event.stopPropagation(); trackFile(\'' + escAttr(c.path) + '\')">➕</button>'
+      : '<button class="cf-action-btn untrack-btn" title="取消跟踪" onclick="event.stopPropagation(); untrackFile(\'' + escAttr(c.path) + '\')">📤</button>';
 
-    html += '<div class="change-item" data-path="' + escapeHtml(c.path) + '" onclick="showFileDiff(\'' + escapeJsStr(c.path) + '\')">';
+    html += '<div class="change-item" data-path="' + escapeHtml(c.path) + '" onclick="showFileDiff(\'' + escAttr(c.path) + '\')">';
     html += '  <span class="cf-icon">' + icon + '</span>';
     html += '  <span class="cf-info">';
     html += '    <span class="cf-name">' + dirPart + escapeHtml(displayName) + '</span>';
@@ -643,9 +664,90 @@ function renderChangedFiles(data) {
   treeEl.innerHTML = html;
 }
 
-// 转义 JS 字符串字面量中的特殊字符
-function escapeJsStr(s) {
-  return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/"/g, '\\"');
+/* ───────────────────────── git stash / 暂存清单 ───────────────────────── */
+
+/** 将当前所有改动 git stash，成功后刷新相关视图 */
+async function stashChanges() {
+  const item = document.getElementById('fb-menu-stash');
+  if (!item || item.disabled) return;
+  item.disabled = true;
+  const originalText = item.innerHTML;
+  item.innerHTML = '<span class="fb-menu-icon">⏳</span> 暂存中...';
+  try {
+    const res = await fetch('/files/stash', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project_id: currentProjectId || '' }),
+    });
+    const d = await res.json();
+    if (d.success) {
+      if (typeof showToast === 'function') showToast('✅ ' + (d.output || '已暂存到 stash'));
+      if (_isStashListView) loadStashList();
+      if (_isChangesView) loadChangedFiles();
+      prefetchChangesCount();
+      checkUnpushedCommits();
+    } else {
+      alert('暂存失败：\n' + (d.output || '未知错误'));
+    }
+  } catch (e) {
+    alert('暂存失败：' + (e && e.message ? e.message : e));
+  } finally {
+    item.disabled = false;
+    item.innerHTML = originalText;
+  }
+}
+
+async function loadStashList() {
+  const treeEl = document.getElementById('file-tree');
+  const pathEl = document.getElementById('fb-current-path');
+  if (!treeEl || !pathEl) return;
+
+  const repoName = currentProjectDir ? currentProjectDir.split('/').pop() : '';
+  pathEl.textContent = '📋 暂存清单' + (repoName ? (' · ' + repoName) : '');
+
+  treeEl.innerHTML = '<div class="fb-empty">加载中…</div>';
+
+  try {
+    const qs = new URLSearchParams();
+    if (currentProjectId) qs.set('project_id', currentProjectId);
+    const res = await fetch('/files/stash-list?' + qs.toString());
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({ detail: res.statusText }));
+      treeEl.innerHTML = '<div class="fb-empty">' + escapeHtml(errData.detail || '加载失败') + '</div>';
+      return;
+    }
+    const data = await res.json();
+    renderStashList(data);
+  } catch (e) {
+    treeEl.innerHTML = '<div class="fb-empty">' + escapeHtml(t('loadFailed') || '加载失败') + '</div>';
+  }
+}
+
+function renderStashList(data) {
+  const treeEl = document.getElementById('file-tree');
+  if (!treeEl) return;
+
+  const stashes = data.stashes || [];
+  if (stashes.length === 0) {
+    treeEl.innerHTML = '<div class="fb-empty" style="padding:20px;text-align:center;color:#8e8e93;">✅ 暂无暂存记录</div>';
+    return;
+  }
+
+  let html = '<div class="changes-summary">' +
+    '<span>共 <strong>' + stashes.length + '</strong> 条暂存记录</span>' +
+    '</div>';
+
+  stashes.forEach(s => {
+    html += '<div class="change-item" style="cursor:default;" data-path="' + escapeHtml(s.ref) + '">';
+    html += '  <span class="cf-icon">📦</span>';
+    html += '  <span class="cf-info">';
+    html += '    <span class="cf-name">' + escapeHtml(s.message || s.ref) + '</span>';
+    html += '    <span class="cf-status">' + escapeHtml(s.relative_time || '') + '</span>';
+    html += '  </span>';
+    html += '</div>';
+  });
+
+  treeEl.innerHTML = html;
 }
 
 /* ───────────────────────── 提交变更对话框 ───────────────────────── */

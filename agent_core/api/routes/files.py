@@ -225,18 +225,36 @@ async def get_changed_files(
         raise HTTPException(status_code=400, detail="当前目录不是 Git 仓库")
 
     stdout, _ = _run_git(str(base), "status", "--porcelain=v1")
+    changes = _parse_porcelain(stdout)
 
+    # 排序：已跟踪的在前，未跟踪在后；同组按路径排序
+    def sort_key(c):
+        is_untracked = c["status"] == "untracked"
+        return (is_untracked, c["path"].lower())
+
+    changes.sort(key=sort_key)
+
+    return {
+        "repo_root": str(base),
+        "total_changes": len(changes),
+        "changes": changes,
+    }
+
+
+def _parse_porcelain(status_out: str) -> list[dict]:
+    """解析 `git status --porcelain=v1` 输出为变更列表。
+
+    返回结构与 /files/changes 的 changes 数组一致，供各接口复用。
+    """
     changes = []
-    for line in (stdout or "").splitlines():
+    for line in (status_out or "").splitlines():
         if len(line) < 4:
             continue
-        # 安全解析：用 split 分割 XY 和 path（兼容不同数量的分隔空格）
-        # porcelain v1 格式为 "XY path"，但某些边界情况下空格数可能不固定
-        parts = line.split(None, 1)
-        if len(parts) < 2:
-            continue
-        xy = parts[0].ljust(2)   # 保证长度为 2（单字符状态补空格）
-        path_raw = parts[1]
+        # porcelain v1 固定格式为 "XY PATH"：XY 是 2 个字符（空格也是有效占位），
+        # 第 3 个字符起是路径。不能用 split(None, 1) 解析——它会吃掉 X 列前导空格，
+        # 把未暂存的 " M file" 误判为已暂存的 "M  file"（index_status 失真）。
+        xy = line[:2].ljust(2)   # 保证长度为 2（单字符状态补空格）
+        path_raw = line[3:]      # 跳过 "XY " 三字符
         # 处理 rename 格式：old -> new
         if "\x00" in path_raw:
             parts_path = path_raw.split("\x00")
@@ -265,19 +283,45 @@ async def get_changed_files(
         if x_status == "renamed" or y_status == "renamed":
             entry["old_path"] = old_path
         changes.append(entry)
+    return changes
 
-    # 排序：已跟踪的在前，未跟踪在后；同组按路径排序
-    def sort_key(c):
-        is_untracked = c["status"] == "untracked"
-        return (is_untracked, c["path"].lower())
 
-    changes.sort(key=sort_key)
+@router.post("/files/stash")
+async def stash_changes(request: Request, payload: dict = Body(...)):
+    """将当前所有未提交的改动 stash（git stash push -u）。"""
+    project_id = (payload or {}).get("project_id", "")
+    base = _resolve_repo_root(request, project_id)
+    # -u 同时暂存未跟踪文件
+    stdout, err, code = _git_rc(str(base), "stash", "push", "-u", "-m", "wip: auto stash from agent", timeout=30)
+    if code != 0:
+        return {"success": False, "output": err or stdout or "git stash 失败"}
+    # 空改动时 git stash 仍返回 0，但 stderr 提示 No local changes to save
+    if "No local changes" in (err or ""):
+        return {"success": True, "output": "没有可暂存的改动（工作区已干净）"}
+    return {"success": True, "output": stdout or "已暂存（stash）当前改动"}
 
-    return {
-        "repo_root": str(base),
-        "total_changes": len(changes),
-        "changes": changes,
-    }
+
+@router.get("/files/stash-list")
+async def get_stash_list(request: Request, project_id: str = Query("", description="项目 ID")):
+    """获取当前仓库的 stash 列表（git stash list）。"""
+    base = _resolve_repo_root(request, project_id)
+    stdout, _ = _run_git(str(base), "stash", "list", "--pretty=format:%h|%s|%cr")
+    entries = []
+    for line in (stdout or "").splitlines():
+        if not line.strip():
+            continue
+        parts = line.split("|", 2)
+        if len(parts) >= 2:
+            msg = parts[1].strip()
+            # git 会加 "On <branch>: " 前缀，去掉以保持显示干净
+            if msg.startswith("On "):
+                msg = msg.split(": ", 1)[-1] if ": " in msg else msg
+            entries.append({
+                "ref": parts[0].strip(),
+                "message": msg,
+                "relative_time": parts[2].strip() if len(parts) > 2 else "",
+            })
+    return {"repo_root": str(base), "stashes": entries}
 
 
 @router.get("/files/unpushed-count")
