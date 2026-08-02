@@ -275,10 +275,24 @@ class WeChatBot:
         self.step_reply_enabled = os.environ.get("WECHAT_STEP_REPLY", "1") != "0"
         # 发送节流：上一条消息发送完成的时间戳（微信短时高频发送会触发 prepare failed 频控）
         self._last_send_at: float = 0.0
-        # 每轮任务 step 消息预算（默认 6 条）。实测微信 iLink sendmessage 有约 10 条/窗口的
-        # 硬配额：10 条内必成功，第 11 条起 prepare failed 且数十秒不恢复（21:39/21:52 两轮
-        # 均为第 11 条失败）。step 消息用尽预算即停止，把配额留给最终回复，避免"过程刷屏、结果丢失"。
-        self.step_msg_budget = int(os.environ.get("WECHAT_STEP_MSG_BUDGET", "6"))
+        # 每轮任务 step 消息防御性上限（默认 30 条）。官方 iLink 对 sendmessage 无公开条数配额，
+        # 频控是频率型（ret=-2 rate limited，官方仓库 Tencent/openclaw-weixin#142 用 backoff 应对）。
+        # 因此发送节奏由「批量合并省条数 + 滑动窗口限速 + 失败退避重试」保证，budget 仅在极端
+        # 刷屏场景兜底（30 条 × 批量3 ≈ 覆盖 90 个工具过程，正常任务几乎触达不到；最终回复不受限）。
+        self.step_msg_budget = int(os.environ.get("WECHAT_STEP_MSG_BUDGET", "30"))
+        # step 消息批量合并：每 N 个工具结果攒批合并为 1 条消息（默认 3）。
+        # 批量后 30 条防御上限可覆盖 30×3=90 个工具执行过程，过程消息几乎全程可见，
+        # 不再出现"预算用尽后用户只能干等最终消息"；单条 step 消息也更紧凑（多工具一屏看完）。
+        self.step_msg_batch = int(os.environ.get("WECHAT_STEP_MSG_BATCH", "3"))
+        # 攒批时间阈值（秒，默认 8）：批未攒满 batch 条但超过该时长也立即发送，
+        # 避免工具执行慢时第一条反馈被"等满 3 条"延迟。
+        self.step_msg_batch_timeout = float(os.environ.get("WECHAT_STEP_MSG_BATCH_TIMEOUT", "8"))
+        # 滑动窗口发送限速：send_rate_window 秒内最多 send_rate_max 条 sendmessage。
+        # 官方无公开配额，实测短时高频 burst 触发 ret=-2 rate limited；把发送摊平到窗口内
+        # 从源头避免 burst（官方推荐 messages_per_second 限速器；默认 60s/10 条 ≈ 6s 一条）。
+        self.send_rate_window = float(os.environ.get("WECHAT_SEND_RATE_WINDOW", "60"))
+        self.send_rate_max = int(os.environ.get("WECHAT_SEND_RATE_MAX", "10"))
+        self._send_timestamps: list[float] = []  # 滑动窗口内已发送成功的时间戳
         # 本轮已发送的 step 消息计数（每次处理用户消息前重置为 0）
         self._step_sent_count: int = 0
         # 自适应轮询间隔
@@ -548,28 +562,64 @@ class WeChatBot:
             await asyncio.sleep(wait)
         self._last_send_at = time.time()
 
-    async def _send_step_msg(self, to_user_id: str, context_token: str, text: str):
-        """发送步骤级进度消息（思考/工具执行分段），失败静默降级，不阻塞主流程。
+    @staticmethod
+    def _build_step_batches(lines: list[str], batch: int, head: str = "") -> list[str]:
+        """把工具结果行按 batch 攒批合并，返回待发送的 step 消息文本列表。
 
-        step 消息受预算限制（self.step_msg_budget）：微信 sendmessage 有约 10 条/窗口的
-        硬配额，step 用尽预算即停止发送，把配额留给最终回复。某条 step 发送失败说明
-        配额已满（prepare failed），立即止损，不再尝试后续 step。
+        - 每满 batch 条合并为一条消息；残余不足 batch 的也合并为最后一条（不留过程死角）
+        - head（💭思考）只拼到第一条，避免每条都重复思考内容
         """
+        if not lines:
+            return []
+        batches = []
+        for i in range(0, len(lines), batch):
+            chunk = lines[i:i + batch]
+            prefix = f"💭 {head}\n" if head and i == 0 else ""
+            batches.append(prefix + "\n".join(chunk))
+        return batches
+
+    async def _rate_limit_send(self):
+        """滑动窗口发送限速：send_rate_window 秒内最多 send_rate_max 条 sendmessage。
+
+        官方 iLink 对 sendmessage 无公开条数配额，频控是频率型（ret=-2 rate limited，
+        官方仓库 Tencent/openclaw-weixin#142 用 backoff 应对）。这里在发送前排队，
+        把 burst 摊平到窗口内（默认 60s/10 条 ≈ 6s 一条），从源头避免触发频控。
+        """
+        now = time.time()
+        self._send_timestamps = [t for t in self._send_timestamps if now - t < self.send_rate_window]
+        while len(self._send_timestamps) >= self.send_rate_max:
+            wait = self.send_rate_window - (now - self._send_timestamps[0])
+            if wait <= 0:
+                break
+            logger.debug("[微信Bot:%s] 发送限速中，%.1fs 后重试", self.user_id, wait)
+            await asyncio.sleep(min(wait, 5.0))
+            now = time.time()
+            self._send_timestamps = [t for t in self._send_timestamps if now - t < self.send_rate_window]
+        self._send_timestamps.append(now)
+
+    async def _send_step_msg(self, to_user_id: str, context_token: str, text: str):
+        """发送步骤级进度消息（思考/工具执行分段），失败退避重试，不阻塞主流程。
+
+        官方 iLink 无公开条数配额，频控是频率型（ret=-2 rate limited，官方 3s backoff 应对）。
+        因此不做"失败即放弃后续 step"：滑动窗口限速 + 失败指数退避重试（max_retries=1,
+        retry_delay=2s 即 2s→4s 退避），单条失败只记日志，后续 step 继续发，
+        过程消息持续可见；最终回复有独立更长的重试兜底（send_message max_retries=3）。
+        """
+        # 防御性上限：仅拦截极端刷屏场景，正常任务被限速器+批量约束不会触达
         if self._step_sent_count >= self.step_msg_budget:
-            logger.debug("[微信Bot:%s] step 消息预算用尽，跳过: %s", self.user_id, text[:40])
+            logger.debug("[微信Bot:%s] step 消息达到防御上限(%d)，跳过: %s",
+                         self.user_id, self.step_msg_budget, text[:40])
             return
         try:
             await self._throttle_send()
-            resp = await self.send_message(to_user_id, context_token, text)
-            if resp.get("ret", -1) != 0:
-                logger.warning("[微信Bot:%s] step 消息发送失败: %s", self.user_id, text[:60])
-                # 发送失败=微信侧配额已满，后续 step 大概率也失败，提前止损留配额给最终回复
-                self._step_sent_count = self.step_msg_budget
-            else:
+            await self._rate_limit_send()
+            resp = await self.send_message(to_user_id, context_token, text, max_retries=1, retry_delay=2.0)
+            if resp.get("ret", -1) == 0:
                 self._step_sent_count += 1
+            else:
+                logger.warning("[微信Bot:%s] step 消息发送失败（重试后仍失败）: %s", self.user_id, text[:60])
         except Exception as e:
             logger.warning("[微信Bot:%s] step 消息发送异常: %s", self.user_id, e)
-            self._step_sent_count = self.step_msg_budget
 
     async def send_image(
         self, to_user_id: str, context_token: str, image_path: str
@@ -1324,11 +1374,13 @@ class WeChatBot:
 
         # 流式调用 agent：思考与每步工具执行即时分段回复，最终回复收集后统一保存/发送。
         # 开启 step 分段回复时，用户无需等 agent 全部处理完才看到第一条反馈。
-        # 注意：微信 sendmessage 有约 10 条/窗口硬配额（第 11 条起 prepare failed 且不恢复），
-        # 因此每个工具只发 1 条合并消息（💭思考+执行结果），不发"正在执行"，
-        # step 总条数受 step_msg_budget 限制，把配额留给最终回复。
+        # 官方 iLink 对 sendmessage 无公开条数配额，频控是频率型（ret=-2 rate limited）；
+        # 这里用「批量合并省条数 + 滑动窗口限速 + 失败退避重试」保证过程消息持续可见，
+        # step_msg_budget 仅作极端刷屏的防御性上限（默认 30 条），最终回复不受限。
         reply = ""
-        pending_thought = ""  # 缓存 thought，合并到下一个 tool_result 一起发，减少消息条数
+        pending_thought = ""  # 缓存 thought，合并到下一个 step 批一起发，减少消息条数
+        pending_step_lines: list[str] = []  # 批量 step 缓冲：攒满 batch 条或超时即合并发送
+        pending_step_since: float = time.time()  # 攒批起始时间，配合 step_msg_batch_timeout 保证反馈及时
         collected_steps: list[dict] = []  # 收集步骤卡片，随最终回复保存（Web 端回放渲染工具卡片）
         self._step_sent_count = 0  # 每轮任务重置 step 消息预算计数
         agent = self._ensure_agent()
@@ -1375,14 +1427,24 @@ class WeChatBot:
                         dur = ev.get("duration_ms") or 0
                         dur_txt = f"（{dur / 1000:.1f}s）" if dur else ""
                         snippet = result[:150].replace("\n", " ")
-                        head = f"💭 {pending_thought}\n" if pending_thought else ""
-                        pending_thought = ""
-                        await self._send_step_msg(
-                            from_user, context_token,
-                            f"{head}{'✅' if ok else '❌'} {tool}{dur_txt}：{snippet or '完成'}",
-                        )
+                        pending_step_lines.append(f"{'✅' if ok else '❌'} {tool}{dur_txt}：{snippet or '完成'}")
+                        # 攒批：满 batch 条或超过 batch_timeout 秒即合并发送（省配额 + 反馈及时）
+                        if len(pending_step_lines) >= self.step_msg_batch or (
+                            pending_step_lines and time.time() - pending_step_since >= self.step_msg_batch_timeout
+                        ):
+                            for batch_text in self._build_step_batches(pending_step_lines, self.step_msg_batch, pending_thought):
+                                await self._send_step_msg(from_user, context_token, batch_text)
+                            pending_step_lines.clear()
+                            pending_thought = ""
+                            pending_step_since = time.time()
                     elif et == "done":
                         reply = ev.get("content", "")
+                        # flush 残余批量 step（不足 batch 条的尾批也合并一条发出去，不留过程死角）
+                        if self.step_reply_enabled and pending_step_lines:
+                            for batch_text in self._build_step_batches(pending_step_lines, self.step_msg_batch, pending_thought):
+                                await self._send_step_msg(from_user, context_token, batch_text)
+                            pending_step_lines.clear()
+                            pending_thought = ""
                     elif et == "error":
                         content = ev.get("content", "")
                         if not reply:
