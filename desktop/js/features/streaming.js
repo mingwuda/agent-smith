@@ -799,9 +799,12 @@ function handleStreamEvent(data) {
         // 兜底归档：tool_end 未实时处理的残留工具卡片也折叠归档，执行区不留已完成卡片
         _archiveResidualTools(card);
       }
-      // 历史回放/补全：用持久化的工具事件重建工具卡片（实时流已渲染的按 tool_id 去重）
+      // 历史回放/补全：用持久化的事件/日志重建工具卡片与思考过程
       if (Array.isArray(cap.tools) && cap.tools.length) {
         _renderSubagentToolsFromHistory(card, cap.tools);
+      }
+      if (Array.isArray(cap.logs) && cap.logs.length) {
+        _renderSubagentLogsFromHistory(card, cap.logs);
       }
     });
     smartScroll(container);
@@ -822,7 +825,10 @@ function handleStreamEvent(data) {
           _updateSubagentToolCard(cardEl, d);
         } else {
           // 文本日志：ai/error/done 加图标前缀；tool 类结构化事件已走卡片分支，不进文本
-          const prefix = d.cat === 'ai' ? '💭 ' : d.cat === 'error' ? '❌ ' : d.cat === 'done' ? '✅ ' : '';
+          // 兼容子代理 thought 日志：若 text 已以对应前缀开头（后端直接存了 "💭 ..."），不再重复加。
+          let prefix = d.cat === 'ai' ? '💭 ' : d.cat === 'error' ? '❌ ' : d.cat === 'done' ? '✅ ' : '';
+          const rawText = String(d.text || '');
+          if (prefix && rawText.startsWith(prefix)) prefix = '';
           logPre.textContent += `[${d.cat}] ${prefix}${unescapeDisplay(d.text)}\n`;
           smartScroll(container);
         }
@@ -1006,6 +1012,24 @@ function handleStreamEvent(data) {
       }
     });
     _updateDoneToolsCount(doneBox);
+  }
+
+  // 历史回放/补全：用持久化日志（subagent_end 携带的 cap.logs）重建子代理思考过程。
+  // 后端 text 已包含图标前缀（如 "💭 ..."），此处直接复用，不再重复加。
+  function _renderSubagentLogsFromHistory(cardEl, logs) {
+    if (!Array.isArray(logs) || !logs.length) return;
+    const logPre = cardEl.querySelector('.sa-log-pre');
+    if (!logPre) return;
+    const seen = new Set();
+    logs.forEach(function (ln) {
+      const text = String(ln.text || '').trim();
+      if (!text) return;
+      const key = ln.cat + ':' + text;
+      if (seen.has(key)) return;
+      seen.add(key);
+      logPre.textContent += '[' + ln.cat + '] ' + unescapeDisplay(text) + '\n';
+    });
+    smartScroll(container);
   }
 
   // 工具函数：添加分析中提示

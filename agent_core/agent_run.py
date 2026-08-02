@@ -931,11 +931,12 @@ class AgentRunMixin:
                                 if idx_in_output >= 0:
                                     end_idx = min(idx_in_output + 600, len(full_output))
                                     upd["result"] = full_output[idx_in_output:end_idx]
-                                # 打包子代理内部工具事件：随 subagent_end 进主流事件流，
-                                # 历史保存（collected_steps）时才有数据，回放才能重建工具卡片
+                                # 打包子代理内部工具事件 + 文本日志：随 subagent_end 进主流事件流，
+                                # 历史保存（collected_steps）时才有数据，回放才能重建工具卡片与 💭 思考。
                                 try:
                                     from subagents import manager as _subagent_manager
                                     upd["tools"] = _subagent_manager.get_capsule_tool_events(cap["id"])
+                                    upd["logs"] = _subagent_manager.get_capsule_logs(cap["id"])
                                 except Exception:
                                     pass
                                 updated.append(upd)
@@ -945,12 +946,13 @@ class AgentRunMixin:
                                 "capsules": updated,
                             })
                         except Exception:
-                            # 简化降级：只标记状态（同样带上工具事件，保证历史回放不丢）
+                            # 简化降级：只标记状态（同样带上工具事件和日志，保证历史回放不丢）
                             _subagent_results = [dict(cap, status="done") for cap in subagent_capsules]
                             try:
                                 from subagents import manager as _subagent_manager
                                 for _cap in _subagent_results:
                                     _cap["tools"] = _subagent_manager.get_capsule_tool_events(_cap["id"])
+                                    _cap["logs"] = _subagent_manager.get_capsule_logs(_cap["id"])
                             except Exception:
                                 pass
                             yield _sse({
@@ -960,6 +962,13 @@ class AgentRunMixin:
                         subagent_capsules = []
                         logger.info("[子代理] subagent_end 已发送，等待父模型生成汇总回复...")
                         subagent_end_sent_at = time.time()
+                        # 子代理日志/工具事件已随 subagent_end 打包完毕，此刻才安全清理 batch。
+                        # （工具函数内不能清——on_tool_end 发生在工具返回之后，提前清会让历史回放丢日志）
+                        try:
+                            from subagents import manager as _subagent_manager
+                            _subagent_manager.clear_batch()
+                        except Exception:
+                            pass
                     
                     # 重置推理上下文（但保留其他并行工具的进度状态）
                     in_tool_call = False

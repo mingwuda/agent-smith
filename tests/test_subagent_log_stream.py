@@ -297,3 +297,61 @@ def test_get_capsule_tool_events_empty_and_out_of_range():
     assert m.get_capsule_tool_events(1) == []   # 有任务但无工具事件
     assert m.get_capsule_tool_events(99) == []  # 越界
     assert m.get_capsule_tool_events(0) == []   # 非法（idx=-1）
+
+
+# ---------- 历史回放持久化时序（clear_batch 时机） ----------
+
+
+def test_delegate_tasks_parallel_does_not_clear_batch_prematurely(monkeypatch):
+    """修复回归：delegate_tasks_parallel 工具返回后 _current_batch 必须仍可读。
+
+    背景：之前工具函数末尾调用 manager.clear_batch()，而 agent_run.on_tool_end
+    在工具返回后才执行 get_capsule_logs(cap["id"]) 打包 subagent_end 事件，
+    导致历史保存的 capsules 里 logs/tools 全为空，前端回放时子代理思考与
+    工具卡片全部丢失。本测试断言工具函数返回后 batch 数据依然可取。
+    """
+    async def fake_run_all(items):
+        for it in items:
+            it.append_log("我先搜索一下", "ai")
+            it.append_log(
+                "调用工具: web_search", "tool",
+                event="tool_start", tool_id="call-1", tool_name="web_search",
+                tool_args={"query": "关键词"},
+            )
+            it.status = "done"
+            it.result = "ok"
+        return items
+
+    m = SubagentManager()
+    m._config = object()
+    monkeypatch.setattr(subagents_mod, "manager", m)
+    monkeypatch.setattr(subagents_mod, "_run_all_parallel", fake_run_all)
+
+    result = subagents_mod.delegate_tasks_parallel.func(
+        '[{"task": "搜索A", "agent_type": "searcher"}, {"task": "搜索B", "agent_type": "searcher"}]'
+    )
+
+    # 工具已返回，但 batch 必须仍然保留（on_tool_end 此刻还没执行）
+    assert len(m._current_batch) == 2, "工具返回后 _current_batch 被提前清空，历史回放会丢日志"
+    logs = m.get_capsule_logs(1)
+    assert any(l["cat"] == "ai" and "先搜索" in l["text"] for l in logs)
+    events = m.get_capsule_tool_events(1)
+    assert len(events) == 1 and events[0]["event"] == "tool_start"
+    assert "✅" in result
+
+
+def test_clear_batch_after_packaging(monkeypatch):
+    """on_tool_end 打包完成后才允许 clear_batch（agent_run 侧时序语义）。"""
+    m = _make_manager()
+    item = SubagentTask(id="subagent-t3", agent_type="searcher", task="t")
+    item.append_log("队列中，等待执行...", "info")
+    m.start_batch([item])
+
+    # 模拟 on_tool_end 打包：先读日志
+    logs = m.get_capsule_logs(1)
+    assert len(logs) == 1 and logs[0]["cat"] == "info"
+
+    # 打包完 → 清理 batch（这就是 agent_run 里的新时序）
+    m.clear_batch()
+    assert m.get_capsule_logs(1) == []   # 清理后读取为空（正常语义）
+    assert m._current_batch == []

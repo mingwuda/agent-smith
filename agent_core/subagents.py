@@ -211,6 +211,23 @@ class SubagentManager:
             if ln.get("event") in ("tool_start", "tool_end")
         ]
 
+    def get_capsule_logs(self, capsule_id: int) -> list[dict]:
+        """返回指定 capsule 的文本日志（含 💭 thought / tool / done 等）。
+
+        随 subagent_end 一起打包进主流事件流并持久化到历史，
+        历史回放时前端据此重建子代理的思考过程。
+        """
+        idx = capsule_id - 1
+        if not (0 <= idx < len(self._current_batch)):
+            return []
+        task = self._current_batch[idx]
+        lines, _ = task.get_logs_since(0)
+        return [
+            {"ts": ln["ts"], "cat": ln["cat"], "text": ln["text"]}
+            for ln in lines
+            if ln.get("cat") in ("ai", "tool", "done", "error", "info")
+        ]
+
     def get_progress_logs(self, capsule_id: int) -> tuple[list[dict], int, bool]:
         """获取指定 capsule 的增量日志。返回 (新日志行, 总行数, 是否已完成)。
 
@@ -329,6 +346,7 @@ class SubagentManager:
         final_text = ""
         started_ids: set = set()   # 已发出 tool_start 的工具调用 id
         ended_ids: set = set()     # 已发出 tool_end 的工具调用 id
+        _prev_ai_content = ""      # 上一轮 AI 内容（values 模式会重复返回，用来去重）
         try:
             async for chunk in graph.astream(
                 {"messages": [HumanMessage(content=message)]},
@@ -362,10 +380,13 @@ class SubagentManager:
                 last = msgs[-1]
                 msg_type = getattr(last, "type", "")
                 if msg_type == "ai":
-                    content = getattr(last, "content", "")
-                    if content:
+                    content = getattr(last, "content", "") or ""
+                    # stream_mode="values" 每轮返回完整 messages，last.ai.content 经常与上轮相同；
+                    # 只有内容真正变化时才记一条 thought 日志，避免前端重复显示 💭。
+                    if content and content != _prev_ai_content:
                         item.append_log(f"💭 {content[:300]}", "ai")
-                        final_text = content  # 实时记录最后一条 AI 回复
+                        _prev_ai_content = content
+                    final_text = content  # 实时记录最后一条 AI 回复
             # 流结束后从最后一条 AI 消息取完整输出（可能比 stream 逐条更长）
             msgs_final = chunk.get("messages", [])
             for msg in reversed(msgs_final):
@@ -548,7 +569,10 @@ def delegate_tasks_parallel(tasks_json: str) -> str:
     except Exception as exc:
         errors.append(f"并行批次失败: {type(exc).__name__}: {exc}")
 
-    manager.clear_batch()
+    # ponytail: 这里【不能】 clear_batch —— on_tool_end 回调发生在工具返回之后，
+    # 它要靠 _current_batch 读回子代理日志/工具事件打包进 subagent_end 持久化。
+    # 提前清空会导致历史回放时 cap.logs/cap.tools 全为空。清理时机改由
+    # agent_run.on_tool_end 打包完 subagent_end 事件后统一调用 manager.clear_batch()。
     parts = [f"✅ 并行子代理执行完成（{len(results)}/{len(tasks)} 成功）\n"]
     if results:
         parts.append("\n---\n".join(results))
