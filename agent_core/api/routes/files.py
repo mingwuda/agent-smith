@@ -189,7 +189,7 @@ def _run_git(repo_dir: str, *args: str, timeout: int = 15) -> tuple[str | None, 
             capture_output=True, text=True, timeout=timeout,
             env={**os.environ, "LC_ALL": "C"},
         )
-        return result.stdout.strip(), result.stderr.strip()
+        return result.stdout.rstrip(), result.stderr.rstrip()
     except FileNotFoundError:
         raise HTTPException(status_code=500, detail="未找到 git 命令，请确认系统已安装 git")
     except subprocess.TimeoutExpired:
@@ -610,7 +610,7 @@ def _git_rc(repo: str, *args: str, timeout: int = 15) -> tuple[str, str, int]:
             capture_output=True, text=True, timeout=timeout,
             env={**os.environ, "LC_ALL": "C"},
         )
-        return r.stdout.strip(), r.stderr.strip(), r.returncode
+        return r.stdout.rstrip(), r.stderr.rstrip(), r.returncode
     except FileNotFoundError:
         raise HTTPException(status_code=500, detail="未找到 git 命令，请确认系统已安装 git")
     except subprocess.TimeoutExpired:

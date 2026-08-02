@@ -300,10 +300,9 @@
     overflow: hidden;
     box-shadow: 0 1px 4px rgba(0,0,0,.06);
   }
-  /* 折叠时仅隐藏展开区（思考+工具卡片），保留执行状态行和进度 */
+  /* 折叠时仅隐藏展开区（思考+工具卡片），保留执行状态行 */
   .agent-response.collapsed .agent-body { display: none !important; }
-  .agent-response.finished .agent-active-line,
-  .agent-response.finished .agent-progress-line { display: none !important; }
+  .agent-response.finished .agent-active-line { display: none !important; }
 
   /* 三段式：每段独立折叠（第一段 工作耗时 / 第二段 工具执行 / 第三段 最终回答） */
   .seg { border-bottom: 1px solid #f0f0f0; }
@@ -417,18 +416,7 @@
   .active-status-dot.done::before { content:'✓'; font-size:11px; color:#30d158; }
   .active-status-dot.error::before { content:'✗'; font-size:11px;color:#ff453a; }
 
-  /* 第三行：Agent 正在规划与执行... */
-  .agent-progress-line {
-    display: flex; align-items: center; gap: 8px;
-    padding: 8px 14px; background: #fafafa;
-    border-top: 1px solid #f0f0f0; font-size: 13px; color: #888;
-  }
-  .agent-progress-spinner {
-    width: 15px; height: 15px; border: 2px solid #ddd; border-top-color: #007aff;
-    border-radius: 50%; animation: spin .7s linear infinite; flex-shrink: 0;
-  }
-
-  /* 最终输出区域（done 后替换进度行为） */
+  /* 最终输出区域 */
   .agent-final-output {
     position: relative; padding: 10px 14px 12px; font-size: 14px; line-height: 1.6;
     word-break: break-word; color: #1d1d1f;

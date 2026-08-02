@@ -94,7 +94,7 @@ def _run_git(args: list[str], repo_path: str = "") -> str:
         return f"❌ git {' '.join(args)} 执行超过 {_TIMEOUT_SECONDS} 秒，已中止"
 
     output = (completed.stdout or "") + (completed.stderr or "")
-    output = output.strip() or "（无输出）"
+    output = output.rstrip() or "（无输出）"
     # ponytail: 截断过长 git 输出，保留头尾，避免撑爆上下文
     if len(output) > _MAX_OUTPUT_CHARS:
         head_chars = _HEAD_CHARS

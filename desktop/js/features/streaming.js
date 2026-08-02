@@ -10,12 +10,10 @@ var _lastToolImageHtml = null; // 最近一次工具结果的图片 Markdown
 var _agentStartTime = 0;       // 本轮开始时间戳（用于计算耗时）
 var _timerInterval = null;     // 耗时更新定时器
 var _currentActiveLine = null; // 当前执行中动作行 DOM
-var _currentProgressLine = null; // 当前进度指示行 DOM
 
 // 会话回放标记：加载历史消息时设为 true，避免重复触发工具副作用
 var _isReplaying = false;
 var _subagentToolStep = null;  // 当前子代理对应的工具调用 step，用于锚定胶囊行位置
-var _llmThinkingAt = 0;        // 最近一次「模型开始思考」的时间戳，用于 ping 时刷新「已等待」计时
 var _reasoningEl = null;       // 当前轮正在实时填充的「思考过程」面板（推理模型专属）
 var _reasoningFadeTimer = null;// 思考完成后「延时 3s 淡出关闭」的定时器
 var _thinkingEl = null;        // thought 事件在第二段顶部临时显示的「AI 正在思考...」面板
@@ -39,7 +37,7 @@ async function initFrontendFetchTimeout() {
 }
 var _answerBodyEl = null;      // 第三段（最终回答）的 body 容器，token 最终答案挂载于此
 var _historyBodyEl = null;     // 第一段（工作耗时）的「完整历史」容器，承载所有 step
-var _indicatorsEl = null;      // 第二段（当前执行）的固定指示器区（当前动作+进度行），永不被提升进历史
+var _indicatorsEl = null;      // 第二段（当前执行）的固定指示器区（当前动作），永不被提升进历史
 
 // 悬浮「滚动到底部」按钮状态
 var _scrollBtnVisible = false;
@@ -111,8 +109,8 @@ function markStreamActivity() {
 function startStreamIdleWatch() {
   stopStreamIdleWatch();
   markStreamActivity();
-  // ponytail: 「后端仍在处理」badge 已移除 —— 思考真空期现由 ping 驱动的
-  // 「正在调用 AI... 已 Ns」进度行 + 第二段工具执行实时覆盖，无需额外 badge。
+  // ponytail: 「后端仍在处理」badge 已移除 —— 思考真空期由 ping 驱动的
+  // loading 指示 + 第二段工具执行实时覆盖兜底，无需额外 badge。
   // 这里仅保留「卡片尚未建立」极短窗口的兜底（实际几乎不触发，因 beginRoundRender 同步建卡）。
   streamIdleTimer = setInterval(() => {
     if (!streamingActive) return;
@@ -204,7 +202,6 @@ function _saveRoundState(rt) {
   rt._rs.generatingBadgeEl = generatingBadgeEl;
   rt._rs._agentStartTime = _agentStartTime;
   rt._rs._currentActiveLine = _currentActiveLine;
-  rt._rs._currentProgressLine = _currentProgressLine;
   rt._rs._subagentToolStep = _subagentToolStep;
   rt._rs._lastToolImageHtml = _lastToolImageHtml;
   rt._rs._reasoningEl = _reasoningEl;
@@ -223,7 +220,6 @@ function _restoreRoundState(rt) {
   generatingBadgeEl = rt._rs.generatingBadgeEl;
   _agentStartTime = rt._rs._agentStartTime;
   _currentActiveLine = rt._rs._currentActiveLine;
-  _currentProgressLine = rt._rs._currentProgressLine;
   _subagentToolStep = rt._rs._subagentToolStep;
   _lastToolImageHtml = rt._rs._lastToolImageHtml;
   _reasoningEl = rt._rs._reasoningEl;
@@ -249,7 +245,6 @@ function beginRoundRender(rt) {
   generatingBadgeEl = null;
   _agentStartTime = Date.now();
   _currentActiveLine = null;
-  _currentProgressLine = null;
   _subagentToolStep = null;
   _lastToolImageHtml = null;  // 清空上一轮残留的工具截图，避免串入本轮最终输出
   _reasoningEl = null;
@@ -285,7 +280,7 @@ function beginRoundRender(rt) {
       '<span class="seg-title">' + escapeHtml(t('toolExecution') || '工具执行') + '</span>' +
     '</div>' +
     '<div class="seg-body">' +
-      '<div class="seg-tool-indicators"></div>' +   // 固定：当前动作 + 进度行（永不被提升进历史）
+      '<div class="seg-tool-indicators"></div>' +   // 固定：当前动作（永不被提升进历史）
       '<div class="seg-tool-current"></div>' +       // 仅承载「最新一个 step」，新 step 开始时旧块被提升进历史
     '</div>';
   segTool.querySelector('.seg-header').onclick = function() { segTool.classList.toggle('collapsed'); };
@@ -299,14 +294,6 @@ function beginRoundRender(rt) {
   activeLineEl.style.display = 'none';
   _indicatorsEl.appendChild(activeLineEl);
   _currentActiveLine = activeLineEl;
-
-  // 第三行：进度指示（初始隐藏）—— 放入第二段「固定指示器区」（不被提升）
-  var progressLineEl = document.createElement('div');
-  progressLineEl.className = 'agent-progress-line';
-  progressLineEl.style.display = 'none';
-  progressLineEl.innerHTML = '<span class="agent-progress-spinner"></span><span>' + escapeHtml(t('agentPlanning') || 'Agent 正在规划与执行...') + '</span>';
-  _indicatorsEl.appendChild(progressLineEl);
-  _currentProgressLine = progressLineEl;
 
   // ── 第三段：最终回答（默认展开）──
   var segAnswer = document.createElement('div');
@@ -548,7 +535,6 @@ async function send() {
           d.className = 'tool-status-dot done';
         });
         if (_currentActiveLine) { _currentActiveLine.style.display = 'none'; }
-        if (_currentProgressLine) { _currentProgressLine.style.display = 'none'; }
         input.focus();
       } catch (uiErr) {
         console.error('[send finally] 清理可见区 UI 时出错（不影响按钮还原）:', uiErr);
@@ -712,19 +698,6 @@ function handleStreamEvent(data) {
     // 点击切换详情展开
     _currentActiveLine.onclick = function() { this.classList.toggle('expanded'); };
     smartScroll(container);
-  }
-
-  // 工具函数：显示第三行进度指示
-  function showProgressLine(text) {
-    if (!_currentProgressLine) return;
-    _currentProgressLine.style.display = 'flex';
-    var label = text || t('agentPlanning') || 'Agent 正在规划与执行...';
-    _currentProgressLine.innerHTML = '<span class="agent-progress-spinner"></span><span>' + escapeHtml(label) + '</span>';
-    smartScroll(container);
-  }
-
-  function hideProgressLine() {
-    if (_currentProgressLine) _currentProgressLine.style.display = 'none';
   }
 
   // 子代理卡片渲染（tool-card 样式，与主 agent 工具调用一致）
@@ -1103,7 +1076,6 @@ function handleStreamEvent(data) {
       hideTyping();
       removeThinkingHint();
       removeGeneratingBadge();
-      hideProgressLine();
       hasToolCalls = true;
       ensureStepsContainer();
       const thoughtText = data.thought || '';
@@ -1153,7 +1125,6 @@ function handleStreamEvent(data) {
       hideTyping();
       removeThinkingHint();
       removeGeneratingBadge();
-      hideProgressLine();
       hasToolCalls = true;
       // 兜底：本轮乐观流出的临时答案实为推理
       if (currentBotMsgEl) { currentBotMsgEl.remove(); currentBotMsgEl = null; }
@@ -1629,17 +1600,11 @@ function handleStreamEvent(data) {
         const durEl = document.getElementById('tool-dur-' + data.step);
         if (durEl) durEl.textContent = elapsed > 1000 ? `${(elapsed/1000).toFixed(0)}s` : `${elapsed}ms`;
       }
-      // 使用第三行进度指示
-      showProgressLine(data.message || t('stillProcessing'));
       smartScroll(container);
       break;
 
     case 'llm_thinking':
-      // ponytail: 不再 hideTyping() —— 保留顶部「思考中」动画条，同时显示卡片内进度行（双保险）。
-      // 否则长思考（首 token 延迟高）期间顶部动画消失，只剩卡片内一行小字，用户误以为卡死。
       removeGeneratingBadge();
-      _llmThinkingAt = Date.now();
-      showProgressLine(t('callingAI'));
       break;
 
     case 'ping':
@@ -1647,11 +1612,7 @@ function handleStreamEvent(data) {
       // 原前端无此分支，ping 被完全忽略 → 思考真空期零反馈。这里接住它：
       // 标记流活跃 + 确保可见指示器存在 + 刷新「已等待」计时，让用户明确知道连接还活着。
       markStreamActivity();
-      if (_currentProgressLine && _currentProgressLine.style.display !== 'none') {
-        const waited = Math.max(0, Math.round((Date.now() - (_llmThinkingAt || _agentStartTime)) / 1000));
-        const txtSpan = _currentProgressLine.querySelector('span:last-child');
-        if (txtSpan) txtSpan.textContent = `${t('callingAI')} · 已 ${waited}s`;
-      } else if (!document.getElementById('loading-bar').classList.contains('show')) {
+      if (!document.getElementById('loading-bar').classList.contains('show')) {
         showTyping();
       }
       break;
@@ -1659,15 +1620,11 @@ function handleStreamEvent(data) {
     case 'llm_response':
       _finalizeReasoning();  // 模型思考阶段结束，定稿「思考过程」面板
       _finalizeThinking();   // LLM 响应开始，结束 thought 顶部面板
-      if (!data.has_tool_calls) {
-        hideProgressLine();
-      }
       break;
 
     case 'llm_retry':
       // 模型响应超时，已自动重试（仅重发 LLM 调用，不重跑工具）
       markStreamActivity();
-      showProgressLine(t('modelRetrying', { attempt: data.attempt, max: (data.max || 1) }));
       // ponytail: 重试是临时状态，用 toast 提示，不污染消息区
       if (typeof showToast === 'function') {
         showToast(t('modelRetryingNote', { attempt: data.attempt, max: (data.max || 1) }), '');
@@ -1686,7 +1643,6 @@ function handleStreamEvent(data) {
       hideTyping();
       removeThinkingHint();
       removeGeneratingBadge();
-      hideProgressLine();
       // 逐字流式渲染最终答案（复用 currentBotMsgEl 机制，done 时会迁移到 agent-final-output）
       if (!currentBotMsgEl) {
         currentBotMsgEl = document.createElement('div');
@@ -1710,7 +1666,6 @@ function handleStreamEvent(data) {
       }
       currentFinalContent += data.content;
       currentBotMsgEl.innerHTML = renderMarkdown(currentFinalContent);
-      if (hasToolCalls) showProgressLine(t('continueProcessing'));
       smartScroll(container);
       break;
 
@@ -1719,7 +1674,6 @@ function handleStreamEvent(data) {
       hideTyping();
       removeThinkingHint();
       removeGeneratingBadge();
-      hideProgressLine();
       document.querySelectorAll('.tool-status-dot.running').forEach(d => {
         d.className = 'tool-status-dot error';
       });
@@ -1744,7 +1698,6 @@ function handleStreamEvent(data) {
       hideTyping();
       removeThinkingHint();
       removeGeneratingBadge();
-      hideProgressLine();
       hasToolCalls = true;
       if (data.todo_list) {
         renderTodoPanel(data.todo_list, true);
@@ -1756,7 +1709,6 @@ function handleStreamEvent(data) {
       hideTyping();
       removeThinkingHint();
       removeGeneratingBadge();
-      hideProgressLine();
 
       // 折叠所有工具卡片，标记 running 为 done
       document.querySelectorAll('.tool-card .tool-status-dot.running').forEach(dot => {
@@ -1819,9 +1771,8 @@ function handleStreamEvent(data) {
       }
       currentFinalContent = finalContent;
 
-      // 隐藏第二行和第三行（执行中状态）
+      // 隐藏第二行（执行中状态）
       if (_currentActiveLine) _currentActiveLine.style.display = 'none';
-      if (_currentProgressLine) _currentProgressLine.style.display = 'none';
 
       // 重置工具图片缓存
       _lastToolImageHtml = null;
