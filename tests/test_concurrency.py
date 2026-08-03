@@ -11,6 +11,7 @@ import json
 import os
 import time
 import httpx
+import pytest
 
 BASE_URL = "http://127.0.0.1:8899"
 PASS = 0
@@ -36,6 +37,7 @@ def check(name: str, ok: bool, detail: str = ""):
         print(f"  ❌ {name} — {detail}")
 
 
+@pytest.mark.integration
 async def test_session_isolation():
     """测试 1: 两个并发请求到不同 session，响应不串"""
     print("\n📦 测试 1: Session 隔离")
@@ -70,6 +72,7 @@ async def test_session_isolation():
               f"r1={'OK' if not r1.startswith('❌') else r1[:50]}, r2={'OK' if not r2.startswith('❌') else r2[:50]}")
 
 
+@pytest.mark.integration
 async def test_log_context():
     """测试 2: 日志中有 [s:xxx] [m:xxx] 前缀，两个请求的上下文不乱"""
     print("\n📦 测试 2: 日志上下文隔离")
@@ -121,6 +124,7 @@ async def test_log_context():
         check("日志中有 session_b 痕迹", has_b)
 
 
+@pytest.mark.integration
 async def test_browser_concurrent():
     """测试 3: 浏览器并发操作不冲突"""
     print("\n📦 测试 3: 浏览器并发操作")
@@ -154,6 +158,7 @@ async def test_browser_concurrent():
               f"e2={type(r2).__name__ if isinstance(r2, Exception) else 'OK'}")
 
 
+@pytest.mark.integration
 async def test_agent_not_serialized():
     """测试 4: 非浏览器的普通请求是真正并行的（不排队）"""
     print("\n📦 测试 4: 普通请求并行性能")
