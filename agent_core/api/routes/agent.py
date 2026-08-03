@@ -69,6 +69,11 @@ agent: Optional[DesktopAgent] = None
 def init_agent():
     """初始化 Agent（委托 main 模块，同步本地引用）"""
     global agent
+    # 防御：本地引用已就绪时不重复初始化。否则每次调用都会触发 main.init_agent()
+    # 里「停止旧微信 Bot → 重启」的逻辑，打断正在轮询的 bot（2026-08-03 事故：运行时
+    # 重复 init_agent 停掉了 bot，补发任务被取消，最终回复丢失）。
+    if agent is not None:
+        return
     from main import init_agent as _main_init
     _main_init()
     from main import agent as _main_agent

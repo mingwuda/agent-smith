@@ -916,6 +916,20 @@ class AgentRunMixin:
                         tool_name, step_for_tool, run_id[:12], elapsed, is_error, result_preview,
                     )
 
+                    # ── 工具诊断日志：集中记录错误/超长调用，供后续优化参考 ──
+                    # 只埋流式路径（实际使用路径）；非流式 graph.ainvoke 拿不到耗时/错误信息。
+                    try:
+                        from monitoring.tool_diagnostics import log_tool_event
+                        log_tool_event(
+                            tool_name, elapsed, is_error,
+                            args=tinfo.get("input") if tinfo else None,
+                            result_preview=result_preview,
+                            session=tid,
+                        )
+                    except Exception:
+                        pass  # 诊断日志失败不应影响主流程
+
+
                     # 并行子代理完成：发送每个子任务的状态更新
                     if tool_name in {"delegate_tasks_parallel", "delegate_task"} and subagent_capsules:
                         logger.info("[子代理] %s 执行完毕，准备合并...", tool_name)

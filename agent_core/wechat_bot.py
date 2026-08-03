@@ -302,11 +302,20 @@ class WeChatBot:
         # 新 bot 拿不到轮询锁」两类连锁故障（2026-08-03 线上事故根因）。
         self._retry_queue: deque = deque()
         self._retry_task: Optional[asyncio.Task] = None
+        # 微信频控感知：sendmessage 返回 prepare failed 后进入冷却窗口，
+        # 期间 step 消息暂停发送（不再持续踩频控，缩短频控持续时间），
+        # 只保留最终回复的立即重试 + 后台补发。窗口内任一发送成功后清零。
+        self._rate_limited_until: float = 0.0
         # 自适应轮询间隔
         self._last_activity_at: float = time.time()
         self._poll_delay: float = 0.0  # 当前轮询间隔（秒），0=无延迟
 
         os.makedirs(self.data_dir, exist_ok=True)
+
+        # 补发队列持久化路径：服务重启后从磁盘恢复未完成的补发，
+        # 避免「最终回复入队后服务重启 → 内存队列丢失 → 用户永远收不到」。
+        self._retry_queue_path = Path(self.data_dir) / "retry_queue.json"
+        self._load_retry_queue()
 
         # ── 迁移旧版 token 到新版路径 ──
         if user_id == "admin":
@@ -549,8 +558,13 @@ class WeChatBot:
                 send_resp = self._parse_sendmessage_response(resp_text)
             if send_resp.get("ret", -1) == 0:
                 logger.info("[微信Bot] 文本消息发送成功: message_id=%s", send_resp.get("message_id", ""))
+                self._rate_limited_until = 0.0  # 发送成功说明频控解除，恢复 step 消息
                 return {"ret": 0, "message_id": send_resp.get("message_id", "")}
             last_send_resp = send_resp
+            # 频控感知：prepare failed(ret=-2) 说明微信侧限频，进入 60s 冷却窗口，
+            # 期间 step 消息暂停发送（见 _send_step_msg），避免持续踩频控拉长冷却。
+            if send_resp.get("ret") == -2:
+                self._rate_limited_until = max(self._rate_limited_until, time.time() + 60)
             logger.warning("[微信Bot] sendmessage 文本消息失败: status=%s resp=%s", resp.status_code, json.dumps(send_resp, ensure_ascii=False)[:300])
             if attempt < max_retries:
                 delay = retry_delay * (2 ** attempt)
@@ -581,7 +595,7 @@ class WeChatBot:
         batches = []
         for i in range(0, len(lines), batch):
             chunk = lines[i:i + batch]
-            prefix = f"💭 {head}\n" if head and i == 0 else ""
+            prefix = f"**💭 思考**\n{head}\n" if head and i == 0 else ""
             batches.append(prefix + "\n".join(chunk))
         return batches
 
@@ -612,6 +626,11 @@ class WeChatBot:
         retry_delay=2s 即 2s→4s 退避），单条失败只记日志，后续 step 继续发，
         过程消息持续可见；最终回复有独立更长的重试兜底（send_message max_retries=3）。
         """
+        # 频控冷却中：微信侧限频未解除，step 消息暂停发送（避免持续踩频控拉长冷却），
+        # 最终回复仍走立即重试 + 后台补发，不受影响。
+        if time.time() < self._rate_limited_until:
+            logger.debug("[微信Bot:%s] 频控冷却中，跳过 step 消息: %s", self.user_id, text[:40])
+            return
         # 防御性上限：仅拦截极端刷屏场景，正常任务被限速器+批量约束不会触达
         if self._step_sent_count >= self.step_msg_budget:
             logger.debug("[微信Bot:%s] step 消息达到防御上限(%d)，跳过: %s",
@@ -784,6 +803,50 @@ class WeChatBot:
 
     # ── 最终回复后台补发 ─────────────────────────────
 
+    def _load_retry_queue(self) -> None:
+        """启动时从磁盘恢复未完成的补发队列（服务重启不丢最终回复）。
+
+        磁盘上的 next 已过期（重启期间频控早已冷却）时立即重试。
+        """
+        try:
+            if not self._retry_queue_path.exists():
+                return
+            data = json.loads(self._retry_queue_path.read_text(encoding="utf-8"))
+            now = time.time()
+            for item in data or []:
+                self._retry_queue.append({
+                    "to": item.get("to", ""),
+                    "token": item.get("token", ""),
+                    "text": item.get("text", ""),
+                    "attempts": int(item.get("attempts", 0)),
+                    "next": float(item.get("next", now)),
+                })
+            if self._retry_queue:
+                logger.info("[微信Bot:%s] 已从磁盘恢复 %d 条待补发消息", self.user_id, len(self._retry_queue))
+                # 无运行中事件循环时（如启动阶段）不建 task，由后续 _schedule_retry 重建
+                try:
+                    asyncio.get_running_loop()
+                except RuntimeError:
+                    pass
+                else:
+                    if self._retry_task is None or self._retry_task.done():
+                        self._retry_task = asyncio.create_task(self._retry_loop())
+        except Exception as e:
+            logger.warning("[微信Bot:%s] 补发队列加载失败: %s", self.user_id, e)
+
+    def _persist_retry_queue(self) -> None:
+        """把当前补发队列写盘（每次入队/重试后调用，重启后可恢复）。"""
+        try:
+            data = [
+                {"to": i["to"], "token": i["token"], "text": i["text"],
+                 "attempts": i["attempts"], "next": i["next"]}
+                for i in self._retry_queue
+            ]
+            self._retry_queue_path.write_text(
+                json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+        except Exception as e:
+            logger.warning("[微信Bot:%s] 补发队列持久化失败: %s", self.user_id, e)
+
     def _schedule_retry(self, to_user_id: str, context_token: str, text: str) -> None:
         """最终回复发送失败后入补发队列，由后台任务定时重试（不阻塞轮询循环）。
 
@@ -800,6 +863,7 @@ class WeChatBot:
             "to": to_user_id, "token": context_token, "text": text,
             "attempts": 0, "next": time.time() + 15,
         })
+        self._persist_retry_queue()
         if self._retry_task is None or self._retry_task.done():
             self._retry_task = asyncio.create_task(self._retry_loop())
         logger.info("[微信Bot:%s] 最终回复已入补发队列（%d 条待补发）", self.user_id, len(self._retry_queue))
@@ -835,6 +899,7 @@ class WeChatBot:
                     item["next"] = now + BACKOFF[item["attempts"] - 1]
                     still.append(item)
             self._retry_queue = deque(still)
+            self._persist_retry_queue()
             if self._retry_queue:
                 await asyncio.sleep(5)
         self._retry_task = None
@@ -1492,7 +1557,13 @@ class WeChatBot:
                         dur = ev.get("duration_ms") or 0
                         dur_txt = f"（{dur / 1000:.1f}s）" if dur else ""
                         snippet = result[:150].replace("\n", " ")
-                        pending_step_lines.append(f"{'✅' if ok else '❌'} {tool}{dur_txt}：{snippet or '完成'}")
+                        # step 消息 markdown 化：工具名加粗、结果摘要用引用块，便于阅读。
+                        # 每个工具仍是 pending_step_lines 的一个元素（内部多行），
+                        # 攒批条件按工具数计（len(pending_step_lines) >= step_msg_batch）。
+                        tool_line = f"{'✅' if ok else '❌'} **{tool}**{dur_txt}"
+                        pending_step_lines.append(
+                            f"{tool_line}\n> {snippet}" if snippet else tool_line
+                        )
                         # 攒批：满 batch 条或超过 batch_timeout 秒即合并发送（省配额 + 反馈及时）
                         if len(pending_step_lines) >= self.step_msg_batch or (
                             pending_step_lines and time.time() - pending_step_since >= self.step_msg_batch_timeout
@@ -1648,6 +1719,8 @@ class WeChatBot:
             except asyncio.CancelledError:
                 pass
             self._retry_task = None
+        # 停止前把未完成补发写盘，服务重启后可恢复（避免内存队列随进程丢失）
+        self._persist_retry_queue()
         # 释放跨进程轮询锁，允许其他实例接管
         if self._lock_fd:
             try:

@@ -334,7 +334,7 @@ def init_agent():
             if bot.is_running:
                 try:
                     fut = asyncio.run_coroutine_threadsafe(bot.stop(), loop)
-                    fut.result(timeout=10)
+                    fut.result(timeout=2)
                     logger.info("[微信Bot] 已停止用户 %s 的旧 Bot", uid)
                 except asyncio.TimeoutError:
                     logger.warning("[微信Bot] 停止用户 %s 的 Bot 超时", uid)

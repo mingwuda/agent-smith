@@ -38,11 +38,11 @@ def test_remainder_flushed_as_tail_batch():
 
 
 def test_head_only_prepended_to_first_batch():
-    """💭思考只拼到第一条消息，避免每条都重复思考内容。"""
+    """💭思考只拼到第一条消息（markdown 加粗标题），避免每条都重复思考内容。"""
     lines = ["✅ a", "✅ b", "✅ c", "✅ d"]
     batches = WeChatBot._build_step_batches(lines, batch=3, head="正在查资料")
     assert len(batches) == 2
-    assert batches[0] == "💭 正在查资料\n✅ a\n✅ b\n✅ c"
+    assert batches[0] == "**💭 思考**\n正在查资料\n✅ a\n✅ b\n✅ c"
     assert batches[1] == "✅ d"
 
 
