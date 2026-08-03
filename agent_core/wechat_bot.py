@@ -13,6 +13,7 @@ import os
 import random
 import time
 import uuid
+from collections import deque
 from pathlib import Path
 from typing import Optional
 
@@ -295,6 +296,12 @@ class WeChatBot:
         self._send_timestamps: list[float] = []  # 滑动窗口内已发送成功的时间戳
         # 本轮已发送的 step 消息计数（每次处理用户消息前重置为 0）
         self._step_sent_count: int = 0
+        # 最终回复补发队列：send_message 频控失败后入队，由 _retry_loop 后台指数退避重试。
+        # 必须在 __init__ 初始化——stop() 与 _schedule_retry 都直接引用这两个属性，
+        # 缺了会 AttributeError，造成「最终回复丢失」+「stop 异常→文件锁不释放→
+        # 新 bot 拿不到轮询锁」两类连锁故障（2026-08-03 线上事故根因）。
+        self._retry_queue: deque = deque()
+        self._retry_task: Optional[asyncio.Task] = None
         # 自适应轮询间隔
         self._last_activity_at: float = time.time()
         self._poll_delay: float = 0.0  # 当前轮询间隔（秒），0=无延迟
@@ -505,11 +512,11 @@ class WeChatBot:
 
     async def send_message(
         self, to_user_id: str, context_token: str, text: str,
-        max_retries: int = 0, retry_delay: float = 1.0,
+        max_retries: int = 0, retry_delay: float = 1.0, max_backoff: float = 30.0,
     ) -> dict:
         """发送文本消息。
 
-        max_retries: 失败后的重试次数（指数退避：delay, 2*delay, 4*delay...）。
+        max_retries: 失败后的重试次数（指数退避：delay, 2*delay, 4*delay...，单次退避上限 max_backoff）。
         微信对短时高频发送会返回 prepare failed（频控），指数退避重试可显著提高送达率。
         """
         base = self.bot_base_url or ILINK_BASE_URL
@@ -773,6 +780,64 @@ class WeChatBot:
         except Exception as e:
             logger.warning("[微信Bot] 发送图片消息失败: %s", e)
             return {"ret": -1, "error": str(e)}
+
+
+    # ── 最终回复后台补发 ─────────────────────────────
+
+    def _schedule_retry(self, to_user_id: str, context_token: str, text: str) -> None:
+        """最终回复发送失败后入补发队列，由后台任务定时重试（不阻塞轮询循环）。
+
+        立即重试（send_message max_retries=3）已覆盖短时频控；仍失败说明频控窗口更长
+        （实测 prepare failed 可持续 1 分钟+），转入后台指数退避补发，避免回复静默丢失。
+        """
+        if not text:
+            return
+        # 同一用户同文本不重复入队（补发期间用户可能再次触发同一回复场景）
+        for item in self._retry_queue:
+            if item["to"] == to_user_id and item["text"] == text:
+                return
+        self._retry_queue.append({
+            "to": to_user_id, "token": context_token, "text": text,
+            "attempts": 0, "next": time.time() + 15,
+        })
+        if self._retry_task is None or self._retry_task.done():
+            self._retry_task = asyncio.create_task(self._retry_loop())
+        logger.info("[微信Bot:%s] 最终回复已入补发队列（%d 条待补发）", self.user_id, len(self._retry_queue))
+
+    async def _retry_loop(self) -> None:
+        """后台补发循环：对到期消息重试，指数退避（15s/30s/60s/120s/180s），
+        失败超过上限则放弃并记日志。单条消息总窗口约 6 分钟，覆盖微信频控冷却。
+        """
+        BACKOFF = (15, 30, 60, 120, 180)
+        while self._retry_queue:
+            now = time.time()
+            still: list[dict] = []
+            for item in list(self._retry_queue):
+                if item["next"] > now:
+                    still.append(item)
+                    continue
+                if item["attempts"] >= len(BACKOFF):
+                    logger.warning("[微信Bot:%s] 补发放弃（重试 %d 次仍失败）: %s",
+                                   self.user_id, item["attempts"], item["text"][:60])
+                    continue
+                try:
+                    await self._throttle_send()
+                    resp = await self.send_message(
+                        item["to"], item["token"], item["text"], max_retries=1, retry_delay=2.0,
+                    )
+                except Exception as e:
+                    logger.warning("[微信Bot:%s] 补发异常: %s", self.user_id, e)
+                    resp = {"ret": -1, "detail": str(e)}
+                if resp.get("ret", -1) == 0:
+                    logger.info("[微信Bot:%s] 补发成功: message_id=%s", self.user_id, resp.get("message_id", ""))
+                else:
+                    item["attempts"] += 1
+                    item["next"] = now + BACKOFF[item["attempts"] - 1]
+                    still.append(item)
+            self._retry_queue = deque(still)
+            if self._retry_queue:
+                await asyncio.sleep(5)
+        self._retry_task = None
 
     async def _download_image_as_data_url(self, img_data: dict) -> Optional[str]:
         """下载微信 iLink 图片并转换为 data URL（base64 编码），供多模态 LLM 使用。
@@ -1520,16 +1585,19 @@ class WeChatBot:
                         logger.warning("[微信Bot:%s] 发送截图失败: %s", self.user_id, e)
 
             # 发送剩余的文本（去掉图片引用后的纯净文本）
-            # 最终回复发送前节流 + 指数退避重试（应对微信 prepare failed 频控，避免最终回复丢失）
+            # 最终回复发送前节流 + 指数退避重试（应对微信 prepare failed 频控，避免最终回复丢失）。
+            # 立即重试 3 次（3s/6s/12s ≈ 21s），仍失败则入补发队列由后台任务继续重试（见 _schedule_retry），
+            # 不再"重试完就丢弃"。
             clean_text = re.sub(r'\n{3,}', '\n\n', text_reply).strip()
             if clean_text:
                 await self._throttle_send()
-                send_resp = await self.send_message(from_user, context_token, clean_text, max_retries=3)
+                send_resp = await self.send_message(from_user, context_token, clean_text, max_retries=3, retry_delay=3.0)
                 send_ret = send_resp.get("ret", -1)
                 send_msg_id = send_resp.get("message_id", "")
                 if send_ret != 0:
-                    logger.warning("[微信Bot:%s] 最终回复发送失败（重试后仍失败）: resp=%s",
+                    logger.warning("[微信Bot:%s] 最终回复发送失败（重试后仍失败），转入后台补发: resp=%s",
                                    self.user_id, json.dumps(send_resp, ensure_ascii=False)[:300])
+                    self._schedule_retry(from_user, context_token, clean_text)
                 else:
                     logger.info("[微信Bot:%s] 回复: message_id=%s text=%s", self.user_id, send_msg_id, clean_text[:120])
             elif sent_image:
@@ -1572,6 +1640,14 @@ class WeChatBot:
         self._running = False
         if self._task:
             self._task.cancel()
+        # 停止最终回复补发任务
+        if self._retry_task:
+            self._retry_task.cancel()
+            try:
+                await self._retry_task
+            except asyncio.CancelledError:
+                pass
+            self._retry_task = None
         # 释放跨进程轮询锁，允许其他实例接管
         if self._lock_fd:
             try:
