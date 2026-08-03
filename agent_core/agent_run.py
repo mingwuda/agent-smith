@@ -607,6 +607,13 @@ class AgentRunMixin:
                     # 此处是改写 checkpoint 最安全的时机：图刚结束上一步 checkpoint 写入、尚未开始本轮 LLM 写入，
                     # 不与图循环竞争；压缩只影响「下一轮」LLM 上下文，当前在飞调用已加载完消息、不受影响。
                     if graph_steps >= 2:
+                        # 单轮内（工具执行后、下次 LLM 调用前）先自净残缺 tool 配对，再按需压缩。
+                        # 畸形 tool_calls（id 重复/为空/数量不齐）若只依赖压缩路径，消息数未超阈值
+                        # 时根本不会被修，API 会按 tool_calls 数量校验报 insufficient tool messages。
+                        try:
+                            await self._repair_checkpoint_tool_history(run_config, graph)
+                        except Exception as exc:
+                            logger.warning("[修复] 单轮内 tool 历史修复失败（已忽略，不影响主流程）: %s", exc)
                         try:
                             await self._compact_checkpoint_if_needed(run_config)
                         except Exception as exc:

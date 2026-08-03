@@ -178,6 +178,18 @@ def aes_decrypt_ecb(ciphertext: bytes, key_hex: str) -> bytes:
 
 # ── WeChat Bot 类 ─────────────────────────────────────────────────
 
+def _extract_text(msg: dict) -> str:
+    """从微信消息 item_list 提取纯文本内容（type==1 的 text_item.text）。
+
+    _dispatch_message 需要预先判断消息是否为命令（决定即时/排队），
+    与 _handle_message 共用同一提取逻辑，避免两份实现漂移。
+    """
+    for item in msg.get("item_list", []):
+        if item.get("type") == 1:
+            return item.get("text_item", {}).get("text", "")
+    return ""
+
+
 def _resolve_session_ref(wechat_uid: str, token: str, menu: Optional[dict], project_id: str = "") -> Optional[str]:
     """将 /switch /delete 的参数解析为真实 sessionId。
 
@@ -306,6 +318,16 @@ class WeChatBot:
         # 期间 step 消息暂停发送（不再持续踩频控，缩短频控持续时间），
         # 只保留最终回复的立即重试 + 后台补发。窗口内任一发送成功后清零。
         self._rate_limited_until: float = 0.0
+        # 当前正在执行的 agent 任务（/stop 命令通过 cancel 它来中断请求）。
+        # 同一 bot 同一时刻至多一个普通对话消息在跑 agent（_msg_lock 串行），
+        # 因此单值即可；被 /stop cancel 后由 _handle_message 的 except 分支收尾。
+        self._active_run_task: Optional[asyncio.Task] = None
+        # 普通对话消息串行锁：命令消息（含 /stop）不排队即时处理，
+        # 普通消息排队执行，避免并发导致会话 history 乱序 / 回复错位。
+        self._msg_lock = asyncio.Lock()
+        # 消息处理任务集合：_poll_loop 并行派发 _dispatch_message 后跟踪，
+        # 防止任务被 GC（fire-and-forget 的引用保持）。
+        self._handle_tasks: set[asyncio.Task] = set()
         # 自适应轮询间隔
         self._last_activity_at: float = time.time()
         self._poll_delay: float = 0.0  # 当前轮询间隔（秒），0=无延迟
@@ -1115,6 +1137,35 @@ class WeChatBot:
         name = agent.config.providers[provider_id].get("name", provider_id)
         return f"✅ 已切换到模型 {model}（{name}），后续对话生效"
 
+    def _cancel_active_run(self) -> bool:
+        """请求中断当前正在执行的 agent 任务（/stop 命令）。
+
+        返回是否有任务被取消。被中断的任务在 _handle_message 的
+        except CancelledError 分支产出"⏹️ 任务已中断"最终回复。
+        """
+        task = self._active_run_task
+        if task is not None and not task.done():
+            task.cancel()
+            return True
+        return False
+
+    async def _dispatch_message(self, msg: dict) -> None:
+        """消息分派：命令消息即时并行处理；普通对话消息串行排队。
+
+        背景：agent 执行可能耗时数十秒，若 _poll_loop 串行 await _handle_message，
+        执行期间用户发送的 /stop 根本不会被轮询到（轮询被 agent 执行阻塞），
+        无法中断正在执行的任务。这里把命令消息（含 /stop）从串行队列拆出来
+        即时处理；普通对话消息仍用 _msg_lock 串行化，保证会话写入与 agent
+        执行的顺序一致（并发处理普通消息会导致 history 乱序、回复错位）。
+        """
+        if _extract_text(msg).strip().startswith("/"):
+            # 命令类消息：即时处理（不排队）。命令分支都不跑 agent（各自直接 return），
+            # 与正在执行的 agent 并发安全；/stop 需要立即响应才可达中断目的。
+            await self._handle_message(msg)
+            return
+        async with self._msg_lock:
+            await self._handle_message(msg)
+
     async def _handle_message(self, msg: dict):
         """处理单条微信消息：调用 agent 并回复，同时保存到会话存储"""
         from_user = msg.get("from_user_id", "")
@@ -1154,11 +1205,7 @@ class WeChatBot:
                     logger.info("[微信Bot:%s] 检测到 iLink 图片: msg_id=%s", self.user_id, image_data["msg_id"][:20])
 
         # ── 提取文本内容 ──
-        text = ""
-        for item in msg.get("item_list", []):
-            if item.get("type") == 1:
-                text = item.get("text_item", {}).get("text", "")
-                break
+        text = _extract_text(msg)
 
         # ── 纯图片消息（无文本）：暂存，等待后续文本合并 ──
         if not text:
@@ -1415,6 +1462,16 @@ class WeChatBot:
                         self.user_id, from_user[:16], model, provider_id)
             return
 
+        # ── /stop 命令：中断当前正在执行的 agent 请求 ──
+        if text.strip() == "/stop":
+            if self._cancel_active_run():
+                await self.send_message(from_user, context_token, "⏹️ 正在中断当前任务…")
+                logger.info("[微信Bot:%s] 用户 %s 发送 /stop，已请求中断当前任务",
+                            self.user_id, from_user[:16])
+            else:
+                await self.send_message(from_user, context_token, "ℹ️ 当前没有正在执行的任务")
+            return
+
         # ── /help 命令：指令使用说明 ──
         if text.strip() == "/help":
             help_text = (
@@ -1429,6 +1486,7 @@ class WeChatBot:
                 "/delete <序号|ID> … — 删除会话\n"
                 "/modals — 列出可用模型\n"
                 "/modal <序号|模型名> — 切换模型\n"
+                "/stop — 中断当前正在执行的任务\n"
                 "/help — 显示本帮助"
             )
             await self.send_message(from_user, context_token, help_text)
@@ -1524,87 +1582,103 @@ class WeChatBot:
         # 官方 iLink 对 sendmessage 无公开条数配额，频控是频率型（ret=-2 rate limited）；
         # 这里用「批量合并省条数 + 滑动窗口限速 + 失败退避重试」保证过程消息持续可见，
         # step_msg_budget 仅作极端刷屏的防御性上限（默认 30 条），最终回复不受限。
-        reply = ""
-        pending_thought = ""  # 缓存 thought，合并到下一个 step 批一起发，减少消息条数
-        pending_step_lines: list[str] = []  # 批量 step 缓冲：攒满 batch 条或超时即合并发送
-        pending_step_since: float = time.time()  # 攒批起始时间，配合 step_msg_batch_timeout 保证反馈及时
-        collected_steps: list[dict] = []  # 收集步骤卡片，随最终回复保存（Web 端回放渲染工具卡片）
-        self._step_sent_count = 0  # 每轮任务重置 step 消息预算计数
-        agent = self._ensure_agent()
+        # agent 执行包成独立任务（self._active_run_task）：/stop 命令通过 cancel 它中断请求，
+        # 被中断时下方捕获 CancelledError，产出"⏹️ 任务已中断"作为最终回复（复用统一保存/发送链路）。
+        async def _run_agent_body() -> tuple[str, list[dict]]:
+            reply = ""
+            pending_thought = ""  # 缓存 thought，合并到下一个 step 批一起发，减少消息条数
+            pending_step_lines: list[str] = []  # 批量 step 缓冲：攒满 batch 条或超时即合并发送
+            pending_step_since: float = time.time()  # 攒批起始时间，配合 step_msg_batch_timeout 保证反馈及时
+            collected_steps: list[dict] = []  # 收集步骤卡片，随最终回复保存（Web 端回放渲染工具卡片）
+            self._step_sent_count = 0  # 每轮任务重置 step 消息预算计数
+            agent = self._ensure_agent()
+            try:
+                # 串行化 agent 执行段：工具工作区（file_tools/shell_tools/browser_tools）是
+                # 模块级全局状态，_apply_session_workspace 会改写它。若两个用户的微信消息
+                # 并发处理，A 的工具调用会读到 B 的工作区文件（跨用户内容串扰的根因之一）。
+                # 用全局锁保证同一时刻只有一个用户在跑 agent。
+                async with _WECHAT_AGENT_LOCK:
+                    # 根据当前会话/项目设置工具工作目录（全局工具工作区，与 agent 调用同锁）
+                    try:
+                        from agent_core.services.agent_service import _apply_session_workspace
+                        _apply_session_workspace(wechat_uid, session_id, self._wechat_current_project.get(from_user, ""))
+                    except Exception:
+                        pass
+                    # 同步该用户专属 agent 的工作区（_apply_session_workspace 只设置全局 Web agent）
+                    try:
+                        from services.workspace import _workspace_for_user
+                        eff_ws = session_store.get_session_workspace(wechat_uid, session_id) or str(_workspace_for_user(wechat_uid))
+                        agent.set_workspace(str(Path(eff_ws).expanduser().resolve()))
+                    except Exception:
+                        pass
+                    async for ev in agent.chat_stream_events(
+                        text, attachments=attachments, thread_id=session_id, history=history,
+                    ):
+                        et = ev.get("type")
+                        # 步骤卡片一律收集（无论 step_reply_enabled），随最终回复保存，
+                        # 供 Web 端回放渲染工具卡片（与 Web 端 /run/stream 的 collected_steps 一致）
+                        if et == "thought":
+                            thought = str(ev.get("thought", "")).strip()
+                            if thought:
+                                collected_steps.append({"type": "thought", "thought": thought[:200]})
+                                if self.step_reply_enabled:
+                                    pending_thought = thought[:200]
+                        elif et == "tool_start":
+                            collected_steps.append(ev)
+                        elif et == "tool_result":
+                            collected_steps.append(ev)
+                            if not self.step_reply_enabled:
+                                continue
+                            tool = ev.get("tool", "")
+                            result = str(ev.get("result", "") or "").strip()
+                            ok = not ev.get("error")
+                            dur = ev.get("duration_ms") or 0
+                            dur_txt = f"（{dur / 1000:.1f}s）" if dur else ""
+                            snippet = result[:150].replace("\n", " ")
+                            # step 消息 markdown 化：工具名加粗、结果摘要用引用块，便于阅读。
+                            # 每个工具仍是 pending_step_lines 的一个元素（内部多行），
+                            # 攒批条件按工具数计（len(pending_step_lines) >= step_msg_batch）。
+                            tool_line = f"{'✅' if ok else '❌'} **{tool}**{dur_txt}"
+                            pending_step_lines.append(
+                                f"{tool_line}\n> {snippet}" if snippet else tool_line
+                            )
+                            # 攒批：满 batch 条或超过 batch_timeout 秒即合并发送（省配额 + 反馈及时）
+                            if len(pending_step_lines) >= self.step_msg_batch or (
+                                pending_step_lines and time.time() - pending_step_since >= self.step_msg_batch_timeout
+                            ):
+                                for batch_text in self._build_step_batches(pending_step_lines, self.step_msg_batch, pending_thought):
+                                    await self._send_step_msg(from_user, context_token, batch_text)
+                                pending_step_lines.clear()
+                                pending_thought = ""
+                                pending_step_since = time.time()
+                        elif et == "done":
+                            reply = ev.get("content", "")
+                            # flush 残余批量 step（不足 batch 条的尾批也合并一条发出去，不留过程死角）
+                            if self.step_reply_enabled and pending_step_lines:
+                                for batch_text in self._build_step_batches(pending_step_lines, self.step_msg_batch, pending_thought):
+                                    await self._send_step_msg(from_user, context_token, batch_text)
+                                pending_step_lines.clear()
+                                pending_thought = ""
+                        elif et == "error":
+                            content = ev.get("content", "")
+                            if not reply:
+                                reply = f"❌ {content}"
+            except Exception as e:
+                logger.exception("[微信Bot] agent 调用异常")
+                reply = f"❌ 处理出错: {e}"
+            return reply, collected_steps
+
+        self._active_run_task = asyncio.create_task(_run_agent_body())
         try:
-            # 串行化 agent 执行段：工具工作区（file_tools/shell_tools/browser_tools）是
-            # 模块级全局状态，_apply_session_workspace 会改写它。若两个用户的微信消息
-            # 并发处理，A 的工具调用会读到 B 的工作区文件（跨用户内容串扰的根因之一）。
-            # 用全局锁保证同一时刻只有一个用户在跑 agent。
-            async with _WECHAT_AGENT_LOCK:
-                # 根据当前会话/项目设置工具工作目录（全局工具工作区，与 agent 调用同锁）
-                try:
-                    from agent_core.services.agent_service import _apply_session_workspace
-                    _apply_session_workspace(wechat_uid, session_id, self._wechat_current_project.get(from_user, ""))
-                except Exception:
-                    pass
-                # 同步该用户专属 agent 的工作区（_apply_session_workspace 只设置全局 Web agent）
-                try:
-                    from services.workspace import _workspace_for_user
-                    eff_ws = session_store.get_session_workspace(wechat_uid, session_id) or str(_workspace_for_user(wechat_uid))
-                    agent.set_workspace(str(Path(eff_ws).expanduser().resolve()))
-                except Exception:
-                    pass
-                async for ev in agent.chat_stream_events(
-                    text, attachments=attachments, thread_id=session_id, history=history,
-                ):
-                    et = ev.get("type")
-                    # 步骤卡片一律收集（无论 step_reply_enabled），随最终回复保存，
-                    # 供 Web 端回放渲染工具卡片（与 Web 端 /run/stream 的 collected_steps 一致）
-                    if et == "thought":
-                        thought = str(ev.get("thought", "")).strip()
-                        if thought:
-                            collected_steps.append({"type": "thought", "thought": thought[:200]})
-                            if self.step_reply_enabled:
-                                pending_thought = thought[:200]
-                    elif et == "tool_start":
-                        collected_steps.append(ev)
-                    elif et == "tool_result":
-                        collected_steps.append(ev)
-                        if not self.step_reply_enabled:
-                            continue
-                        tool = ev.get("tool", "")
-                        result = str(ev.get("result", "") or "").strip()
-                        ok = not ev.get("error")
-                        dur = ev.get("duration_ms") or 0
-                        dur_txt = f"（{dur / 1000:.1f}s）" if dur else ""
-                        snippet = result[:150].replace("\n", " ")
-                        # step 消息 markdown 化：工具名加粗、结果摘要用引用块，便于阅读。
-                        # 每个工具仍是 pending_step_lines 的一个元素（内部多行），
-                        # 攒批条件按工具数计（len(pending_step_lines) >= step_msg_batch）。
-                        tool_line = f"{'✅' if ok else '❌'} **{tool}**{dur_txt}"
-                        pending_step_lines.append(
-                            f"{tool_line}\n> {snippet}" if snippet else tool_line
-                        )
-                        # 攒批：满 batch 条或超过 batch_timeout 秒即合并发送（省配额 + 反馈及时）
-                        if len(pending_step_lines) >= self.step_msg_batch or (
-                            pending_step_lines and time.time() - pending_step_since >= self.step_msg_batch_timeout
-                        ):
-                            for batch_text in self._build_step_batches(pending_step_lines, self.step_msg_batch, pending_thought):
-                                await self._send_step_msg(from_user, context_token, batch_text)
-                            pending_step_lines.clear()
-                            pending_thought = ""
-                            pending_step_since = time.time()
-                    elif et == "done":
-                        reply = ev.get("content", "")
-                        # flush 残余批量 step（不足 batch 条的尾批也合并一条发出去，不留过程死角）
-                        if self.step_reply_enabled and pending_step_lines:
-                            for batch_text in self._build_step_batches(pending_step_lines, self.step_msg_batch, pending_thought):
-                                await self._send_step_msg(from_user, context_token, batch_text)
-                            pending_step_lines.clear()
-                            pending_thought = ""
-                    elif et == "error":
-                        content = ev.get("content", "")
-                        if not reply:
-                            reply = f"❌ {content}"
-        except Exception as e:
-            logger.exception("[微信Bot] agent 调用异常")
-            reply = f"❌ 处理出错: {e}"
+            reply, collected_steps = await self._active_run_task
+        except asyncio.CancelledError:
+            # /stop 中断：回复置为"任务已中断"，走下方统一保存/发送链路，
+            # 用户收到明确确认，且会话中留档（Web 端回放可见）。
+            logger.info("[微信Bot:%s] 用户 %s 的任务已被 /stop 中断", self.user_id, from_user[:16])
+            reply = "⏹️ 任务已中断"
+            collected_steps = []
+        finally:
+            self._active_run_task = None
 
         # 保存助手回复：与 Web 端同格式（{"text":..., "steps":[...]} JSON），
         # 使微信 bot 消息在 Web 端回放时也能渲染工具卡片。
@@ -1790,7 +1864,12 @@ class WeChatBot:
                 for msg in msgs:
                     if not self._running:
                         break
-                    await self._handle_message(msg)
+                    # 并行派发消息处理：agent 执行可能耗时数十秒，若串行 await，
+                    # 期间用户发送的 /stop 无法被轮询到。_dispatch_message 内
+                    # 命令消息即时处理、普通消息 _msg_lock 串行（顺序不乱）。
+                    task = asyncio.create_task(self._dispatch_message(msg))
+                    self._handle_tasks.add(task)
+                    task.add_done_callback(self._handle_tasks.discard)
             except asyncio.CancelledError:
                 break
             except httpx.RemoteProtocolError:

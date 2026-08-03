@@ -582,7 +582,14 @@ def _drop_dangling_tool_call_messages(messages: list) -> tuple[list, bool]:
 
     按「AI(tool_calls)+其 tool 结果」为一个块整体处理：块完整则整体保留，
     块残缺则整体丢弃；不属于任何有效块的 tool 消息按孤儿丢弃。
+
+    ponytail: 校验必须按「数量」而非 set 去重——LLM 网关可能返回 tool_calls
+    id 重复/为空的畸形块（实测 deepseek 流式偶发），此时 1 条 ToolMessage 在
+    set 视角"已覆盖"，但 API 按 tool_calls 数量校验仍报 insufficient tool
+    messages。用 Counter 对 id 计数，数量不足即判残缺、整块丢弃。
     """
+    from collections import Counter
+
     result = []
     changed = False
     idx = 0
@@ -590,15 +597,20 @@ def _drop_dangling_tool_call_messages(messages: list) -> tuple[list, bool]:
         message = messages[idx]
         mtype = getattr(message, "type", "")
         if mtype == "ai" and _tool_call_ids(message):
-            expected_ids = _tool_call_ids(message)
+            expected: Counter = Counter()
+            for call in getattr(message, "tool_calls", None) or []:
+                cid = call.get("id") if isinstance(call, dict) else getattr(call, "id", "")
+                if cid:
+                    expected[str(cid)] += 1
             next_idx = idx + 1
-            seen_ids: set[str] = set()
+            seen: Counter = Counter()
             while next_idx < len(messages) and getattr(messages[next_idx], "type", "") == "tool":
                 tool_call_id = _tool_message_id(messages[next_idx])
                 if tool_call_id:
-                    seen_ids.add(tool_call_id)
+                    seen[tool_call_id] += 1
                 next_idx += 1
-            if expected_ids.issubset(seen_ids):
+            # 块完整 ⇔ 每个 tool_call_id 都有足够数量的 ToolMessage 响应
+            if expected and all(seen.get(cid, 0) >= cnt for cid, cnt in expected.items()):
                 # 块完整：AIMessage 及其全部 tool 结果整体保留
                 result.extend(messages[idx:next_idx])
             else:

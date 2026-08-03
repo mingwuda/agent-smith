@@ -107,6 +107,34 @@ def test_compact_never_produces_orphan_tool():
     assert not _has_pairing_violation(final)
 
 
+def test_duplicate_tool_call_id_insufficient():
+    # 回归：LLM 网关返回畸形 tool_calls（两个元素 id 相同），只有 1 条 ToolMessage。
+    # 旧实现用 set 去重判断配对 → issubset 误判"完整" → 不修复 → API 400
+    # insufficient tool messages（按 tool_calls 数量校验）。
+    ai = AIMessage(content="思考", tool_calls=[
+        {"id": "call_x", "name": "search_files", "args": {"pattern": "a"}},
+        {"id": "call_x", "name": "search_files", "args": {"pattern": "b"}},
+    ])
+    msgs = [HumanMessage(content="hi"), ai, ToolMessage(content="r", tool_call_id="call_x")]
+    repaired, changed = _drop_dangling_tool_call_messages(msgs)
+    assert changed is True, "2 个相同 id 的 tool_call 只有 1 条 ToolMessage，必须判残缺"
+    assert not _has_pairing_violation(repaired)
+
+
+def test_duplicate_tool_call_id_sufficient():
+    # 相同 id 的畸形 tool_calls 若给了等量 ToolMessage（2 条同 id），视为完整保留。
+    ai = AIMessage(content="思考", tool_calls=[
+        {"id": "call_x", "name": "search_files", "args": {"pattern": "a"}},
+        {"id": "call_x", "name": "search_files", "args": {"pattern": "b"}},
+    ])
+    msgs = [HumanMessage(content="hi"), ai,
+            ToolMessage(content="r1", tool_call_id="call_x"),
+            ToolMessage(content="r2", tool_call_id="call_x")]
+    repaired, changed = _drop_dangling_tool_call_messages(msgs)
+    assert changed is False
+    assert len(repaired) == 4
+
+
 def test_compact_reduces_tokens():
     # 行为契约：压缩后总 token 必须严格小于压缩前（旧轮被摘要成远短文本）。
     # 同时验证工具链完整、不以孤儿 tool 消息开头。
