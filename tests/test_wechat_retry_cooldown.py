@@ -162,3 +162,55 @@ def test_recovery_from_disk_respects_persisted_state(monkeypatch, tmp_path):
     assert item["to"] == "u1" and item["text"] == "hi"
     assert item["attempts"] == 3  # 已失败的次数保留，不重置
     assert item["next"] == 123.0  # 未到期时间保留
+
+
+def test_send_message_cooldown_escalates_stepwise(monkeypatch):
+    """send_message 频控冷却阶梯递增：60s 起步、每失败 +60s、封顶 300s，成功清零。
+
+    回归（2026-08-03）：冷却曾是固定 60s，连续失败时被反复撞穿；也讨论过直接
+    300s，但频控可能是短时抖动、一上来就 5 分钟过度惩罚。改为连续失败阶梯递增。
+    """
+    from types import SimpleNamespace
+
+    clock = _FakeClock()
+    monkeypatch.setattr(wb.time, "time", clock.now)
+
+    bot = object.__new__(WeChatBot)
+    bot.bot_base_url = "http://fake"
+    bot._auth_headers = lambda: {}
+    bot._rate_limited_until = 0.0
+    bot._rate_limit_strikes = 0
+    # 解析结果按调用顺序注入：前 5 次频控失败，第 6 次成功
+    bot._parse_sendmessage_response = Mock(side_effect=[
+        {"ret": -2, "message_id": "", "detail": {"errmsg": "prepare failed"}} for _ in range(5)
+    ] + [{"ret": 0, "message_id": "m-ok"}])
+
+    fake_client = AsyncMock()
+    fake_client.post.return_value = SimpleNamespace(status_code=200, text="{}")
+    fake_client.__aenter__.return_value = fake_client
+    fake_client.__aexit__.return_value = False
+    # AsyncClient 是同步构造（返回实例）+ async with 进入：外层用同步 Mock，
+    # 内层 post 用 AsyncMock（await 走 return_value）。
+    monkeypatch.setattr(wb.httpx, "AsyncClient", Mock(return_value=fake_client))
+
+    snapshots: list[tuple[float, int]] = []  # (冷却结束时间, strikes)，每次失败后记录
+
+    async def run():
+        for _ in range(5):
+            await bot.send_message("u1", "tok", "hi", max_retries=0)
+            snapshots.append((bot._rate_limited_until, bot._rate_limit_strikes))
+        return await bot.send_message("u1", "tok", "hi", max_retries=0)
+
+    resp = asyncio.run(run())
+
+    # 连续 5 次失败：冷却 60 → 120 → 180 → 240 → 300，strikes 1→5
+    expected = [60, 120, 180, 240, 300]
+    for i, want in enumerate(expected):
+        until, strikes = snapshots[i]
+        got = until - clock.now()
+        assert abs(got - want) < 1e-6, f"第 {i + 1} 次失败后冷却应为 {want}s，实际 {got:.1f}s"
+        assert strikes == i + 1, f"第 {i + 1} 次失败后 strikes 应为 {i + 1}，实际 {strikes}"
+    # 第 6 次成功：计数与冷却清零，回到基线
+    assert resp["ret"] == 0 and resp["message_id"] == "m-ok"
+    assert bot._rate_limit_strikes == 0
+    assert bot._rate_limited_until == 0.0

@@ -318,6 +318,11 @@ class WeChatBot:
         # 期间 step 消息暂停发送（不再持续踩频控，缩短频控持续时间），
         # 只保留最终回复的立即重试 + 后台补发。窗口内任一发送成功后清零。
         self._rate_limited_until: float = 0.0
+        # 连续频控失败计数：冷却时长阶梯递增（60s 起步、每失败 +60s、封顶 300s）。
+        # 不立即 5 分钟（频控可能是短时抖动，直接 300s 过度惩罚），
+        # 也不固定 60s（连续失败说明频控未解除，固定 60s 会被反复撞穿）。
+        # 成功一次即清零，回到 60s 基线。
+        self._rate_limit_strikes: int = 0
         # 当前正在执行的 agent 任务（/stop 命令通过 cancel 它来中断请求）。
         # 同一 bot 同一时刻至多一个普通对话消息在跑 agent（_msg_lock 串行），
         # 因此单值即可；被 /stop cancel 后由 _handle_message 的 except 分支收尾。
@@ -581,12 +586,16 @@ class WeChatBot:
             if send_resp.get("ret", -1) == 0:
                 logger.info("[微信Bot] 文本消息发送成功: message_id=%s", send_resp.get("message_id", ""))
                 self._rate_limited_until = 0.0  # 发送成功说明频控解除，恢复 step 消息
+                self._rate_limit_strikes = 0    # 连续失败计数清零，回到 60s 冷却基线
                 return {"ret": 0, "message_id": send_resp.get("message_id", "")}
             last_send_resp = send_resp
-            # 频控感知：prepare failed(ret=-2) 说明微信侧限频，进入 60s 冷却窗口，
+            # 频控感知：prepare failed(ret=-2) 说明微信侧限频，进入冷却窗口，
             # 期间 step 消息暂停发送（见 _send_step_msg），避免持续踩频控拉长冷却。
+            # 冷却时长阶梯递增：60s 起步、每失败 +60s、封顶 300s。
             if send_resp.get("ret") == -2:
-                self._rate_limited_until = max(self._rate_limited_until, time.time() + 60)
+                self._rate_limit_strikes += 1
+                cooldown = min(60 * self._rate_limit_strikes, 300)
+                self._rate_limited_until = max(self._rate_limited_until, time.time() + cooldown)
             logger.warning("[微信Bot] sendmessage 文本消息失败: status=%s resp=%s", resp.status_code, json.dumps(send_resp, ensure_ascii=False)[:300])
             if attempt < max_retries:
                 delay = retry_delay * (2 ** attempt)
@@ -897,9 +906,9 @@ class WeChatBot:
 
         策略（ponytail，2026-08-03 线上事故教训）：
         - 频控冷却中（_rate_limited_until > now）整队列挂起、绝不发送：
-          冷却中强行发送只会再吃 ret=-2，把冷却窗口又往后推 60s（send_message 失败时
-          会刷新 _rate_limited_until），形成"越试越冷却"的恶性循环——之前 5 次补发
-          全失败、频控持续 11 分钟+ 就是它造成的。
+          冷却中强行发送只会再吃 ret=-2，把冷却窗口又往后推（send_message 失败时
+          按阶梯递增刷新 _rate_limited_until：60s→120s→…→300s），形成
+          "越试越冷却"的恶性循环——之前 5 次补发全失败、频控持续 11 分钟+ 就是它造成的。
         - 每次补发只发一次（max_retries=0）：失败说明仍被频控/异常，等下一轮，
           不在补发路径里做立即重试。
         - 失败后 next 取 max(退避, 冷却结束)：确保下次尝试一定在冷却窗口之后。
@@ -934,7 +943,7 @@ class WeChatBot:
                     logger.info("[微信Bot:%s] 补发成功: message_id=%s", self.user_id, resp.get("message_id", ""))
                 else:
                     item["attempts"] += 1
-                    # 至少等到冷却结束再试（send_message 失败已把 _rate_limited_until 推到 now+60）
+                    # 至少等到冷却结束再试（send_message 失败已按阶梯刷新 _rate_limited_until）
                     item["next"] = max(now + BACKOFF[item["attempts"] - 1], self._rate_limited_until)
                     still.append(item)
             self._retry_queue = deque(still)
@@ -1749,7 +1758,7 @@ class WeChatBot:
             # 发送剩余的文本（去掉图片引用后的纯净文本）
             # 最终回复：不立即重试（max_retries=0），失败直接入补发队列。
             # 理由（2026-08-03 事故）：立即重试 3 次（3s/6s/12s）在频控窗口内等于
-            # 持续踩频控，每次失败又把 _rate_limited_until 往后推 60s，反而拉长冷却；
+            # 持续踩频控，每次失败又把 _rate_limited_until 往后推（阶梯递增 60s→300s），反而拉长冷却；
             # 正确做法是失败后交给 _retry_loop——它会等冷却结束再发，不刷新冷却窗口。
             clean_text = re.sub(r'\n{3,}', '\n\n', text_reply).strip()
             if clean_text:
