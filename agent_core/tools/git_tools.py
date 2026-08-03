@@ -131,8 +131,18 @@ def _validate_args(args: list[str]) -> Optional[str]:
             if arg.startswith("-") and arg not in allowed_options:
                 return "❌ git add 仅允许普通暂存，不允许其它选项"
     if subcommand == "commit":
-        if len(args) != 3 or args[1] != "-m" or not args[2].strip():
-            return "❌ git commit 仅允许普通提交格式: git commit -m \"message\""
+        # 普通提交: git commit -m "msg"；改写最近提交信息: git commit --amend -m "msg"
+        # （2026-08-03 用户要求放行 amend；仅限 --amend -m 改信息，
+        #   --no-edit / 追加多个 -m / --author 等其它 amend 用法保持禁止）
+        normal = len(args) == 3 and args[1] == "-m" and args[2].strip()
+        amend = (
+            len(args) == 4
+            and args[1] == "--amend"
+            and args[2] == "-m"
+            and args[3].strip()
+        )
+        if not (normal or amend):
+            return "❌ git commit 仅允许: git commit -m \"message\" 或 git commit --amend -m \"message\""
     if subcommand == "push":
         if len(args) == 1:
             return None

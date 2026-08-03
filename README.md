@@ -271,7 +271,7 @@ git_revert       git_command
 |--------|---------|
 | `status` / `diff` / `log` / `show` | 查看 |
 | `add` | 暂存文件 |
-| `commit -m` | 提交 |
+| `commit -m` / `commit --amend -m` | 提交 / 改写最近提交信息 |
 | `push` / `push -u origin branch` | 推送 |
 | `revert <revision>` | 回退提交 |
 | `branch` / `branch -a` / `branch -d/-D <name>` | 查看/删除分支 |
@@ -285,6 +285,7 @@ git_revert       git_command
 - 只有用户明确要求提交时才使用 `git_add` / `git_commit` / `git_commit_all`
 - 只有用户明确要求推送时才使用 `git_push`
 - 只有用户明确要求回退版本时才使用 `git_revert`
+- `git commit --amend -m` 仅允许改写最近提交信息（amend 会改写历史，仅限用户明确要求时使用）
 - `git_push` 只允许普通 push、指定 remote/branch、首次设置 upstream
 - `git_revert` 只允许单个 revision，支持 `--no-commit`
 - 不开放 `pull`、`reset`、`restore`、force push、range revert、merge revert 等高风险操作

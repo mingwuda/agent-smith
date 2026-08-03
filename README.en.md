@@ -207,7 +207,7 @@ git_revert       git_command
 |--------|---------|
 | `status` / `diff` / `log` / `show` | Inspect |
 | `add` | Stage files |
-| `commit -m` | Commit |
+| `commit -m` / `commit --amend -m` | Commit / rewrite latest commit message |
 | `push` / `push -u origin branch` | Push |
 | `revert <revision>` | Revert commits |
 | `branch` / `branch -a` / `branch -d/-D <name>` | List/delete branches |
@@ -221,6 +221,7 @@ Safety policy:
 - Use `git_add` / `git_commit` / `git_commit_all` only when the user explicitly asks to commit
 - Use `git_push` only when the user explicitly asks to push
 - Use `git_revert` only when the user explicitly asks to revert
+- `git commit --amend -m` only rewrites the latest commit message (amends history; use only when the user explicitly asks)
 - `git_push` only supports normal pushes, specifying remote/branch, or first-time upstream setup
 - `git_revert` only supports a single revision and optional `--no-commit`
 - High-risk operations such as `pull`, `reset`, `restore`, force push, range revert, and merge revert are not exposed
