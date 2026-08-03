@@ -66,18 +66,20 @@ class RunResponse(BaseModel):
 agent: Optional[DesktopAgent] = None
 
 
-def init_agent():
+def init_agent(caller: str = "route.agent", force: bool = False):
     """初始化 Agent（委托 main 模块，同步本地引用）"""
     global agent
     # 防御：本地引用已就绪时不重复初始化。否则每次调用都会触发 main.init_agent()
     # 里「停止旧微信 Bot → 重启」的逻辑，打断正在轮询的 bot（2026-08-03 事故：运行时
     # 重复 init_agent 停掉了 bot，补发任务被取消，最终回复丢失）。
-    if agent is not None:
+    # force=True 为显式重启路径（保存设置/删 Provider），总是重建。
+    if agent is not None and not force:
         return
-    from main import init_agent as _main_init
-    _main_init()
-    from main import agent as _main_agent
-    agent = _main_agent
+    from app_state import get_init_agent, get_agent
+    _main_init = get_init_agent()
+    if _main_init is not None:
+        _main_init(caller=caller, force=force)
+    agent = get_agent()
 
 
 # ---------- 路由 ----------
@@ -87,7 +89,7 @@ def init_agent():
 async def run_agent(req: RunRequest, request: Request):
     """发送消息给 Agent 并获取回复"""
     if not agent:
-        init_agent()
+        init_agent(caller="route.agent.run")
     if not agent:
         logger.error("Agent 初始化失败，请检查 API Key 设置")
         raise HTTPException(503, "Agent 初始化失败，请检查 API Key 设置")
@@ -178,7 +180,7 @@ async def run_agent(req: RunRequest, request: Request):
 async def run_agent_stream(req: RunRequest, request: Request):
     """流式处理消息（SSE）"""
     if not agent:
-        init_agent()
+        init_agent(caller="route.agent.stream")
     if not agent:
         raise HTTPException(503, "Agent 初始化失败")
     

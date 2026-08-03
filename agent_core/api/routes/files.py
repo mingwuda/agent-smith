@@ -1,12 +1,12 @@
 """文件浏览器路由 — 安全浏览项目目录、读取文件内容、Git 变更查看"""
 import logging
-import os
-import subprocess
 from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request, Body
 from fastapi.responses import Response
+
+from services.git import run_git as _git_run, parse_porcelain as _parse_porcelain
 
 logger = logging.getLogger(__name__)
 
@@ -181,21 +181,6 @@ async def read_file(
     }
 
 
-def _run_git(repo_dir: str, *args: str, timeout: int = 15) -> tuple[str | None, str]:
-    """在指定目录执行 git 命令，返回 (stdout, stderr)"""
-    try:
-        result = subprocess.run(
-            ["git", "-C", repo_dir] + list(args),
-            capture_output=True, text=True, timeout=timeout,
-            env={**os.environ, "LC_ALL": "C"},
-        )
-        return result.stdout.rstrip(), result.stderr.rstrip()
-    except FileNotFoundError:
-        raise HTTPException(status_code=500, detail="未找到 git 命令，请确认系统已安装 git")
-    except subprocess.TimeoutExpired:
-        raise HTTPException(status_code=504, detail=f"Git 命令超时（{timeout}s）")
-
-
 @router.get("/files/changes")
 async def get_changed_files(
     request: Request,
@@ -220,11 +205,11 @@ async def get_changed_files(
         raise HTTPException(status_code=400, detail="无法确定项目根目录")
 
     # 确认是 Git 仓库
-    _, err = _run_git(str(base), "rev-parse", "--is-inside-work-tree")
+    _, err, _ = _git_rc(str(base), "rev-parse", "--is-inside-work-tree")
     if err:
         raise HTTPException(status_code=400, detail="当前目录不是 Git 仓库")
 
-    stdout, _ = _run_git(str(base), "status", "--porcelain=v1")
+    stdout, _, _ = _git_rc(str(base), "status", "--porcelain=v1")
     changes = _parse_porcelain(stdout)
 
     # 排序：已跟踪的在前，未跟踪在后；同组按路径排序
@@ -239,51 +224,6 @@ async def get_changed_files(
         "total_changes": len(changes),
         "changes": changes,
     }
-
-
-def _parse_porcelain(status_out: str) -> list[dict]:
-    """解析 `git status --porcelain=v1` 输出为变更列表。
-
-    返回结构与 /files/changes 的 changes 数组一致，供各接口复用。
-    """
-    changes = []
-    for line in (status_out or "").splitlines():
-        if len(line) < 4:
-            continue
-        # porcelain v1 固定格式为 "XY PATH"：XY 是 2 个字符（空格也是有效占位），
-        # 第 3 个字符起是路径。不能用 split(None, 1) 解析——它会吃掉 X 列前导空格，
-        # 把未暂存的 " M file" 误判为已暂存的 "M  file"（index_status 失真）。
-        xy = line[:2].ljust(2)   # 保证长度为 2（单字符状态补空格）
-        path_raw = line[3:]      # 跳过 "XY " 三字符
-        # 处理 rename 格式：old -> new
-        if "\x00" in path_raw:
-            parts_path = path_raw.split("\x00")
-            old_path = parts_path[0]
-            new_path = parts_path[1] if len(parts_path) > 1 else old_path
-        elif " -> " in path_raw:
-            old_path, new_path = (p.strip() for p in path_raw.split(" -> ", 1))
-        else:
-            old_path = new_path = path_raw
-
-        status_map = {
-            "M": "modified", "A": "added", "D": "deleted",
-            "R": "renamed", "C": "copied", "U": "unmerged",
-            "?": "untracked", "!": "ignored",
-        }
-        x_status = status_map.get(xy[0], "unknown") if xy[0].strip() else ""
-        y_status = status_map.get(xy[1], "unknown") if xy[1].strip() else ""
-
-        entry = {
-            "path": new_path,
-            "status": x_status or y_status,
-            "index_status": x_status,
-            "work_status": y_status,
-            "raw_xy": xy,
-        }
-        if x_status == "renamed" or y_status == "renamed":
-            entry["old_path"] = old_path
-        changes.append(entry)
-    return changes
 
 
 @router.post("/files/stash")
@@ -306,7 +246,7 @@ async def get_stash_list(request: Request, project_id: str = Query("", descripti
     """获取当前仓库的 stash 列表（git stash list）。"""
     base = _resolve_repo_root(request, project_id)
     # %gd 输出 stash@{N}（而非 %h 短哈希），保证与 /files/stash-pop 的 ref 校验一致
-    stdout, _ = _run_git(str(base), "stash", "list", "--pretty=format:%gd|%s|%cr")
+    stdout, _, _ = _git_rc(str(base), "stash", "list", "--pretty=format:%gd|%s|%cr")
     entries = []
     for line in (stdout or "").splitlines():
         if not line.strip():
@@ -363,23 +303,23 @@ async def get_unpushed_count(
     if not base or not base.is_dir():
         raise HTTPException(status_code=400, detail="无法确定项目根目录")
 
-    _, err = _run_git(str(base), "rev-parse", "--is-inside-work-tree")
+    _, err, _ = _git_rc(str(base), "rev-parse", "--is-inside-work-tree")
     if err:
         raise HTTPException(status_code=400, detail="当前目录不是 Git 仓库")
 
     # 获取当前分支名
-    branch, _ = _run_git(str(base), "rev-parse", "--abbrev-ref", "HEAD")
+    branch, _, _ = _git_rc(str(base), "rev-parse", "--abbrev-ref", "HEAD")
     if not branch:
         return {"unpushed_count": 0}
 
     # 检查是否有 upstream
-    upstream, _ = _run_git(str(base), "rev-parse", "--abbrev-ref", "@{upstream}")
+    upstream, _, _ = _git_rc(str(base), "rev-parse", "--abbrev-ref", "@{upstream}")
     if not upstream:
         # 没有 upstream，视为有未推送提交（需要先 push -u）
         return {"unpushed_count": -1}
 
     # 比较本地与远程的提交数
-    count_out, _ = _run_git(str(base), "rev-list", "--count", "HEAD", "--not", upstream)
+    count_out, _, _ = _git_rc(str(base), "rev-list", "--count", "HEAD", "--not", upstream)
     try:
         count = int(count_out.strip()) if count_out.strip() else 0
     except ValueError:
@@ -442,19 +382,19 @@ async def get_file_diff(
     if not base or not base.is_dir():
         raise HTTPException(status_code=400, detail="无法确定项目根目录")
 
-    _, err = _run_git(str(base), "rev-parse", "--is-inside-work-tree")
+    _, err, _ = _git_rc(str(base), "rev-parse", "--is-inside-work-tree")
     if err:
         raise HTTPException(status_code=400, detail="当前目录不是 Git 仓库")
 
     # 1) 先确定该文件的 git 状态（未跟踪也视为新增）
-    status_out, _ = _run_git(str(base), "status", "--porcelain=v1", "--", file_path)
+    status_out, _, _ = _git_rc(str(base), "status", "--porcelain=v1", "--", file_path)
     effective_status = _parse_status(status_out)
 
     # 2) 取 diff：未暂存优先，空则回退暂存区
-    stdout, stderr = _run_git(str(base), "diff", "--", file_path)
+    stdout, stderr, _ = _git_rc(str(base), "diff", "--", file_path)
     used_staged = False
     if not stdout:
-        cached, _ = _run_git(str(base), "diff", "--cached", "--", file_path)
+        cached, _, _ = _git_rc(str(base), "diff", "--cached", "--", file_path)
         if cached:
             stdout = cached
             used_staged = True
@@ -551,7 +491,7 @@ def _resolve_repo_root(request: Request, project_id: str) -> Path:
             base = Path(project["directory_path"])
     if not base or not base.is_dir():
         raise HTTPException(status_code=400, detail="无法确定项目根目录")
-    _, err = _run_git(str(base), "rev-parse", "--is-inside-work-tree")
+    _, err, _ = _git_rc(str(base), "rev-parse", "--is-inside-work-tree")
     if err:
         raise HTTPException(status_code=400, detail="当前目录不是 Git 仓库")
     return base
@@ -603,18 +543,16 @@ def _rule_commit_message(stat_text: str, untracked: list) -> str:
 
 
 def _git_rc(repo: str, *args: str, timeout: int = 15) -> tuple[str, str, int]:
-    """执行 git 命令并返回 (stdout, stderr, returncode)，用 returncode 判成功（不被 stderr 回显误导）。"""
+    """执行 git 命令并返回 (stdout, stderr, returncode)，用 returncode 判成功（不被 stderr 回显误导）。
+
+    薄适配层：复用 services/git.run_git 共享实现，仅把底层异常转为 HTTP 错误。
+    """
     try:
-        r = subprocess.run(
-            ["git", "-C", repo] + list(args),
-            capture_output=True, text=True, timeout=timeout,
-            env={**os.environ, "LC_ALL": "C"},
-        )
-        return r.stdout.rstrip(), r.stderr.rstrip(), r.returncode
-    except FileNotFoundError:
-        raise HTTPException(status_code=500, detail="未找到 git 命令，请确认系统已安装 git")
-    except subprocess.TimeoutExpired:
-        raise HTTPException(status_code=504, detail=f"Git 命令超时（{timeout}s）")
+        return _git_run(repo, *args, timeout=timeout)
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    except TimeoutError as e:
+        raise HTTPException(status_code=504, detail=str(e))
 
 
 def _commit_at(repo: str, message: str) -> tuple[bool, str]:
@@ -656,9 +594,9 @@ async def generate_commit_message(request: Request, payload: dict = Body(...)):
     project_id = (payload or {}).get("project_id", "")
     base = _resolve_repo_root(request, project_id)
 
-    stat_out, _ = _run_git(str(base), "diff", "HEAD", "--stat")
-    diff_out, _ = _run_git(str(base), "diff", "HEAD")
-    status_out, _ = _run_git(str(base), "status", "--porcelain=v1")
+    stat_out, _, _ = _git_rc(str(base), "diff", "HEAD", "--stat")
+    diff_out, _, _ = _git_rc(str(base), "diff", "HEAD")
+    status_out, _, _ = _git_rc(str(base), "status", "--porcelain=v1")
     untracked = []
     for line in (status_out or "").splitlines():
         if len(line) >= 2 and line[0] == "?" and line[1] == "?":

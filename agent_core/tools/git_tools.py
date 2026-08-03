@@ -1,15 +1,21 @@
 """Git repository inspection tools."""
 from contextvars import ContextVar
 from pathlib import Path
-import os
 import shlex
-import subprocess
 from typing import Optional
 
 from langchain_core.tools import tool
 
+# 共享 git 执行原语（services/git.py）：白名单校验与格式化保留在本模块，
+# subprocess 执行与错误语义统一走共享层（P0-2 去重复）。
+from services.git import run_git as _git_run
+
 
 _workspace_ctx: ContextVar[Optional[Path]] = ContextVar("git_tools_workspace", default=None)
+
+# ponytail: PATH 白名单是安全边界（防止 git 间接执行环境里被篡改的可执行文件），
+# 通过 run_git 的 extra_env 透传，不能丢。
+_GIT_PATH = "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin"
 
 _ALLOWED_SUBCOMMANDS = {
     "add",
@@ -74,26 +80,16 @@ def _run_git(args: list[str], repo_path: str = "") -> str:
         return f"❌ Git 目录不存在: {repo_path or '.'}"
 
     try:
-        completed = subprocess.run(
-            ["git", *args],
-            cwd=cwd,
-            env={
-                **os.environ,
-                "PATH": "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin",
-                "GIT_PAGER": "cat",
-                "GIT_EXTERNAL_DIFF": "",
-            },
-            text=True,
-            capture_output=True,
-            timeout=_TIMEOUT_SECONDS,
-            check=False,
+        stdout, stderr, returncode = _git_run(
+            cwd, *args, timeout=_TIMEOUT_SECONDS,
+            extra_env={"PATH": _GIT_PATH},
         )
-    except FileNotFoundError:
+    except RuntimeError:
         return "❌ 系统未找到 git 命令"
-    except subprocess.TimeoutExpired:
+    except TimeoutError:
         return f"❌ git {' '.join(args)} 执行超过 {_TIMEOUT_SECONDS} 秒，已中止"
 
-    output = (completed.stdout or "") + (completed.stderr or "")
+    output = (stdout or "") + (stderr or "")
     output = output.rstrip() or "（无输出）"
     # ponytail: 截断过长 git 输出，保留头尾，避免撑爆上下文
     if len(output) > _MAX_OUTPUT_CHARS:
@@ -107,7 +103,7 @@ def _run_git(args: list[str], repo_path: str = "") -> str:
             f"--- 结尾 {tail_chars} 字符 ---\n"
             f"{output[-tail_chars:]}"
         )
-    prefix = "✅" if completed.returncode == 0 else f"❌ 退出码 {completed.returncode}"
+    prefix = "✅" if returncode == 0 else f"❌ 退出码 {returncode}"
     return f"{prefix} git {' '.join(args)}\n{output}"
 
 
@@ -205,20 +201,14 @@ def _is_safe_single_revision(value: str) -> bool:
 
 def _current_branch(path: str = "") -> str:
     cwd = _resolve_repo(path)
-    completed = subprocess.run(
-        ["git", "branch", "--show-current"],
-        cwd=cwd,
-        env={
-            **os.environ,
-            "PATH": "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin",
-            "GIT_PAGER": "cat",
-        },
-        text=True,
-        capture_output=True,
-        timeout=_TIMEOUT_SECONDS,
-        check=False,
-    )
-    return (completed.stdout or "").strip()
+    try:
+        stdout, _, _ = _git_run(
+            cwd, "branch", "--show-current", timeout=_TIMEOUT_SECONDS,
+            extra_env={"PATH": _GIT_PATH},
+        )
+    except (RuntimeError, TimeoutError):
+        return ""
+    return (stdout or "").strip()
 
 
 @tool

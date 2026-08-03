@@ -46,7 +46,8 @@ def _is_skill_inventory_query(message: str) -> bool:
 
 
 def _image_model_override(attachments: list[dict]) -> str:
-    from main import agent
+    from app_state import get_agent
+    agent = get_agent()
     if not attachments or not agent:
         return ""
     cfg = agent.config
@@ -108,9 +109,9 @@ def _resolve_user(request: Request) -> str:
     file_tools.set_workspace(_workspace_for_user(uid))
     shell_tools.set_workspace(_workspace_for_user(uid))
     browser_tools.set_workspace(_workspace_for_user(uid))
-    from main import agent
-    if agent:
-        agent.set_user(uid)
+    from app_state import get_agent
+    if get_agent():
+        get_agent().set_user(uid)
     # 设置数据库交互上下文（角色和用户信息，后续可从用户配置扩展）
     try:
         user = user_manager.get_user(uid) or {}
@@ -156,9 +157,9 @@ def _apply_session_workspace(uid: str, session_id: str, project_id: str = ""):
             pass
         # 同步当前工作目录给 Agent（用于动态修正系统提示里的工作区路径）
         try:
-            from main import agent
-            if agent:
-                agent.set_workspace(str(ws_path))
+            from app_state import get_agent
+            if get_agent():
+                get_agent().set_workspace(str(ws_path))
         except Exception:
             pass
     except Exception:
@@ -202,11 +203,10 @@ def _reload_mcp_in_thread(workspace: str):
         from tools.mcp_tools import build_effective_config, reload_mcp_sync
         configs = build_effective_config(workspace)
         new_tools = reload_mcp_sync(configs)
-        # 延迟导入 main，避免循环依赖
-        from main import app
-        agent = getattr(app.state, "agent", None)
-        base = getattr(app.state, "base_tools", None)
-        if agent is not None and base is not None:
+        from app_state import get_agent, get_base_tools
+        agent = get_agent()
+        base = get_base_tools()
+        if agent is not None and base:
             agent.set_tools(list(base) + new_tools)
             logger.info("[MCP] 会话级重载完成：%d 个 MCP 工具（workspace=%s）", len(new_tools), workspace or "全局")
     except Exception:
@@ -222,7 +222,8 @@ async def _async_reflect(uid: str, user_message: str, steps: list[dict], result:
     reflection 现在为结构化 dict {t, v}（向后兼容旧纯字符串读取）。
     """
     try:
-        from main import agent
+        from app_state import get_agent
+        agent = get_agent()
         if not agent:
             return
         reflection = await agent.reflect_on_task(user_message, steps, result, outcome=outcome)
@@ -247,7 +248,8 @@ async def _reflect_from_feedback(uid: str, session_id: str, rating: int, correct
     仅在 enable_self_evolution 开启时生效（自进化新能力）。
     """
     try:
-        from main import agent
+        from app_state import get_agent
+        agent = get_agent()
         if not agent or not agent.config.enable_self_evolution:
             return
         session = session_store.get_session(uid, session_id)

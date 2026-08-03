@@ -17,7 +17,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1] / "agent_core"
 sys.path.insert(0, str(ROOT))
 
-from api.routes.files import _parse_porcelain, _run_git
+from api.routes.files import _parse_porcelain, _git_rc
 
 
 def _init_repo(tmp_path: Path):
@@ -38,7 +38,7 @@ def _init_repo(tmp_path: Path):
 
 def test_run_git_preserves_leading_space(tmp_path):
     _init_repo(tmp_path)
-    stdout, _ = _run_git(str(tmp_path), "status", "--porcelain=v1")
+    stdout, _, _ = _git_rc(str(tmp_path), "status", "--porcelain=v1")
     # 核心断言：未暂存行（` M path`）行首空格必须保留，不得被 strip 吃掉
     assert stdout.startswith(" M desktop/a.txt"), repr(stdout)
 
@@ -46,7 +46,7 @@ def test_run_git_preserves_leading_space(tmp_path):
 def test_parse_porcelain_first_line_path_intact(tmp_path):
     """排序第一的变更文件：路径不得丢首字符，状态不得误判为已暂存。"""
     _init_repo(tmp_path)
-    stdout, _ = _run_git(str(tmp_path), "status", "--porcelain=v1")
+    stdout, _, _ = _git_rc(str(tmp_path), "status", "--porcelain=v1")
     changes = _parse_porcelain(stdout)
     first = changes[0]
     assert first["path"] == "desktop/a.txt", changes

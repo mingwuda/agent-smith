@@ -31,18 +31,20 @@ _active_tool_progress_ws: set[WebSocket] = set()
 agent: Optional[DesktopAgent] = None
 
 
-def init_agent():
+def init_agent(caller: str = "route.monitoring", force: bool = False):
     """初始化 Agent（委托 main 模块，同步本地引用）"""
     global agent
     # 防御：本地引用已就绪时不重复初始化。否则每次调用都会触发 main.init_agent()
     # 里「停止旧微信 Bot → 重启」的逻辑，打断正在轮询的 bot（2026-08-03 事故：运行时
     # 重复 init_agent 停掉了 bot，补发任务被取消，最终回复丢失）。
-    if agent is not None:
+    # force=True 为显式重启路径（保存设置/删 Provider），总是重建。
+    if agent is not None and not force:
         return
-    from main import init_agent as _main_init
-    _main_init()
-    from main import agent as _main_agent
-    agent = _main_agent
+    from app_state import get_init_agent, get_agent
+    _main_init = get_init_agent()
+    if _main_init is not None:
+        _main_init(caller=caller, force=force)
+    agent = get_agent()
 
 
 # ---------- API 模型 ----------
@@ -177,7 +179,7 @@ def health():
     
     if not agent:
         try:
-            init_agent()
+            init_agent(caller="route.monitoring.health")
         except Exception as e:
             error_msg = str(e)
     
@@ -191,8 +193,8 @@ def health():
     # 守护进程控制面依赖这两个字段判断健康（与 agent_core/guardian_daemon.py 对齐）
     result["agent_ready"] = initialized
     try:
-        from main import _app_base_dir
-        result["boot_ok"] = (_app_base_dir() / ".boot_ok").exists()
+        from app_state import get_app_base_dir
+        result["boot_ok"] = (get_app_base_dir() / ".boot_ok").exists()
     except Exception:
         result["boot_ok"] = False
     if cfg:

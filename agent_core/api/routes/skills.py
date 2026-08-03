@@ -105,11 +105,11 @@ def _list_skill_files(skill_root: Path) -> list[SkillFileEntry]:
 @router.get("/skills", response_model=list[SkillInfo])
 def list_skills():
     """列出所有已加载的技能"""
-    from main import _app_base_dir
+    from app_state import get_app_base_dir
     registry = get_registry()
     # 如果尚未加载技能，尝试加载
     if not registry.list_all():
-        app_base = _app_base_dir()
+        app_base = get_app_base_dir()
         registry.load_from([
             Path(AgentConfig.load().skills_dir),
             app_base / "skills",
@@ -133,10 +133,10 @@ def list_skills():
 @router.post("/skills/reload", response_model=ReloadResponse)
 def reload_skills():
     """热加载所有技能"""
-    from main import agent
-    if not agent:
+    from app_state import get_agent
+    if not get_agent():
         raise HTTPException(503, "Agent 尚未初始化")
-    count = agent.reload_skills()
+    count = get_agent().reload_skills()
     return ReloadResponse(message=f"已重新加载 {count} 个技能", count=count)
 
 

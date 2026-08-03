@@ -73,10 +73,11 @@ class UpdateUserRoleRequest(BaseModel):
 @router.get("/")
 def serve_ui():
     """提供桌面 UI（每次从磁盘读取 index.html，便于开发时热更新，无需重启后端）"""
-    from main import UI_DIR, _html_content
-    ui_index = UI_DIR / "index.html"
-    content = _html_content
-    if ui_index.exists():
+    from app_state import get_ui_dir, get_html_content
+    ui_dir = get_ui_dir()
+    ui_index = (ui_dir / "index.html") if ui_dir else None
+    content = get_html_content()
+    if ui_index is not None and ui_index.exists():
         try:
             content = ui_index.read_text(encoding="utf-8")
         except OSError:
@@ -107,8 +108,8 @@ def delete_settings_provider(provider_id: str, request: Request):
         from api.routes.monitoring import init_agent as _monitoring_init
         from api.routes.agent import init_agent as _agent_init
         try:
-            _monitoring_init()
-            _agent_init()
+            _monitoring_init(caller="system.delete_provider", force=True)
+            _agent_init(caller="system.delete_provider", force=True)
         except Exception:
             logger.exception("删除 Provider 后 Agent 重新初始化失败")
         return {"status": "ok", "message": f"已删除 Provider '{provider_id}'"}
@@ -207,8 +208,8 @@ def save_settings(req: SettingsRequest, request: Request):
     from api.routes.monitoring import init_agent as _monitoring_init
     from api.routes.agent import init_agent as _agent_init
     try:
-        _monitoring_init()
-        _agent_init()
+        _monitoring_init(caller="system.save_settings", force=True)
+        _agent_init(caller="system.save_settings", force=True)
         return {"status": "ok", "message": "设置已保存，Agent 已重新初始化"}
     except Exception as e:
         logger.exception("保存设置后 Agent 重新初始化失败")
@@ -258,9 +259,9 @@ def delete_user(user_id: str):
 def get_my_user(request: Request):
     """获取当前登录用户的信息"""
     uid = _get_current_user(request)
-    from main import agent
-    if agent:
-        agent.set_user(uid)
+    from app_state import get_agent
+    if get_agent():
+        get_agent().set_user(uid)
     user = user_manager.get_user(uid)
     if not user:
         # 首次登录时自动创建用户

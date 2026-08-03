@@ -8,6 +8,7 @@ from fastapi.responses import HTMLResponse
 
 import session_store
 from wechat_bot import WeChatBot
+from app_state import get_or_create_wechat_bot
 from api.deps import _get_current_user
 from logger import get_logger
 
@@ -20,9 +21,7 @@ router = APIRouter(tags=["wechat"])
 async def wechat_status(request: Request):
     """获取当前用户的微信 Bot 状态"""
     uid = _get_current_user(request)
-    from main import _get_wechat_bot
-    from main import _get_wechat_bot
-    bot = _get_wechat_bot(uid)
+    bot = get_or_create_wechat_bot(uid)
     return {
         "user_id": uid,
         "logged_in": bot.is_logged_in,
@@ -34,8 +33,7 @@ async def wechat_status(request: Request):
 async def wechat_qrcode(request: Request):
     """获取当前用户的微信登录二维码"""
     uid = _get_current_user(request)
-    from main import _get_wechat_bot
-    bot = _get_wechat_bot(uid)
+    bot = get_or_create_wechat_bot(uid)
     data = await bot.get_qrcode()
     qrcode_str = data.get("qrcode", "")
     img_url = data.pop("qrcode_img_content", None)
@@ -106,8 +104,7 @@ async def wechat_qrcode(request: Request):
 async def wechat_qrcode_status(qrcode: str, request: Request):
     """轮询扫码状态"""
     uid = _get_current_user(request)
-    from main import _get_wechat_bot
-    bot = _get_wechat_bot(uid)
+    bot = get_or_create_wechat_bot(uid)
     return await bot.poll_qrcode_status(qrcode)
 
 
@@ -115,8 +112,7 @@ async def wechat_qrcode_status(qrcode: str, request: Request):
 async def wechat_start(request: Request):
     """启动当前用户的微信 Bot 轮询"""
     uid = _get_current_user(request)
-    from main import _get_wechat_bot
-    bot = _get_wechat_bot(uid)
+    bot = get_or_create_wechat_bot(uid)
     if not bot.is_logged_in:
         raise HTTPException(400, "尚未登录，请先扫码")
     await bot.start()
@@ -127,8 +123,7 @@ async def wechat_start(request: Request):
 async def wechat_stop(request: Request):
     """停止当前用户的微信 Bot 轮询"""
     uid = _get_current_user(request)
-    from main import _get_wechat_bot
-    bot = _get_wechat_bot(uid)
+    bot = get_or_create_wechat_bot(uid)
     await bot.stop()
     return {"user_id": uid, "status": "stopped"}
 

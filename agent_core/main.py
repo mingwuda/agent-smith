@@ -2,29 +2,25 @@
 
 Slim entry point: app 创建、middleware、startup/shutdown、agent 全局实例。
 所有路由已拆分到 api/routes/ 各模块，使用 app.include_router() 注册。
+全局状态（agent / wechat_bots / UI 路径 / 配置）统一收进 app_state 注册表，
+路由与 services 只消费 app_state，不再反向 import 本模块（见 app_state.py）。
 """
 import sys
 
-# ── 双实例根治：入口处对齐 sys.modules["main"] ──────────────────────────
-# python main.py 直跑时，本模块以 "__main__" 身份执行，sys.modules 里没有 "main"。
-# 代码库中有大量延迟导入 `from main import app / agent / _get_wechat_bot`
-# （services/agent_service.py、api/routes/*.py、tools/mcp_tools.py 等），它们会在
-# 请求时才执行——若此时 sys.modules["main"] 不存在，Python 会把 main.py 重新执行
-# 一遍作为独立的 "main" 模块，产生第二个 app / 第二个 agent（日志可见 __main__
-# 与 main 各打印一次 "✅ Agent 初始化完成"）。两个实例的 app.state / agent 引用
-# 彼此不一致，曾导致微信 Bot 与 Web 端拿到不同 agent、跨用户上下文串扰。
-# 这里在**任何业务 import 之前**把 "main" 指向自身，让所有 `from main import xxx`
-# 都拿到同一模块实例。必须放在最顶部：main.py 底部还有顶层
-# `from api.routes.agent import router` 等导入，若对齐晚了这些模块里若有顶层
-# `from main import` 仍可能触发二次执行。
+# ── 双实例防御：入口处对齐 sys.modules["main"] ─────────────────────────
+# 历史代码/测试仍可能 `import main`（如 tests/test_stream_save_no_drop.py），
+# 若 sys.modules["main"] 不存在，Python 会把 main.py 作为独立 "main" 模块重新
+# 执行一遍，产生第二个 app（日志可见 "✅ Agent 初始化完成" 打印两次）。
+# 路由层已改为消费 app_state 不再 `from main import`，此 hack 仅作防御保留。
 if __name__ == "__main__":
     sys.modules["main"] = sys.modules["__main__"]
 elif "main" not in sys.modules:
     # 被以 agent_core.main 方式导入（测试 `from agent_core.main import app` 等）时，
-    # 同样注册 "main" 别名指向自身，保证 agent_core 内部 `from main import` 一致。
+    # 同样注册 "main" 别名指向自身，保证 `import main` 与 agent_core.main 一致。
     sys.modules["main"] = sys.modules[__name__]
 
 import asyncio
+import functools
 import json
 import os
 import secrets
@@ -51,6 +47,8 @@ _PROJ_ROOT = _HERE_DIR.parent                     # 项目根（如 /opt/desktop
 for _p in (str(_HERE_DIR), str(_PROJ_ROOT)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
+
+import app_state  # 全局状态注册表（agent / wechat_bots / 路径），见模块 docstring
 
 from logger import setup_logging, get_logger, set_log_context, clear_log_context
 
@@ -103,7 +101,6 @@ import user_manager
 import logging
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
-from wechat_bot import WeChatBot
 
 
 # 打包环境下让 Playwright 使用包内的 Chromium 二进制
@@ -117,18 +114,14 @@ if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
     os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(_browsers_path))
 
 
-# ---------- 全局变量 ----------
-
-agent: Optional[DesktopAgent] = None
+# ---------- 全局变量（agent / wechat_bots 等状态已收进 app_state，见 app_state.py） ----------
 
 
 # ---------- 工具函数 ----------
 
 def _app_base_dir() -> Path:
-    """Return project root in source mode and PyInstaller resource root when frozen."""
-    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
-        return Path(sys._MEIPASS)
-    return Path(__file__).parent.parent
+    """项目根（源码模式）或 PyInstaller 资源根（打包模式），委托 app_state 单源实现。"""
+    return app_state.get_app_base_dir()
 
 
 # ---------- FastAPI ----------
@@ -138,12 +131,12 @@ async def lifespan(app):
     setup_logging()
     _init_default_users()
     # 保存主事件循环引用，供 sync 线程调度 async 任务
-    app.state.main_loop = asyncio.get_running_loop()
+    app_state.set_main_loop(asyncio.get_running_loop())
     # 启动时直接初始化 Agent，由系统守护层包住（启动自愈：
     # 失败则按 LIFO 回退最近进化产物到隔离区并重试，最终失败服务仍存活）
     try:
         guardian.self_heal_on_boot(
-            init_agent,
+            functools.partial(init_agent, caller="boot"),
             generated_dir=_app_base_dir() / "skills" / ".generated",
             manifest_path=_app_base_dir() / "skills" / ".generated" / "manifest.json",
             quarantine_dir=_app_base_dir() / "skills" / ".quarantine",
@@ -161,7 +154,7 @@ async def lifespan(app):
 
     # 后台加载 MCP 工具（不阻塞启动）
     try:
-        config = getattr(app.state, "agent_config", None)
+        config = app_state.get_agent_config()
         if config and config.mcp_servers:
             asyncio.create_task(_load_mcp_tools_background(config.mcp_servers))
             logger.info("[MCP] 已启动后台加载任务")
@@ -218,6 +211,9 @@ if UI_DIR.exists():
         logger.info("📁 桌面 UI: %s", UI_DIR / "index.html")
     # 挂载静态文件目录，使 index.html 中的 /static/libs/、/static/styles/、/static/js/ 可访问
     app.mount("/static", StaticFiles(directory=str(UI_DIR), html=True), name="static")
+# 写入 app_state：routes/system.py 的 serve_ui 从这里读取，避免反向 import main
+app_state.set_ui_dir(UI_DIR)
+app_state.set_html_content(_html_content)
 
 # 给静态文件添加 no-cache 头，避免浏览器缓存旧版本 JS/CSS
 @app.middleware("http")
@@ -252,9 +248,9 @@ async def _load_mcp_tools_background(server_configs: list[dict]):
             return
         # 更新 agent 的工具列表，若 agent 未就绪则最多重试 3 次
         for attempt in range(3):
-            agent_obj = getattr(app.state, "agent", None)
+            agent_obj = app_state.get_agent()
             if agent_obj is not None:
-                current_tools = list(getattr(app.state, "base_tools", []))
+                current_tools = list(app_state.get_base_tools())
                 current_tools.extend(mcp_tools)
                 agent_obj.set_tools(current_tools)
                 logger.info("  MCP 工具: 已加载 %d 个", len(mcp_tools))
@@ -268,12 +264,23 @@ async def _load_mcp_tools_background(server_configs: list[dict]):
 
 # ---------- Agent 生命周期 ----------
 
-def init_agent():
-    global agent
-    
+def init_agent(caller: str = "unknown", force: bool = False):
+    """初始化 Agent（幂等）。
+
+    - caller: 记录触发来源（如 /health 探测、/run 请求、system.save_settings），
+      便于排查"为什么又初始化了一次"（2026-08-03 事故：运行时重复 init_agent
+      无条件停止所有微信 bot，导致 fe65f591 任务被取消、最终回复丢失）。
+    - force: 显式重启路径（保存设置/删 Provider）传 True，跳过幂等检查，
+      走完整重建（含停止旧微信 Bot 再拉起）；其余隐式触发保持幂等。
+    """
+    existing = app_state.get_agent()
+    if existing is not None and not force:
+        logger.info("[init_agent] 跳过重复初始化（调用方=%s）：Agent 已存在，不停止微信 Bot", caller)
+        return existing
+
     config = AgentConfig.load()
-    # 保存配置到 app.state，供后台 MCP 加载等异步任务使用
-    app.state.agent_config = config
+    # 保存配置到 app_state，供后台 MCP 加载等异步任务使用
+    app_state.set_agent_config(config)
     
     # 初始化工作区
     file_tools.set_workspace(Path(config.workspace))
@@ -314,11 +321,11 @@ def init_agent():
     skills_count = get_registry().load_from(skills_dirs)
 
     # 初始化 Agent
-    agent = DesktopAgent(config)
-    agent.set_tools(all_tools)
-    app.state.agent = agent
+    agent_obj = DesktopAgent(config)
+    agent_obj.set_tools(all_tools)
+    app_state.set_agent(agent_obj)
     # 捕获基准工具集（不含 MCP），供会话级 MCP 重载时作为 set_tools 的基准
-    app.state.base_tools = list(all_tools)
+    app_state.set_base_tools(list(all_tools))
     
     logger.info("✅ Agent 初始化完成")
     logger.info("  模型: %s", config.model)
@@ -327,9 +334,9 @@ def init_agent():
     logger.info("  已加载技能: %d 个", skills_count)
 
     # 初始化微信 Bot（按用户懒加载 + 启动时主动拉起所有已登录用户的 Bot）
-    old_bots = getattr(app.state, 'wechat_bots', None)
-    if old_bots and getattr(app.state, 'main_loop', None):
-        loop = app.state.main_loop
+    old_bots = app_state.get_wechat_bots()
+    if old_bots and app_state.get_main_loop():
+        loop = app_state.get_main_loop()
         for uid, bot in list(old_bots.items()):
             if bot.is_running:
                 try:
@@ -340,7 +347,7 @@ def init_agent():
                     logger.warning("[微信Bot] 停止用户 %s 的 Bot 超时", uid)
                 except Exception as e:
                     logger.warning("[微信Bot] 停止用户 %s 的 Bot 时出错: %s", uid, e)
-    app.state.wechat_bots: dict[str, WeChatBot] = {}
+    app_state.set_wechat_bots({})
     _start_all_wechat_bots()
 
 
@@ -399,11 +406,11 @@ def _get_all_users_with_bot() -> list[str]:
 
 def _start_all_wechat_bots():
     """为所有有 token 的用户自动启动微信 Bot 轮询。"""
-    loop = getattr(app.state, "main_loop", None)
+    loop = app_state.get_main_loop()
     started = 0
     for uid in _get_all_users_with_bot():
         try:
-            bot = _get_wechat_bot(uid)
+            bot = app_state.get_or_create_wechat_bot(uid)
             if bot.is_logged_in and not bot.is_running:
                 if loop and loop.is_running():
                     asyncio.run_coroutine_threadsafe(bot.start(), loop)
@@ -415,23 +422,9 @@ def _start_all_wechat_bots():
         logger.info("[微信Bot] 共自动启动 %d 个微信 Bot", started)
 
 
-def _get_wechat_bot(uid: str) -> WeChatBot:
-    """获取或创建当前用户的微信 Bot（懒加载）。"""
-    bots: dict[str, WeChatBot] = app.state.wechat_bots
-    bot = bots.get(uid)
-    if bot is None:
-        # 不传全局 agent：WeChatBot 内部懒创建该用户专属的独立 agent 实例，
-        # 避免多微信用户 / Web 端共用全局 agent 导致跨用户上下文串扰（数据泄露）。
-        # tools 显式传基准工具集（本模块内直接引用 app/agent，无双实例导入问题）。
-        _tools = getattr(app.state, "base_tools", None) or (agent.tools if agent else [])
-        bot = WeChatBot(user_id=uid, tools=_tools)
-        bots[uid] = bot
-        if bot.is_logged_in:
-            try:
-                asyncio.create_task(bot.start())
-            except Exception:
-                pass
-    return bot
+def _get_wechat_bot(uid: str):
+    """获取或创建当前用户的微信 Bot（懒加载，委托 app_state）。"""
+    return app_state.get_or_create_wechat_bot(uid)
 
 
 # ---------- 默认用户初始化 ----------
@@ -487,6 +480,10 @@ def _init_default_users():
 
 
 # ---------- 注册路由模块 ----------
+
+# 将 init_agent 注册到 app_state：路由层的兜底重试（routes/agent.py、monitoring.py）
+# 通过 app_state.get_init_agent() 调用，避免反向 import main 造成循环依赖。
+app_state.set_init_agent(init_agent)
 
 from api.auth import router as auth_router
 from api.routes.agent import router as agent_router

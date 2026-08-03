@@ -555,8 +555,8 @@ def build_effective_config(workspace: str) -> List[Dict[str, Any]]:
     # 1. 全局配置（来自 ~/.desktop_agent/config.json 的 mcp_servers）
     global_servers: List[Dict[str, Any]] = []
     try:
-        from main import app  # 延迟导入，避免循环依赖
-        cfg = getattr(app.state, "agent_config", None)
+        from app_state import get_agent_config
+        cfg = get_agent_config()
         if cfg is not None:
             global_servers = [dict(s) for s in (getattr(cfg, "mcp_servers", []) or [])]
     except Exception:

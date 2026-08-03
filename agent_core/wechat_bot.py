@@ -639,11 +639,13 @@ class WeChatBot:
         try:
             await self._throttle_send()
             await self._rate_limit_send()
-            resp = await self.send_message(to_user_id, context_token, text, max_retries=1, retry_delay=2.0)
+            # max_retries=0：失败不立即重试（2026-08-03 事故后统一策略——频控窗口内
+            # 重试只会刷新冷却窗口；step 是过程消息，失败跳过即可，最终回复有补发兜底）。
+            resp = await self.send_message(to_user_id, context_token, text, max_retries=0)
             if resp.get("ret", -1) == 0:
                 self._step_sent_count += 1
             else:
-                logger.warning("[微信Bot:%s] step 消息发送失败（重试后仍失败）: %s", self.user_id, text[:60])
+                logger.warning("[微信Bot:%s] step 消息发送失败（跳过）: %s", self.user_id, text[:60])
         except Exception as e:
             logger.warning("[微信Bot:%s] step 消息发送异常: %s", self.user_id, e)
 
@@ -869,12 +871,26 @@ class WeChatBot:
         logger.info("[微信Bot:%s] 最终回复已入补发队列（%d 条待补发）", self.user_id, len(self._retry_queue))
 
     async def _retry_loop(self) -> None:
-        """后台补发循环：对到期消息重试，指数退避（15s/30s/60s/120s/180s），
-        失败超过上限则放弃并记日志。单条消息总窗口约 6 分钟，覆盖微信频控冷却。
+        """后台补发循环：等频控冷却结束后再发，失败不立即重试。
+
+        策略（ponytail，2026-08-03 线上事故教训）：
+        - 频控冷却中（_rate_limited_until > now）整队列挂起、绝不发送：
+          冷却中强行发送只会再吃 ret=-2，把冷却窗口又往后推 60s（send_message 失败时
+          会刷新 _rate_limited_until），形成"越试越冷却"的恶性循环——之前 5 次补发
+          全失败、频控持续 11 分钟+ 就是它造成的。
+        - 每次补发只发一次（max_retries=0）：失败说明仍被频控/异常，等下一轮，
+          不在补发路径里做立即重试。
+        - 失败后 next 取 max(退避, 冷却结束)：确保下次尝试一定在冷却窗口之后。
+        - BACKOFF 加长到 7 轮（30s→300s，总退避约 21 分钟 + 每轮叠加冷却）：
+          实测 prepare failed 可持续 10 分钟+，旧的 5 轮 405s 总窗口不够。
         """
-        BACKOFF = (15, 30, 60, 120, 180)
+        BACKOFF = (30, 60, 120, 240, 300, 300, 300)
         while self._retry_queue:
             now = time.time()
+            # 冷却中：整队列挂起，睡到冷却结束再检查（不发送，避免刷新冷却窗口）
+            if now < self._rate_limited_until:
+                await asyncio.sleep(min(self._rate_limited_until - now, 5.0))
+                continue
             still: list[dict] = []
             for item in list(self._retry_queue):
                 if item["next"] > now:
@@ -887,7 +903,7 @@ class WeChatBot:
                 try:
                     await self._throttle_send()
                     resp = await self.send_message(
-                        item["to"], item["token"], item["text"], max_retries=1, retry_delay=2.0,
+                        item["to"], item["token"], item["text"], max_retries=0,
                     )
                 except Exception as e:
                     logger.warning("[微信Bot:%s] 补发异常: %s", self.user_id, e)
@@ -896,7 +912,8 @@ class WeChatBot:
                     logger.info("[微信Bot:%s] 补发成功: message_id=%s", self.user_id, resp.get("message_id", ""))
                 else:
                     item["attempts"] += 1
-                    item["next"] = now + BACKOFF[item["attempts"] - 1]
+                    # 至少等到冷却结束再试（send_message 失败已把 _rate_limited_until 推到 now+60）
+                    item["next"] = max(now + BACKOFF[item["attempts"] - 1], self._rate_limited_until)
                     still.append(item)
             self._retry_queue = deque(still)
             self._persist_retry_queue()
@@ -1656,17 +1673,18 @@ class WeChatBot:
                         logger.warning("[微信Bot:%s] 发送截图失败: %s", self.user_id, e)
 
             # 发送剩余的文本（去掉图片引用后的纯净文本）
-            # 最终回复发送前节流 + 指数退避重试（应对微信 prepare failed 频控，避免最终回复丢失）。
-            # 立即重试 3 次（3s/6s/12s ≈ 21s），仍失败则入补发队列由后台任务继续重试（见 _schedule_retry），
-            # 不再"重试完就丢弃"。
+            # 最终回复：不立即重试（max_retries=0），失败直接入补发队列。
+            # 理由（2026-08-03 事故）：立即重试 3 次（3s/6s/12s）在频控窗口内等于
+            # 持续踩频控，每次失败又把 _rate_limited_until 往后推 60s，反而拉长冷却；
+            # 正确做法是失败后交给 _retry_loop——它会等冷却结束再发，不刷新冷却窗口。
             clean_text = re.sub(r'\n{3,}', '\n\n', text_reply).strip()
             if clean_text:
                 await self._throttle_send()
-                send_resp = await self.send_message(from_user, context_token, clean_text, max_retries=3, retry_delay=3.0)
+                send_resp = await self.send_message(from_user, context_token, clean_text, max_retries=0)
                 send_ret = send_resp.get("ret", -1)
                 send_msg_id = send_resp.get("message_id", "")
                 if send_ret != 0:
-                    logger.warning("[微信Bot:%s] 最终回复发送失败（重试后仍失败），转入后台补发: resp=%s",
+                    logger.warning("[微信Bot:%s] 最终回复发送失败，转入后台补发: resp=%s",
                                    self.user_id, json.dumps(send_resp, ensure_ascii=False)[:300])
                     self._schedule_retry(from_user, context_token, clean_text)
                 else:
