@@ -39,9 +39,10 @@ from agent_helpers import (
     _drop_dangling_tool_call_messages, _dump_context_profile,
     _extract_steps_from_messages, _extract_usage_tokens,
     _human_content, _is_recursion_limit_error, _extract_reasoning, _message_text,
-    _normalize_messages, _recursion_limit_message, _retry_notifications_ctx,
+    _model_supports_vision, _normalize_messages, _recursion_limit_message, _retry_notifications_ctx,
     _sse, _strip_image_content_from_messages, _strip_think_tags, _synthesize_guard_summary,
-    _tool_signature, _truncate,
+    _synthetic_ocr_sse_steps,
+    _tool_signature, _truncate, _ensure_no_image_for_non_vision,
 )
 from loop_guard import _detect_tool_loop  # 原版 agent.py:169 的文件中间导入,拆分时需显式补回
 from tools.shell_tools import drain_shell_output  # run_shell 实时输出（心跳循环 drain 队列）
@@ -184,9 +185,12 @@ class AgentRunMixin:
         await self._repair_checkpoint_tool_history(config, graph)
         await self._strip_checkpoint_images(config, graph)
         if thread_key not in self._hydrated_threads:
-            input_messages = compact_history_messages(session_messages_to_langchain(history or []), self.config)
-        current_content = _human_content(message, attachments)
+            input_messages = compact_history_messages(session_messages_to_langchain(history or [], ocr_fallback=not _model_supports_vision(self.config)), self.config)
+        ocr_sink: list = []
+        current_content = _human_content(message, attachments, ocr_fallback=not _model_supports_vision(self.config), ocr_sink=ocr_sink)
         input_messages.append(HumanMessage(content=current_content))
+        # 兜底：模型不支持视觉时，清除任何残留 image_url（防御未来新路径漏图）
+        input_messages = _ensure_no_image_for_non_vision(input_messages, self.config)
 
         # ── 按场景注入专项指导（仅在命中时插入 SystemMessage，不污染基础 prompt）──
         scene = _detect_scene(message, history)
@@ -223,6 +227,10 @@ class AgentRunMixin:
                     current_start = idx + 1
                     break
             steps = _extract_steps_from_messages(messages[current_start:])
+            # 方案A：本轮图片被 OCR 降级（模型不支持视觉）时，把降级动作补成 synthetic
+            # 工具步骤，让非流式 /run 的返回 steps 也能体现"识别图片"这一工作过程。
+            if ocr_sink:
+                steps = _synthetic_ocr_sse_steps(ocr_sink) + steps
             for step in steps:
                 if step.get("type") == "tool_result":
                     self._record_tool_call(step.get("tool") or "unknown", thread_id=tid)
@@ -393,9 +401,12 @@ class AgentRunMixin:
         thread_key = self._thread_key(tid)
         await self._repair_checkpoint_tool_history(run_config, graph)
         await self._strip_checkpoint_images(run_config, graph)
+        ocr_sink: list = []
         if thread_key not in self._hydrated_threads:
-            input_messages = compact_history_messages(session_messages_to_langchain(history or []), self.config)
-        input_messages.append(HumanMessage(content=_human_content(message, attachments)))
+            input_messages = compact_history_messages(session_messages_to_langchain(history or [], ocr_fallback=not _model_supports_vision(self.config)), self.config)
+        input_messages.append(HumanMessage(content=_human_content(message, attachments, ocr_fallback=not _model_supports_vision(self.config), ocr_sink=ocr_sink)))
+        # 兜底：模型不支持视觉时，清除任何残留 image_url（防御未来新路径漏图）
+        input_messages = _ensure_no_image_for_non_vision(input_messages, self.config)
 
         # ── 按场景注入专项指导（仅在命中时插入 SystemMessage，不污染基础 prompt）──
         scene = _detect_scene(message, history)
@@ -428,7 +439,9 @@ class AgentRunMixin:
         thinking_buffer = ""        # 累积推理文本（工具调用前的内容）
         reasoning_buffer = ""       # 累积推理模型的思考 token（reasoning_content），不进入最终答案
         final_buffer = ""           # 最终回复缓存
-        step_count = 0
+        # 方案A：OCR 降级 synthetic 卡片占用 step 1..N，真实工具的 step 从 N+1 开始，
+        # 保证 step 编号不重复（前端 _toolTimers 以 step 为 key）。
+        step_count = len(ocr_sink)
         in_tool_call = False        # 当前是否正在产生工具调用
         usage_recorded = False
         running_tools: dict[str, dict] = {}   # run_id -> {name, step, started_at}
@@ -464,6 +477,12 @@ class AgentRunMixin:
                 len(message),
             )
             await self._compact_checkpoint_if_needed(run_config)
+            # 方案A：OCR 降级动作以 synthetic 工具卡片先行发出。纯文本模型收到图片时，
+            # 图片在进入 LLM 前已被转成 OCR 文本，模型不会真的调用 ocr_image 工具，
+            # 历史里就看不到"识别图片"步骤；这里补发 tool_start/tool_result 事件对，
+            # 前端实时流与历史回放（collected_steps）都能渲染「调用工具: ocr_image」卡片。
+            for _syn_ev in _synthetic_ocr_sse_steps(ocr_sink):
+                yield _sse(_syn_ev)
             # 从配置读取超时，默认 90 秒
             llm_timeout = getattr(self.config, "llm_timeout_seconds", 90)
             # fix #1: 单次 LLM 调用的硬墙钟上限（秒）。上游挂起（连接开着但无首 token/无结束）时，

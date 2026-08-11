@@ -33,7 +33,7 @@ from memory.local_memory import set_current_user
 from monitoring.usage_tracker import get_tracker, UsageTracker
 from network_resolver import configure_host_resolution
 from skills.registry import get_registry, SkillRegistry
-__all__ = ['logger', '_extract_tool_name', '_extract_tool_args', '_truncate', '_sse', '_tool_signature', '_tool_call_label', '_loop_guard_message', '_SCENE_PROMPTS', '_detect_scene', '_get_nested', '_extract_usage_tokens', '_message_text', '_normalize_messages', '_dump_context_profile', '_is_recursion_limit_error', '_recursion_limit_message', '_synthesize_guard_summary', '_connection_diagnostic', '_human_content', '_SCREENSHOT_URL_RE', '_strip_screenshot_urls_from_text', '_strip_image_content_from_message', '_strip_image_content_from_messages', '_tool_call_ids', '_tool_message_id', '_drop_dangling_tool_call_messages', '_recent_round_user_indexes', 'session_messages_to_langchain', 'compact_history_messages', '_extract_steps_from_messages', '_truncate_args', '_on_llm_idle_retry', '_astream_with_idle_timeout', 'RetryableLLM']
+__all__ = ['logger', '_extract_tool_name', '_extract_tool_args', '_truncate', '_sse', '_tool_signature', '_tool_call_label', '_loop_guard_message', '_SCENE_PROMPTS', '_detect_scene', '_get_nested', '_extract_usage_tokens', '_message_text', '_normalize_messages', '_dump_context_profile', '_is_recursion_limit_error', '_recursion_limit_message', '_synthesize_guard_summary', '_connection_diagnostic', '_human_content', '_synthetic_ocr_sse_steps', '_SCREENSHOT_URL_RE', '_strip_screenshot_urls_from_text', '_strip_image_content_from_message', '_strip_image_content_from_messages', '_tool_call_ids', '_tool_message_id', '_drop_dangling_tool_call_messages', '_recent_round_user_indexes', 'session_messages_to_langchain', 'compact_history_messages', '_extract_steps_from_messages', '_truncate_args', '_on_llm_idle_retry', '_astream_with_idle_timeout', 'RetryableLLM']
 
 
 """桌面 AI 智能体核心"""
@@ -475,7 +475,7 @@ def _connection_diagnostic(exc: Exception, config: AgentConfig) -> str:
     return "\n".join(details)
 
 
-def _human_content(message: str, attachments: Optional[list[dict]] = None):
+def _human_content(message: str, attachments: Optional[list[dict]] = None, ocr_fallback: bool = False, ocr_sink: Optional[list] = None):
     attachments = attachments or []
     valid_images = [
         item for item in attachments
@@ -486,11 +486,105 @@ def _human_content(message: str, attachments: Optional[list[dict]] = None):
     if not valid_images:
         return message
 
+    # OCR 降级：模型不支持图片输入时，用 OCR 工具提取图片文字，以纯文本代替 image_url。
+    # ocr_sink 非 None 时，把每次降级动作记录进列表，供上层注入 synthetic 工具卡片
+    # （方案A：纯文本模型收图时模型不会真的调用 ocr_image 工具，历史里就看不到
+    # "识别图片"这个步骤；把降级动作补成工具卡片后，实时流与历史回放都能显示）。
+    if ocr_fallback:
+        from tools.ocr_tools import ocr_data_url
+        parts = [message] if message else []
+        for idx, item in enumerate(valid_images, 1):
+            ocr_text = ocr_data_url(item["data_url"])
+            parts.append(f"[图片 {idx} OCR 识别结果]\n{ocr_text}")
+            if ocr_sink is not None:
+                ocr_sink.append({
+                    "tool": "ocr_image",
+                    "args": {
+                        "index": idx,
+                        "mime": str(item.get("mime_type") or ""),
+                        "reason": "模型不支持图片输入，自动 OCR 降级",
+                    },
+                    "result": ocr_text,
+                })
+        return "\n\n".join(parts)
+
     content = []
     for item in valid_images:
         content.append({"type": "image_url", "image_url": {"url": item["data_url"]}})
     content.append({"type": "text", "text": message or "请分析这些图片。"})
     return content
+
+
+def _synthetic_ocr_sse_steps(ocr_sink: list) -> list:
+    """把 OCR 降级记录转成 synthetic SSE 事件对（tool_start / tool_result）。
+
+    字段与真实工具事件保持一致（step/ts/duration_ms/result/error），前端
+    handleStreamEvent 与历史回放（collected_steps）无需改动即可渲染
+    「调用工具: ocr_image」卡片。
+    """
+    steps = []
+    for i, item in enumerate(ocr_sink, 1):
+        steps.append({
+            "type": "tool_start",
+            "tool": "ocr_image",
+            "args": item.get("args") or {},
+            "step": i,
+            "ts": int(time.time() * 1000),
+        })
+        steps.append({
+            "type": "tool_result",
+            "tool": "ocr_image",
+            "step": i,
+            "result": _truncate(str(item.get("result") or ""), 400),
+            "error": False,
+            "duration_ms": 0,
+        })
+    return steps
+
+
+# ── 模型视觉能力判断（用于图片 OCR 自动降级）──
+# 显式已知支持/不支持图片输入的模型关键词。
+# 未知模型默认按「不支持视觉」处理（走 OCR 降级）：宁可多一次 OCR，
+# 也绝不让纯文本模型收到 image_url 导致 400 中断回复。
+# 需要保留图片输入的模型请加入 _VISION_MODEL_KEYWORDS，
+# 或用 AGENT_OCR_FALLBACK=0 环境变量强制关闭降级。
+_NON_VISION_MODEL_KEYWORDS = [
+    "deepseek",                               # DeepSeek 官方全系文本模型（chat/reasoner/v4-flash 等变体）
+    "qwen-turbo", "qwen-long", "qwen-plus",   # 通义千问部分文本模型
+    "llama3", "llama2", "mistral", "phi3",    # 本地 Ollama 常见文本模型
+    "agnes-2.0-flash",                         # 当前默认模型（文本）
+]
+# 显式支持视觉的模型（命中则绝不降级，即使环境变量强制开启也尊重）
+_VISION_MODEL_KEYWORDS = [
+    "gpt-4o", "gpt-4.1", "gpt-4-vision", "gpt-4v",
+    "claude-3", "claude-4", "claude-sonnet-4", "claude-opus-4", "claude-haiku-4",
+    "gemini", "qwen-vl", "qwen-vl-max", "glm-4v", "internvl", "minicpm-v",
+]
+
+
+def _model_supports_vision(config: AgentConfig) -> bool:
+    """判断当前配置的模型是否支持图片输入。
+
+    判断顺序（优先级从高到低）：
+      1. 环境变量 AGENT_OCR_FALLBACK=1/0 强制开关（覆盖关键词判断）
+      2. 命中视觉模型关键词 → 支持
+      3. 命中非视觉模型关键词 → 不支持
+      4. 未知模型 → 默认支持（保持原行为，不误伤）
+    """
+    env_flag = os.getenv("AGENT_OCR_FALLBACK", "").strip().lower()
+    if env_flag in ("1", "true", "on", "force"):
+        return False  # 强制 OCR 降级
+    if env_flag in ("0", "false", "off", "no"):
+        return True   # 强制关闭 OCR 降级
+
+    model = str(config.model or "").lower()
+    provider = str(config.active_provider or "").lower()
+    combined = f"{provider}/{model}"
+    if any(k in model for k in _VISION_MODEL_KEYWORDS):
+        return True
+    if any(k in combined for k in _NON_VISION_MODEL_KEYWORDS):
+        return False
+    return False  # 未知模型默认不支持视觉（走 OCR 降级），绝不让纯文本模型收到 image_url
 
 
 _SCREENSHOT_URL_RE = re.compile(r"!\[([^\]]*)\]\(/api/screenshot\?token=[^)]+\)")
@@ -644,9 +738,14 @@ def _recent_round_user_indexes(messages: list[dict], round_count: int = 5) -> se
     return set(user_indexes[-round_count:])
 
 
-def session_messages_to_langchain(messages: list[dict]) -> list:
+def session_messages_to_langchain(messages: list[dict], ocr_fallback: bool = False) -> list:
     """Convert persisted chat messages into LangChain messages.
     保留用户消息中的图片，让 LLM 能在后续轮次中看到历史图片。
+
+    ocr_fallback=True（当前模型不支持图片输入）时，历史图片不注入 image_url，
+    而是转成 OCR 文本随消息一起发送——否则纯文本模型会收到 image_url 并报
+    400（unknown variant `image_url`, expected `text`）。此时所有带图历史轮
+    统一走 OCR（不再区分最近 N 轮，因为对不支持视觉的模型保留 image_url 无意义）。
     """
     converted = []
     keep_image_user_indexes = _recent_round_user_indexes(messages, round_count=5)
@@ -655,17 +754,25 @@ def session_messages_to_langchain(messages: list[dict]) -> list:
         content = msg.get("content") or ""
         images = msg.get("images") or []
         if role == "user":
-            if images and idx in keep_image_user_indexes:
-                # 多模态：图片 + 文本
-                multimodal = []
-                for url in images:
-                    if isinstance(url, str) and url.startswith("data:image/"):
-                        multimodal.append({"type": "image_url", "image_url": {"url": url}})
+            valid_data_urls = [
+                url for url in images
+                if isinstance(url, str) and url.startswith("data:image/")
+            ]
+            if valid_data_urls and (ocr_fallback or idx in keep_image_user_indexes):
+                if ocr_fallback:
+                    # OCR 降级：图片转纯文本
+                    from tools.ocr_tools import ocr_data_url
+                    parts = [content] if content else []
+                    for url in valid_data_urls:
+                        parts.append(f"[图片 OCR 识别结果]\n{ocr_data_url(url)}")
+                    converted.append(HumanMessage(content="\n\n".join(parts)))
+                    continue
+                # 多模态：图片 + 文本（仅最近 N 轮保留图片）
+                multimodal = [{"type": "image_url", "image_url": {"url": url}} for url in valid_data_urls]
                 if content:
                     multimodal.append({"type": "text", "text": content})
-                if multimodal:
-                    converted.append(HumanMessage(content=multimodal))
-                    continue
+                converted.append(HumanMessage(content=multimodal))
+                continue
             # 无图或图片格式无效：回退到纯文本
             if content:
                 converted.append(HumanMessage(content=content))
@@ -682,6 +789,58 @@ def session_messages_to_langchain(messages: list[dict]) -> list:
             if content:
                 converted.append(AIMessage(content=content))
     return converted
+
+
+def _ensure_no_image_for_non_vision(messages: list, config: AgentConfig) -> list:
+    """兜底：模型不支持图片输入时，把消息列表中残留的 image_url 一律转成 OCR 文本。
+
+    正常情况下图片应在组装消息时（_human_content / session_messages_to_langchain）
+    就完成 OCR 降级；此函数用于防御未来任何新路径把 image_url 漏进来（例如
+    某些工具/注入块直接向消息追加图片），避免纯文本模型再次收到 400
+    unknown variant `image_url`。命中非视觉模型且无图片时原样返回。
+    """
+    if _model_supports_vision(config):
+        return messages
+
+    from tools.ocr_tools import ocr_data_url
+
+    out = []
+    changed = False
+    for message in messages:
+        content = getattr(message, "content", None)
+        if not isinstance(content, list):
+            out.append(message)
+            continue
+        parts = []
+        images = []
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") == "image_url":
+                url = str((item.get("image_url") or {}).get("url") or "")
+                if url.startswith("data:image/"):
+                    images.append(url)
+                    changed = True
+                else:
+                    parts.append(item)
+            elif item.get("type") == "text":
+                parts.append(item)
+            else:
+                parts.append(item)
+        if not images:
+            out.append(message)
+            continue
+        text_parts = [str(p.get("text") or "") for p in parts if p.get("type") == "text" and p.get("text")]
+        text = "\n".join(text_parts).strip() or "请分析这些图片。"
+        ocr_sections = [f"[图片 OCR 识别结果]\n{ocr_data_url(url)}" for url in images]
+        new_text = text + "\n\n" + "\n\n".join(ocr_sections)
+        if hasattr(message, "model_copy"):
+            out.append(message.model_copy(update={"content": new_text}))
+        else:
+            out.append(message.copy(update={"content": new_text}))
+    if changed:
+        logger.info("[ocr_fallback] 兜底：已将 %d 条消息中的图片转为 OCR 文本（模型不支持视觉）", sum(1 for m in messages if isinstance(getattr(m, "content", None), list) and any(isinstance(i, dict) and i.get("type") == "image_url" for i in m.content)))
+    return out
 
 
 def compact_history_messages(messages: list, config: AgentConfig) -> list:
