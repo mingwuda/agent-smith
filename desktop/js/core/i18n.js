@@ -99,6 +99,8 @@ const I18N = {
     generating: '正在生成回复...',
     agentPlanning: 'Agent 正在规划与执行...',
     workElapsed: '工作耗时',
+    collapseUp: '向上收起',
+    collapseUpTip: '折叠工作耗时区域',
     callingTool: '调用工具',
     readingFile: '读取文件内容',
     writingFile: '写入文件',

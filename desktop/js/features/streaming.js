@@ -266,8 +266,36 @@ function beginRoundRender(rt) {
       '<div class="agent-avatar">🤖</div>' +
       '<span class="agent-time"><span class="agent-time-label">工作耗时:</span> <span class="agent-time-val">0s</span></span>' +
     '</div>' +
-    '<div class="seg-body"><div class="seg-time-summary"></div><div class="seg-history"></div></div>';
+    '<div class="seg-body">' +
+      '<div class="seg-time-summary"></div>' +
+      '<div class="seg-history"></div>' +
+      '<div class="seg-collapse-bar">' +
+        '<button type="button" class="seg-collapse-btn" title="' + (t('collapseUpTip') || '折叠工作耗时区域') + '">' +
+          '<span class="seg-collapse-arrow">▲</span>' +
+          '<span class="seg-collapse-text">' + (t('collapseUp') || '向上收起') + '</span>' +
+        '</button>' +
+      '</div>' +
+    '</div>';
   segTime.querySelector('.seg-header').onclick = function() { segTime.classList.toggle('collapsed'); };
+  // 展开区底部「向上收起」快捷按钮：step 历史很长时，看完后无需翻回最顶部，底部一键收起
+  var segTimeCollapseBtn = segTime.querySelector('.seg-collapse-btn');
+  if (segTimeCollapseBtn) {
+    segTimeCollapseBtn.onclick = function(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (segTime.classList.contains('collapsed')) return;  // 已折叠则忽略
+      segTime.classList.add('collapsed');
+      // 折叠后把「工作耗时」段头滚到滚动容器顶部，让用户立即看到该段已收起。
+      // 用同步 scrollTop 赋值（smooth 异步滚动在长列表容器中不可靠），确保一次到位。
+      var segTimeHeader = segTime.querySelector('.seg-header');
+      var msgContainer = document.getElementById('messages');
+      if (segTimeHeader && msgContainer) {
+        var rect = segTimeHeader.getBoundingClientRect();
+        var containerRect = msgContainer.getBoundingClientRect();
+        msgContainer.scrollTop += (rect.top - containerRect.top);
+      }
+    };
+  }
   responseCard.appendChild(segTime);
   _historyBodyEl = segTime.querySelector('.seg-history');  // 完整 step 历史进这里
 

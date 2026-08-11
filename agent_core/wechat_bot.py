@@ -8,11 +8,9 @@ import base64
 import fcntl
 import hashlib
 import json
-import logging
 import os
 import random
 import time
-import uuid
 from collections import deque
 from pathlib import Path
 from typing import Optional
@@ -21,6 +19,8 @@ import httpx
 
 from logger import get_logger
 import session_store
+from wechat_commands import WeChatCommandMixin
+from wechat_send import WeChatSendMixin
 
 # 暂存图片最久保留时间（秒），超时自动清理，防止内存泄漏
 PENDING_IMAGE_TTL = 300  # 5 分钟
@@ -29,152 +29,6 @@ logger = get_logger(__name__)
 
 ILINK_BASE_URL = "https://ilinkai.weixin.qq.com"
 ILINK_CDN_BASE = "https://novac2c.cdn.weixin.qq.com/c2c"
-
-
-# ── 纯 Python AES-128-ECB 解密 ──────────────────────────────────
-# AES S-box (前向)
-_AES_SBOX = [
-    0x63, 0x7c, 0x77, 0x7b, 0xf2, 0x6b, 0x6f, 0xc5, 0x30, 0x01, 0x67, 0x2b, 0xfe, 0xd7, 0xab, 0x76,
-    0xca, 0x82, 0xc9, 0x7d, 0xfa, 0x59, 0x47, 0xf0, 0xad, 0xd4, 0xa2, 0xaf, 0x9c, 0xa4, 0x72, 0xc0,
-    0xb7, 0xfd, 0x93, 0x26, 0x36, 0x3f, 0xf7, 0xcc, 0x34, 0xa5, 0xe5, 0xf1, 0x71, 0xd8, 0x31, 0x15,
-    0x04, 0xc7, 0x23, 0xc3, 0x18, 0x96, 0x05, 0x9a, 0x07, 0x12, 0x80, 0xe2, 0xeb, 0x27, 0xb2, 0x75,
-    0x09, 0x83, 0x2c, 0x1a, 0x1b, 0x6e, 0x5a, 0xa0, 0x52, 0x3b, 0xd6, 0xb3, 0x29, 0xe3, 0x2f, 0x84,
-    0x53, 0xd1, 0x00, 0xed, 0x20, 0xfc, 0xb1, 0x5b, 0x6a, 0xcb, 0xbe, 0x39, 0x4a, 0x4c, 0x58, 0xcf,
-    0xd0, 0xef, 0xaa, 0xfb, 0x43, 0x4d, 0x33, 0x85, 0x45, 0xf9, 0x02, 0x7f, 0x50, 0x3c, 0x9f, 0xa8,
-    0x51, 0xa3, 0x40, 0x8f, 0x92, 0x9d, 0x38, 0xf5, 0xbc, 0xb6, 0xda, 0x21, 0x10, 0xff, 0xf3, 0xd2,
-    0xcd, 0x0c, 0x13, 0xec, 0x5f, 0x97, 0x44, 0x17, 0xc4, 0xa7, 0x7e, 0x3d, 0x64, 0x5d, 0x19, 0x73,
-    0x60, 0x81, 0x4f, 0xdc, 0x22, 0x2a, 0x90, 0x88, 0x46, 0xee, 0xb8, 0x14, 0xde, 0x5e, 0x0b, 0xdb,
-    0xe0, 0x32, 0x3a, 0x0a, 0x49, 0x06, 0x24, 0x5c, 0xc2, 0xd3, 0xac, 0x62, 0x91, 0x95, 0xe4, 0x79,
-    0xe7, 0xc8, 0x37, 0x6d, 0x8d, 0xd5, 0x4e, 0xa9, 0x6c, 0x56, 0xf4, 0xea, 0x65, 0x7a, 0xae, 0x08,
-    0xba, 0x78, 0x25, 0x2e, 0x1c, 0xa6, 0xb4, 0xc6, 0xe8, 0xdd, 0x74, 0x1f, 0x4b, 0xbd, 0x8b, 0x8a,
-    0x70, 0x3e, 0xb5, 0x66, 0x48, 0x03, 0xf6, 0x0e, 0x61, 0x35, 0x57, 0xb9, 0x86, 0xc1, 0x1d, 0x9e,
-    0xe1, 0xf8, 0x98, 0x11, 0x69, 0xd9, 0x8e, 0x94, 0x9b, 0x1e, 0x87, 0xe9, 0xce, 0x55, 0x28, 0xdf,
-    0x8c, 0xa1, 0x89, 0x0d, 0xbf, 0xe6, 0x42, 0x68, 0x41, 0x99, 0x2d, 0x0f, 0xb0, 0x54, 0xbb, 0x16,
-]
-
-# AES 逆 S-box (用于 InvSubBytes)
-_AES_INV_SBOX = [0] * 256
-for _i, _v in enumerate(_AES_SBOX):
-    _AES_INV_SBOX[_v] = _i
-
-def _aes_decrypt_block(block: bytes, expanded_key: list[list[int]]) -> bytes:
-    """解密一个 16 字节 AES 块（ECB 模式下逐块调用）。"""
-    state = list(block)
-    nr = 10
-
-    def inv_sub_bytes(s):
-        return [_AES_INV_SBOX[b] for b in s]
-
-    def inv_shift_rows(s):
-        return [
-            s[0], s[5], s[10], s[15],
-            s[4], s[9], s[14], s[3],
-            s[8], s[13], s[2], s[7],
-            s[12], s[1], s[6], s[11],
-        ]
-
-    def inv_mix_columns(s):
-        def galois_mul(a, b):
-            p = 0
-            for _ in range(8):
-                if b & 1:
-                    p ^= a
-                hi = a & 0x80
-                a = (a << 1) & 0xFF
-                if hi:
-                    a ^= 0x1B
-                b >>= 1
-            return p
-        result = [0] * 16
-        for i in range(4):
-            c = s[i*4:(i+1)*4]
-            # InvMixColumns matrix on GF(2^8):
-            # [14 11 13  9]   [c0]
-            # [ 9 14 11 13] * [c1]
-            # [13  9 14 11]   [c2]
-            # [11 13  9 14]   [c3]
-            result[i*4]   = galois_mul(14, c[0]) ^ galois_mul(11, c[1]) ^ galois_mul(13, c[2]) ^ galois_mul(9, c[3])
-            result[i*4+1] = galois_mul(9, c[0])  ^ galois_mul(14, c[1]) ^ galois_mul(11, c[2]) ^ galois_mul(13, c[3])
-            result[i*4+2] = galois_mul(13, c[0]) ^ galois_mul(9, c[1])  ^ galois_mul(14, c[2]) ^ galois_mul(11, c[3])
-            result[i*4+3] = galois_mul(11, c[0]) ^ galois_mul(13, c[1]) ^ galois_mul(9, c[2])  ^ galois_mul(14, c[3])
-        return result
-
-    def add_round_key(s, rk):
-        return [s[i] ^ rk[i] for i in range(16)]
-
-    # 初始轮密钥加（使用最后一轮密钥）
-    state = add_round_key(state, expanded_key[nr])
-
-    # 解密主循环
-    for r in range(nr - 1, 0, -1):
-        state = inv_shift_rows(state)
-        state = inv_sub_bytes(state)
-        state = add_round_key(state, expanded_key[r])
-        state = inv_mix_columns(state)
-
-    # 最后一轮（无 InvMixColumns）
-    state = inv_shift_rows(state)
-    state = inv_sub_bytes(state)
-    state = add_round_key(state, expanded_key[0])
-
-    return bytes(state)
-
-
-def _aes_key_expansion(key: bytes) -> list[list[int]]:
-    """AES-128 密钥扩展: 16 字节 → 11 轮密钥 (每轮 16 字节)"""
-    rcon = [0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1B, 0x36]
-    # 初始 4 个字 (每个字 4 字节)
-    w = [list(key[0:4]), list(key[4:8]), list(key[8:12]), list(key[12:16])]
-    for i in range(4, 44):
-        temp = w[i-1][:]
-        if i % 4 == 0:
-            temp = temp[1:] + temp[:1]  # RotWord
-            temp = [_AES_SBOX[b] for b in temp]  # SubWord
-            temp[0] ^= rcon[i//4 - 1]
-        w.append([w[i-4][j] ^ temp[j] for j in range(4)])
-    # 将 44 个字展平为 11 个轮密钥，每个轮密钥 16 字节
-    round_keys = []
-    for r in range(11):
-        rk = []
-        for word in w[r*4:(r+1)*4]:
-            rk.extend(word)
-        round_keys.append(rk)
-    return round_keys
-
-
-def aes_decrypt_ecb(ciphertext: bytes, key_hex: str) -> bytes:
-    """AES-128-ECB 解密
-
-    使用系统 OpenSSL 命令解密。
-    如果 OpenSSL 不可用或失败，返回原始数据（不做解密）。
-
-    Args:
-        ciphertext: 密文（长度应为 16 的倍数）
-        key_hex: 32 字符十六进制密钥
-
-    Returns:
-        解密后的明文，或解密失败时的原始数据
-    """
-    import subprocess
-    try:
-        result = subprocess.run(
-            ['openssl', 'enc', '-d', '-aes-128-ecb', '-K', key_hex.lower(), '-nosalt'],
-            input=ciphertext,
-            capture_output=True,
-            timeout=10,
-        )
-        if result.returncode == 0 and result.stdout:
-            return result.stdout
-    except Exception:
-        pass
-
-    # 解密失败：返回原始数据（调用方会得到无效图片，API 会报错）
-    import logging
-    logging.getLogger(__name__).warning(
-        "[AES] OpenSSL 解密失败，返回原始数据 (%d bytes)", len(ciphertext),
-    )
-    return ciphertext
-
 
 # ── WeChat Bot 类 ─────────────────────────────────────────────────
 
@@ -190,56 +44,6 @@ def _extract_text(msg: dict) -> str:
     return ""
 
 
-def _resolve_session_ref(wechat_uid: str, token: str, menu: Optional[dict], project_id: str = "") -> Optional[str]:
-    """将 /switch /delete 的参数解析为真实 sessionId。
-
-    - token 为数字 → 优先用 /list 时缓存的序号映射，否则回退到当前列表顺序
-    - 非数字 → 当作原始 sessionId（需真实存在）
-    - project_id 非空时：无论序号映射还是原始 id，都要求会话属于该项目，
-      否则返回 None（用户切到项目后只操作该项目下的会话）
-    - 无法解析返回 None
-    """
-    if token.isdigit():
-        n = int(token)
-        if menu and str(n) in menu:
-            sid = menu[str(n)]
-            if not project_id:
-                return sid
-            sess = session_store.get_session(wechat_uid, sid)
-            if sess and (sess.get("project_id") or "") == project_id:
-                return sid
-            # menu 序号指向其他项目的会话，回退到项目内列表重新解析
-        sessions = (session_store.list_sessions_by_project(wechat_uid, project_id)
-                    if project_id else session_store.list_sessions(wechat_uid))
-        if 1 <= n <= len(sessions):
-            return sessions[n - 1]["id"]
-        return None
-    sess = session_store.get_session(wechat_uid, token)
-    if sess and (not project_id or (sess.get("project_id") or "") == project_id):
-        return token
-    return None
-
-
-def _resolve_project_ref(wechat_uid: str, token: str, menu: Optional[dict]) -> Optional[str]:
-    """将 /project 的参数解析为真实 project_id。
-
-    - token 为数字 → 优先用 /projects 时缓存的序号映射，否则回退到当前列表顺序
-    - 非数字 → 当作原始 project_id（需真实存在）
-    - 无法解析返回 None
-    """
-    if token.isdigit():
-        n = int(token)
-        if menu and str(n) in menu:
-            return menu[str(n)]
-        projects = session_store.list_projects(wechat_uid)
-        if 1 <= n <= len(projects):
-            return projects[n - 1]["id"]
-        return None
-    if session_store.get_project(wechat_uid, token):
-        return token
-    return None
-
-
 # 全局串行锁：所有微信 Bot 共享，保证同一时刻只有一个用户的 agent 调用在飞。
 # 原因：agent 的工具工作区（file_tools/shell_tools 等）是模块级全局状态，
 # _apply_session_workspace 会改写它们；并发处理两个用户消息会互相覆盖工作区，
@@ -250,8 +54,15 @@ def _resolve_project_ref(wechat_uid: str, token: str, menu: Optional[dict]) -> O
 _WECHAT_AGENT_LOCK = asyncio.Lock()
 
 
-class WeChatBot:
-    """微信 iLink Bot API 客户端（按用户隔离）"""
+class WeChatBot(WeChatCommandMixin, WeChatSendMixin):
+    """微信 iLink Bot API 客户端（按用户隔离）
+
+    职责分布（2026-08-03 拆分）：
+    - wechat_commands.py：斜杠指令 + 菜单构建（WeChatCommandMixin）
+    - wechat_send.py：发送链路 + 补发队列 + 图片下载（WeChatSendMixin）
+    - wechat_crypto.py：图片 AES-128-ECB 解密（纯函数）
+    - 本文件：状态初始化、鉴权登录、轮询、消息处理、生命周期
+    """
 
     def __init__(self, agent=None, user_id: str = "default", data_dir: Optional[str] = None, tools: Optional[list] = None):
         # agent 不传时懒创建该用户专属的独立实例（见 _ensure_agent）。
@@ -442,16 +253,6 @@ class WeChatBot:
             encoding="utf-8",
         )
 
-    def _load_token(self):
-        path = Path(self.data_dir) / "token.json"
-        if path.exists():
-            try:
-                data = json.loads(path.read_text(encoding="utf-8"))
-                self.bot_token = data.get("bot_token")
-                self.bot_base_url = data.get("base_url") or ""
-            except Exception:
-                pass
-
     # ── 登录 ──────────────────────────────────────
 
     async def get_qrcode(self) -> dict:
@@ -524,627 +325,7 @@ class WeChatBot:
         except Exception:
             pass  # typing 失败不影响主流程
 
-    @staticmethod
-    def _parse_sendmessage_response(resp_text: str) -> dict:
-        """解析 sendmessage 响应，统一返回 {"ret": ..., "message_id": ..., "detail": ...}。"""
-        text = resp_text.strip()
-        if text == "{}":
-            return {"ret": 0}
-        if text == '{"ret":0}':
-            return {"ret": 0, "message_id": ""}
-        try:
-            data = json.loads(text)
-        except json.JSONDecodeError:
-            return {"ret": -1, "detail": {"raw": text[:200]}}
-        if not isinstance(data, dict):
-            return {"ret": -1, "detail": data}
-        if data.get("ret") == 0:
-            return {"ret": 0, "message_id": str(data.get("message_id", ""))}
-        # iLink 成功响应可能只返回 message_id，不返回 ret=0
-        # ponytail: 若未来出现 {"message_id": ..., "ret": -1} 这种矛盾包，需再收紧为 ret != -1 才视为成功
-        if "message_id" in data:
-            return {"ret": 0, "message_id": str(data["message_id"])}
-        return {"ret": data.get("ret", -1), "message_id": str(data.get("message_id", "")), "detail": data}
-
-    async def send_message(
-        self, to_user_id: str, context_token: str, text: str,
-        max_retries: int = 0, retry_delay: float = 1.0, max_backoff: float = 30.0,
-    ) -> dict:
-        """发送文本消息。
-
-        max_retries: 失败后的重试次数（指数退避：delay, 2*delay, 4*delay...，单次退避上限 max_backoff）。
-        微信对短时高频发送会返回 prepare failed（频控），指数退避重试可显著提高送达率。
-        """
-        base = self.bot_base_url or ILINK_BASE_URL
-        payload = {
-            "msg": {
-                "from_user_id": "",
-                "to_user_id": to_user_id,
-                "client_id": f"bot-{uuid.uuid4().hex[:12]}",
-                "message_type": 2,
-                "message_state": 2,
-                "context_token": context_token,
-                "item_list": [{"type": 1, "text_item": {"text": text}}],
-            },
-            "base_info": {"channel_version": "1.0.3"},
-        }
-        raw_bytes = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        headers = {
-            **self._auth_headers(),
-            "Content-Length": str(len(raw_bytes)),
-        }
-        last_send_resp: dict = {"ret": -1, "detail": {}}
-        for attempt in range(max_retries + 1):
-            async with httpx.AsyncClient(timeout=30, trust_env=False, verify=False) as client:
-                resp = await client.post(
-                    f"{base}/ilink/bot/sendmessage",
-                    content=raw_bytes,
-                    headers=headers,
-                )
-                resp_text = resp.text.strip()
-                send_resp = self._parse_sendmessage_response(resp_text)
-            if send_resp.get("ret", -1) == 0:
-                logger.info("[微信Bot] 文本消息发送成功: message_id=%s", send_resp.get("message_id", ""))
-                self._rate_limited_until = 0.0  # 发送成功说明频控解除，恢复 step 消息
-                self._rate_limit_strikes = 0    # 连续失败计数清零，回到 60s 冷却基线
-                return {"ret": 0, "message_id": send_resp.get("message_id", "")}
-            last_send_resp = send_resp
-            # 频控感知：prepare failed(ret=-2) 说明微信侧限频，进入冷却窗口，
-            # 期间 step 消息暂停发送（见 _send_step_msg），避免持续踩频控拉长冷却。
-            # 冷却时长阶梯递增：60s 起步、每失败 +60s、封顶 300s。
-            if send_resp.get("ret") == -2:
-                self._rate_limit_strikes += 1
-                cooldown = min(60 * self._rate_limit_strikes, 300)
-                self._rate_limited_until = max(self._rate_limited_until, time.time() + cooldown)
-            logger.warning("[微信Bot] sendmessage 文本消息失败: status=%s resp=%s", resp.status_code, json.dumps(send_resp, ensure_ascii=False)[:300])
-            if attempt < max_retries:
-                delay = retry_delay * (2 ** attempt)
-                logger.info("[微信Bot] sendmessage 失败，%.1fs 后重试 (%d/%d)", delay, attempt + 1, max_retries)
-                await asyncio.sleep(delay)
-        return {"ret": -1, "detail": last_send_resp}
-
-    async def _throttle_send(self, min_interval: float = 1.5):
-        """发送节流：与上一条消息保持最小间隔，避免短时高频发送触发微信 prepare failed 频控。
-
-        由于 step 分段回复会在几十秒内连发十几条消息，微信侧短时 burst 会返回
-        prepare failed；这里在每条消息前按需等待，把发送节奏摊平。
-        """
-        wait = min_interval - (time.time() - self._last_send_at)
-        if wait > 0:
-            await asyncio.sleep(wait)
-        self._last_send_at = time.time()
-
-    @staticmethod
-    def _build_step_batches(lines: list[str], batch: int, head: str = "") -> list[str]:
-        """把工具结果行按 batch 攒批合并，返回待发送的 step 消息文本列表。
-
-        - 每满 batch 条合并为一条消息；残余不足 batch 的也合并为最后一条（不留过程死角）
-        - head（💭思考）只拼到第一条，避免每条都重复思考内容
-        """
-        if not lines:
-            return []
-        batches = []
-        for i in range(0, len(lines), batch):
-            chunk = lines[i:i + batch]
-            prefix = f"**💭 思考**\n{head}\n" if head and i == 0 else ""
-            batches.append(prefix + "\n".join(chunk))
-        return batches
-
-    async def _rate_limit_send(self):
-        """滑动窗口发送限速：send_rate_window 秒内最多 send_rate_max 条 sendmessage。
-
-        官方 iLink 对 sendmessage 无公开条数配额，频控是频率型（ret=-2 rate limited，
-        官方仓库 Tencent/openclaw-weixin#142 用 backoff 应对）。这里在发送前排队，
-        把 burst 摊平到窗口内（默认 60s/10 条 ≈ 6s 一条），从源头避免触发频控。
-        """
-        now = time.time()
-        self._send_timestamps = [t for t in self._send_timestamps if now - t < self.send_rate_window]
-        while len(self._send_timestamps) >= self.send_rate_max:
-            wait = self.send_rate_window - (now - self._send_timestamps[0])
-            if wait <= 0:
-                break
-            logger.debug("[微信Bot:%s] 发送限速中，%.1fs 后重试", self.user_id, wait)
-            await asyncio.sleep(min(wait, 5.0))
-            now = time.time()
-            self._send_timestamps = [t for t in self._send_timestamps if now - t < self.send_rate_window]
-        self._send_timestamps.append(now)
-
-    async def _send_step_msg(self, to_user_id: str, context_token: str, text: str):
-        """发送步骤级进度消息（思考/工具执行分段），失败退避重试，不阻塞主流程。
-
-        官方 iLink 无公开条数配额，频控是频率型（ret=-2 rate limited，官方 3s backoff 应对）。
-        因此不做"失败即放弃后续 step"：滑动窗口限速 + 失败指数退避重试（max_retries=1,
-        retry_delay=2s 即 2s→4s 退避），单条失败只记日志，后续 step 继续发，
-        过程消息持续可见；最终回复有独立更长的重试兜底（send_message max_retries=3）。
-        """
-        # 频控冷却中：微信侧限频未解除，step 消息暂停发送（避免持续踩频控拉长冷却），
-        # 最终回复仍走立即重试 + 后台补发，不受影响。
-        if time.time() < self._rate_limited_until:
-            logger.debug("[微信Bot:%s] 频控冷却中，跳过 step 消息: %s", self.user_id, text[:40])
-            return
-        # 防御性上限：仅拦截极端刷屏场景，正常任务被限速器+批量约束不会触达
-        if self._step_sent_count >= self.step_msg_budget:
-            logger.debug("[微信Bot:%s] step 消息达到防御上限(%d)，跳过: %s",
-                         self.user_id, self.step_msg_budget, text[:40])
-            return
-        try:
-            await self._throttle_send()
-            await self._rate_limit_send()
-            # max_retries=0：失败不立即重试（2026-08-03 事故后统一策略——频控窗口内
-            # 重试只会刷新冷却窗口；step 是过程消息，失败跳过即可，最终回复有补发兜底）。
-            resp = await self.send_message(to_user_id, context_token, text, max_retries=0)
-            if resp.get("ret", -1) == 0:
-                self._step_sent_count += 1
-            else:
-                logger.warning("[微信Bot:%s] step 消息发送失败（跳过）: %s", self.user_id, text[:60])
-        except Exception as e:
-            logger.warning("[微信Bot:%s] step 消息发送异常: %s", self.user_id, e)
-
-    async def send_image(
-        self, to_user_id: str, context_token: str, image_path: str
-    ) -> dict:
-        """发送图片消息（上传到 CDN 后再发送）
-
-        流程:
-          1. 读取图片文件 → AES-128-ECB 加密 → 计算 MD5 和大小
-          2. POST /ilink/bot/getuploadurl 获取上传参数
-          3. POST CDN /upload 上传加密后的图片数据
-          4. POST /ilink/bot/sendmessage 发送消息（含 image_item）
-        """
-        import hashlib
-        import subprocess
-
-        base = self.bot_base_url or ILINK_BASE_URL
-        cdn_base = ILINK_CDN_BASE
-
-        try:
-            # 1. 读取图片文件
-            with open(image_path, "rb") as f:
-                raw_data = f.read()
-        except Exception as e:
-            logger.warning("[微信Bot] 读取图片失败: %s", e)
-            return {"ret": -1, "error": str(e)}
-
-        raw_size = len(raw_data)
-        raw_md5 = hashlib.md5(raw_data).hexdigest()
-        filekey = uuid.uuid4().hex
-        aes_key = uuid.uuid4().hex[:32]  # 32 hex chars = 16 bytes
-
-        # 2. AES-128-ECB 加密（用 OpenSSL）
-        try:
-            result = subprocess.run(
-                ['openssl', 'enc', '-e', '-aes-128-ecb', '-K', aes_key, '-nosalt'],
-                input=raw_data,
-                capture_output=True,
-                timeout=30,
-            )
-            if result.returncode != 0 or not result.stdout:
-                raise RuntimeError(f"OpenSSL encrypt failed: {result.stderr.decode()[:200]}")
-            encrypted_data = result.stdout
-        except Exception as e:
-            logger.warning("[微信Bot] 图片加密失败: %s", e)
-            return {"ret": -1, "error": str(e)}
-
-        encrypted_size = len(encrypted_data)
-
-        # 3. 获取上传 URL
-        try:
-            async with httpx.AsyncClient(timeout=30, trust_env=False, verify=False) as client:
-                resp = await client.post(
-                    f"{base}/ilink/bot/getuploadurl",
-                    headers=self._auth_headers(),
-                    json={
-                        "filekey": filekey,
-                        "media_type": 1,  # IMAGE
-                        "to_user_id": to_user_id,
-                        "rawsize": raw_size,
-                        "rawfilemd5": raw_md5,
-                        "filesize": encrypted_size,
-                        "no_need_thumb": True,
-                        "aeskey": aes_key,
-                    },
-                )
-                data = resp.json()
-                upload_param = data.get("upload_param") or ""
-                if not upload_param:
-                    upload_full_url = data.get("upload_full_url", "")
-                    if upload_full_url:
-                        import urllib.parse
-                        parsed = urllib.parse.urlparse(upload_full_url)
-                        qs = urllib.parse.parse_qs(parsed.query)
-                        upload_param = qs.get("encrypted_query_param", [""])[0]
-                if not upload_param:
-                    logger.warning("[微信Bot] getuploadurl 返回无 upload_param: %s", str(data)[:200])
-                    return {"ret": -1}
-        except Exception as e:
-            logger.warning("[微信Bot] getuploadurl 请求失败: %s", e)
-            return {"ret": -1, "error": str(e)}
-
-        # 4. 上传到 CDN
-        import urllib.parse
-        cdn_upload_url = (
-            f"{cdn_base}/upload?encrypted_query_param={urllib.parse.quote(upload_param, safe='')}"
-            f"&filekey={urllib.parse.quote(filekey, safe='')}"
-        )
-        try:
-            async with httpx.AsyncClient(timeout=60, trust_env=False, verify=False) as client:
-                resp = await client.post(
-                    cdn_upload_url,
-                    content=encrypted_data,
-                    headers={"Content-Type": "application/octet-stream"},
-                )
-                if resp.status_code != 200:
-                    logger.warning("[微信Bot] CDN 上传失败: HTTP %s", resp.status_code)
-                    return {"ret": -1}
-                download_param = resp.headers.get("x-encrypted-param")
-                if not download_param:
-                    logger.warning("[微信Bot] CDN 上传响应缺少 x-encrypted-param")
-                    return {"ret": -1}
-        except Exception as e:
-            logger.warning("[微信Bot] CDN 上传请求失败: %s", e)
-            return {"ret": -1, "error": str(e)}
-
-        # 5. 发送图片消息
-        # media.aes_key 在 iLink 协议中是 hex 字符串的 UTF-8 base64 编码
-        import base64 as b64_mod
-        aes_key_b64 = b64_mod.b64encode(aes_key.encode("utf-8")).decode("ascii")
-        payload = {
-            "msg": {
-                "from_user_id": "",
-                "to_user_id": to_user_id,
-                "client_id": f"bot-{uuid.uuid4().hex[:12]}",
-                "message_type": 2,
-                "message_state": 2,
-                "context_token": context_token,
-                "item_list": [{
-                    "type": 2,  # IMAGE
-                    "image_item": {
-                        "media": {
-                            "encrypt_query_param": download_param,
-                            "aes_key": aes_key_b64,
-                            "encrypt_type": 1,
-                        },
-                        "mid_size": encrypted_size,
-                    },
-                }],
-            },
-            "base_info": {"channel_version": "1.0.3"},
-        }
-        raw_bytes = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        headers = {
-            **self._auth_headers(),
-            "Content-Length": str(len(raw_bytes)),
-        }
-        try:
-            async with httpx.AsyncClient(timeout=30, trust_env=False, verify=False) as client:
-                resp = await client.post(
-                    f"{base}/ilink/bot/sendmessage",
-                    content=raw_bytes,
-                    headers=headers,
-                )
-                resp_text = resp.text.strip()
-                send_resp = self._parse_sendmessage_response(resp_text)
-                if send_resp.get("ret", -1) == 0:
-                    logger.info("[微信Bot] 图片消息发送成功: message_id=%s %s -> %s", send_resp.get("message_id", ""), image_path[:60], to_user_id[:16])
-                    return {"ret": 0, "message_id": send_resp.get("message_id", "")}
-                logger.warning("[微信Bot] sendmessage 图片消息失败: status=%s resp=%s", resp.status_code, json.dumps(send_resp, ensure_ascii=False)[:300])
-                return {"ret": -1, "detail": send_resp}
-        except Exception as e:
-            logger.warning("[微信Bot] 发送图片消息失败: %s", e)
-            return {"ret": -1, "error": str(e)}
-
-
-    # ── 最终回复后台补发 ─────────────────────────────
-
-    def _load_retry_queue(self) -> None:
-        """启动时从磁盘恢复未完成的补发队列（服务重启不丢最终回复）。
-
-        磁盘上的 next 已过期（重启期间频控早已冷却）时立即重试。
-        """
-        try:
-            if not self._retry_queue_path.exists():
-                return
-            data = json.loads(self._retry_queue_path.read_text(encoding="utf-8"))
-            now = time.time()
-            for item in data or []:
-                self._retry_queue.append({
-                    "to": item.get("to", ""),
-                    "token": item.get("token", ""),
-                    "text": item.get("text", ""),
-                    "attempts": int(item.get("attempts", 0)),
-                    "next": float(item.get("next", now)),
-                })
-            if self._retry_queue:
-                logger.info("[微信Bot:%s] 已从磁盘恢复 %d 条待补发消息", self.user_id, len(self._retry_queue))
-                # 无运行中事件循环时（如启动阶段）不建 task，由后续 _schedule_retry 重建
-                try:
-                    asyncio.get_running_loop()
-                except RuntimeError:
-                    pass
-                else:
-                    if self._retry_task is None or self._retry_task.done():
-                        self._retry_task = asyncio.create_task(self._retry_loop())
-        except Exception as e:
-            logger.warning("[微信Bot:%s] 补发队列加载失败: %s", self.user_id, e)
-
-    def _persist_retry_queue(self) -> None:
-        """把当前补发队列写盘（每次入队/重试后调用，重启后可恢复）。"""
-        try:
-            data = [
-                {"to": i["to"], "token": i["token"], "text": i["text"],
-                 "attempts": i["attempts"], "next": i["next"]}
-                for i in self._retry_queue
-            ]
-            self._retry_queue_path.write_text(
-                json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
-        except Exception as e:
-            logger.warning("[微信Bot:%s] 补发队列持久化失败: %s", self.user_id, e)
-
-    def _schedule_retry(self, to_user_id: str, context_token: str, text: str) -> None:
-        """最终回复发送失败后入补发队列，由后台任务定时重试（不阻塞轮询循环）。
-
-        立即重试（send_message max_retries=3）已覆盖短时频控；仍失败说明频控窗口更长
-        （实测 prepare failed 可持续 1 分钟+），转入后台指数退避补发，避免回复静默丢失。
-        """
-        if not text:
-            return
-        # 同一用户同文本不重复入队（补发期间用户可能再次触发同一回复场景）
-        for item in self._retry_queue:
-            if item["to"] == to_user_id and item["text"] == text:
-                return
-        self._retry_queue.append({
-            "to": to_user_id, "token": context_token, "text": text,
-            "attempts": 0, "next": time.time() + 15,
-        })
-        self._persist_retry_queue()
-        if self._retry_task is None or self._retry_task.done():
-            self._retry_task = asyncio.create_task(self._retry_loop())
-        logger.info("[微信Bot:%s] 最终回复已入补发队列（%d 条待补发）", self.user_id, len(self._retry_queue))
-
-    async def _retry_loop(self) -> None:
-        """后台补发循环：等频控冷却结束后再发，失败不立即重试。
-
-        策略（ponytail，2026-08-03 线上事故教训）：
-        - 频控冷却中（_rate_limited_until > now）整队列挂起、绝不发送：
-          冷却中强行发送只会再吃 ret=-2，把冷却窗口又往后推（send_message 失败时
-          按阶梯递增刷新 _rate_limited_until：60s→120s→…→300s），形成
-          "越试越冷却"的恶性循环——之前 5 次补发全失败、频控持续 11 分钟+ 就是它造成的。
-        - 每次补发只发一次（max_retries=0）：失败说明仍被频控/异常，等下一轮，
-          不在补发路径里做立即重试。
-        - 失败后 next 取 max(退避, 冷却结束)：确保下次尝试一定在冷却窗口之后。
-        - BACKOFF 加长到 7 轮（30s→300s，总退避约 21 分钟 + 每轮叠加冷却）：
-          实测 prepare failed 可持续 10 分钟+，旧的 5 轮 405s 总窗口不够。
-        """
-        BACKOFF = (30, 60, 120, 240, 300, 300, 300)
-        while self._retry_queue:
-            now = time.time()
-            # 冷却中：整队列挂起，睡到冷却结束再检查（不发送，避免刷新冷却窗口）
-            if now < self._rate_limited_until:
-                await asyncio.sleep(min(self._rate_limited_until - now, 5.0))
-                continue
-            still: list[dict] = []
-            for item in list(self._retry_queue):
-                if item["next"] > now:
-                    still.append(item)
-                    continue
-                if item["attempts"] >= len(BACKOFF):
-                    logger.warning("[微信Bot:%s] 补发放弃（重试 %d 次仍失败）: %s",
-                                   self.user_id, item["attempts"], item["text"][:60])
-                    continue
-                try:
-                    await self._throttle_send()
-                    resp = await self.send_message(
-                        item["to"], item["token"], item["text"], max_retries=0,
-                    )
-                except Exception as e:
-                    logger.warning("[微信Bot:%s] 补发异常: %s", self.user_id, e)
-                    resp = {"ret": -1, "detail": str(e)}
-                if resp.get("ret", -1) == 0:
-                    logger.info("[微信Bot:%s] 补发成功: message_id=%s", self.user_id, resp.get("message_id", ""))
-                else:
-                    item["attempts"] += 1
-                    # 至少等到冷却结束再试（send_message 失败已按阶梯刷新 _rate_limited_until）
-                    item["next"] = max(now + BACKOFF[item["attempts"] - 1], self._rate_limited_until)
-                    still.append(item)
-            self._retry_queue = deque(still)
-            self._persist_retry_queue()
-            if self._retry_queue:
-                await asyncio.sleep(5)
-        self._retry_task = None
-
-    async def _download_image_as_data_url(self, img_data: dict) -> Optional[str]:
-        """下载微信 iLink 图片并转换为 data URL（base64 编码），供多模态 LLM 使用。
-
-        iLink 图片通过 CDN 下载，数据使用 AES-128-ECB 加密，需用 aeskey 解密。
-        """
-        encrypt_query = img_data.get("encrypt_query", "")
-        aeskey_hex = img_data.get("aeskey", "")
-        if not encrypt_query:
-            return None
-
-        # 解析 AES key（兼容 hex 或 base64 格式）
-        try:
-            if aeskey_hex and len(aeskey_hex) == 32 and all(c in '0123456789abcdefABCDEF' for c in aeskey_hex):
-                aes_key_hex = aeskey_hex.lower()
-            elif aeskey_hex:
-                # base64 编码的 16 字节 → hex
-                aes_key_hex = base64.b64decode(aeskey_hex).hex()
-            else:
-                aes_key_hex = ""
-        except Exception:
-            aes_key_hex = ""
-
-        # 构造 CDN 下载 URL
-        import urllib.parse
-        cdn_url = f"{ILINK_CDN_BASE}/download?encrypted_query_param={urllib.parse.quote(encrypt_query, safe='')}"
-
-        try:
-            async with httpx.AsyncClient(
-                timeout=30, trust_env=False, verify=False,
-                follow_redirects=True,
-            ) as client:
-                resp = await client.get(cdn_url)
-                resp.raise_for_status()
-
-                encrypted_data = resp.content
-                if len(encrypted_data) < 16:
-                    logger.warning("[微信Bot] CDN 图片数据过短: %d bytes", len(encrypted_data))
-                    return None
-
-                # AES-128-ECB 解密
-                if aes_key_hex:
-                    plaintext = aes_decrypt_ecb(encrypted_data, aes_key_hex)
-                    logger.info("[微信Bot] CDN 图片下载+AES解密成功: %d bytes → %d bytes",
-                                len(encrypted_data), len(plaintext))
-                else:
-                    # 无 AES key，直接使用原始数据
-                    plaintext = encrypted_data
-                    logger.info("[微信Bot] CDN 图片下载成功(无加密): %d bytes", len(plaintext))
-
-                import base64 as b64_mod
-                content_type = resp.headers.get("content-type", "image/png")
-                if "image" not in content_type:
-                    content_type = "image/png"
-                b64_data = b64_mod.b64encode(plaintext).decode("ascii")
-                return f"data:{content_type};base64,{b64_data}"
-
-        except httpx.HTTPStatusError as e:
-            logger.warning("[微信Bot] CDN 图片下载 HTTP %s", e.response.status_code)
-            return None
-        except Exception as e:
-            logger.warning("[微信Bot] CDN 图片下载/解密失败: %s", e)
-            return None
-
-        return None
-
     # ── 消息处理 ──────────────────────────────────
-
-    def _build_session_list_text(self, wechat_uid: str, from_user: str, project_id: str = "") -> str:
-        """构建带序号的会话清单文本，并刷新 from_user 的序号映射缓存。
-
-        供 /list、/sessions 与 /delete 复用。无会话时返回提示并清空缓存。
-        project_id 为空时列出全部会话；否则只列出该项目下的会话。
-        """
-        if project_id == "__unassigned__":
-            all_sessions = session_store.list_sessions_unassigned(wechat_uid)
-        elif project_id:
-            all_sessions = session_store.list_sessions_by_project(wechat_uid, project_id)
-        else:
-            all_sessions = session_store.list_sessions(wechat_uid)
-        if not all_sessions:
-            self._wechat_session_menu.pop(from_user, None)
-            scope = "该项目" if project_id else "当前"
-            return f"📭 {scope}暂无会话。发送 /new 创建新会话。"
-        menu: dict[str, str] = {}
-        # 预加载项目映射，用于显示项目名
-        project_names: dict[str, str] = {}
-        if not project_id:
-            try:
-                for p in session_store.list_projects(wechat_uid):
-                    project_names[p["id"]] = p["name"]
-            except Exception:
-                pass
-        lines = []
-        if project_id:
-            lines.append(f"📋 项目会话（用序号切换/删除）：")
-        else:
-            lines.append(f"📋 共有 {len(all_sessions)} 个会话（用序号切换/删除）：")
-        for i, s in enumerate(all_sessions, 1):
-            sid = s["id"]
-            menu[str(i)] = sid
-            # 取最后一条用户消息作为摘要
-            sess_detail = session_store.get_session(wechat_uid, sid)
-            last_user_msg = ""
-            if sess_detail and sess_detail.get("messages"):
-                for m in reversed(sess_detail["messages"]):
-                    if m.get("role") == "user":
-                        last_user_msg = m.get("content", "")[:50]
-                        break
-            marker = "→ " if sid == self._wechat_sessions.get(from_user) else "  "
-            tag = ""
-            pid = (s.get("project_id") or "").strip()
-            if pid and pid != project_id:
-                tag = f" [{project_names.get(pid, pid[:8])}]"
-            lines.append(f"{marker}{i}. {sid}: {last_user_msg or '(空)'}{tag}")
-        self._wechat_session_menu[from_user] = menu
-        return "\n".join(lines)
-
-    def _build_project_list_text(self, wechat_uid: str, from_user: str) -> str:
-        """构建带序号的项目清单文本，并刷新 from_user 的项目序号映射缓存。"""
-        projects = session_store.list_projects(wechat_uid)
-        if not projects:
-            self._wechat_project_menu.pop(from_user, None)
-            return "📭 暂无项目。发送 /projects 查看，或通过 Web 端创建项目。"
-        menu: dict[str, str] = {}
-        lines = [f"📁 共有 {len(projects)} 个项目（用序号切换）："]
-        for i, p in enumerate(projects, 1):
-            pid = p["id"]
-            menu[str(i)] = pid
-            marker = "→ " if pid == self._wechat_current_project.get(from_user) else "  "
-            scope = p.get("directory_path") or "默认工作区"
-            lines.append(f"{marker}{i}. {p['name']} ({pid[:8]}) — {scope}")
-        self._wechat_project_menu[from_user] = menu
-        return "\n".join(lines)
-
-    def _build_model_list_text(self, from_user: str) -> str:
-        """构建带序号的可用模型清单，并刷新 from_user 的模型序号映射缓存。
-
-        只列出已配置 API Key 的 provider 的模型（未配置 Key 的切换了也调用失败）。
-        序号为跨 provider 扁平编号，供 /modal 按序号切换（模型名可能跨 provider 重复，
-        用扁平序号可精确定位）。超过微信单条消息长度上限时截断，其余在 Web 端查看。
-        """
-        cfg = self._ensure_agent().config
-        menu: dict[str, tuple[str, str]] = {}
-        cur_pid = cfg.active_provider
-        cur_model = cfg.model
-        cur_name = (cfg.providers or {}).get(cur_pid, {}).get("name", cur_pid)
-        all_lines: list[str] = []
-        for pid, prov in (cfg.providers or {}).items():
-            if not (prov or {}).get("api_key"):
-                continue  # 未配置 Key 的 provider 不可用，不列出
-            name = (prov or {}).get("name", pid)
-            for m in (prov or {}).get("models") or []:
-                idx = len(all_lines) + 1
-                key = str(idx)
-                menu[key] = (pid, m)
-                marker = " ← 当前" if (pid == cur_pid and m == cur_model) else ""
-                all_lines.append(f"{idx}. {m} @ {name}{marker}")
-        self._wechat_model_menu[from_user] = menu
-        if not all_lines:
-            return "🤖 暂无可用模型（所有 Provider 都未配置 API Key）。请先在 Web 端「设置-模型」中配置。"
-        # ponytail: 微信单条消息约 2KB 上限，模型超 30 个时截断提示，剩余在 Web 端查看；
-        # 个人部署一般 providers×models < 30，不会触发。
-        MAX_LINES = 30
-        if len(all_lines) > MAX_LINES:
-            shown = all_lines[:MAX_LINES]
-            shown.append(f"…共 {len(all_lines)} 个模型，仅显示前 {MAX_LINES} 个，其余请在 Web 端查看")
-            all_lines = shown
-        return (
-            f"🤖 可用模型（当前：{cur_model} @ {cur_name}）\n"
-            + "\n".join(all_lines)
-            + "\n💡 发送 /modal <序号> 切换模型"
-        )
-
-    def _switch_model(self, from_user: str, provider_id: str, model: str) -> str:
-        """切换当前微信用户的 agent 模型。
-
-        修改 agent 的配置（active_provider + model）→ 持久化到全局 config.json
-        （重启后保持）→ 重建 graph 使新模型立即生效。checkpointer 不变，
-        历史会话上下文保留。注意：config.json 是全局配置，Web 端重启后同样生效。
-        """
-        agent = self._ensure_agent()
-        # 保留原有 base_url / api_key，避免切换时把 provider 关键配置清空
-        prov = agent.config.providers.get(provider_id, {})
-        agent.config.update_provider(
-            provider_id,
-            model=model,
-            base_url=prov.get("base_url", ""),
-            api_key=prov.get("api_key", ""),
-        )
-        agent.config.save()
-        agent._rebuild_graph()
-        name = agent.config.providers[provider_id].get("name", provider_id)
-        return f"✅ 已切换到模型 {model}（{name}），后续对话生效"
 
     def _cancel_active_run(self) -> bool:
         """请求中断当前正在执行的 agent 任务（/stop 命令）。
@@ -1261,246 +442,11 @@ class WeChatBot:
             except Exception as e:
                 logger.warning("[微信Bot:%s] 会话迁移失败: %s", self.user_id, e)
 
-        # ── /new 命令：创建新会话 ──
-        if text.strip() == "/new":
-            logger.debug("[微信Bot:%s] 触发 /new 命令", self.user_id)
-            new_sid = uuid.uuid4().hex[:8]
-            current_pid = self._wechat_current_project.get(from_user, "")
-            session_store.create_session(
-                wechat_uid, title="新会话", session_id=new_sid,
-                project_id=current_pid or None,
-            )
-            self._wechat_sessions[from_user] = new_sid
-            # 会话列表已变化，序号映射失效
-            self._wechat_session_menu.pop(from_user, None)
-            scope = f"（项目 {current_pid[:8]}）" if current_pid else ""
-            await self.send_message(from_user, context_token, f"✅ 已创建新会话{scope}，可以开始新的对话了")
-            logger.info("[微信Bot:%s] 用户 %s 创建新会话 %s project=%s", self.user_id, from_user[:16], new_sid, current_pid)
+        # ── 命令处理（/new /list /switch /delete /projects /project /unproject
+        #   /sessions /modals /modal /stop /help）── 实现见 wechat_commands.py。
+        # 命令分支都不跑 agent、各自 send_message 后 return；返回 True 表示已处理。
+        if text.strip().startswith("/") and await self._handle_command(text, from_user, context_token, wechat_uid):
             return
-
-        # ── /list 命令：列出会话（带序号，供 /switch /delete 按序号操作）──
-        # 有当前项目时只列出该项目下的会话；无项目上下文时列出全部（原行为）
-        if text.strip() == "/list":
-            list_text = self._build_session_list_text(
-                wechat_uid, from_user,
-                project_id=self._wechat_current_project.get(from_user, ""),
-            )
-            await self.send_message(from_user, context_token, list_text)
-            return
-
-        # ── /switch 命令：切换会话（支持序号或原始 sessionId，限当前项目内）──
-        if text.strip().startswith("/switch "):
-            arg = text.strip()[len("/switch "):].strip()
-            if not arg:
-                await self.send_message(from_user, context_token, "❌ 请指定会话序号或 ID，格式：/switch &lt;序号|sessionId&gt;")
-                return
-            target_sid = _resolve_session_ref(
-                wechat_uid, arg, self._wechat_session_menu.get(from_user),
-                self._wechat_current_project.get(from_user, ""),
-            )
-            if target_sid is None:
-                await self.send_message(from_user, context_token, f"❌ 序号 {arg} 无效。发送 /list 查看可用会话。")
-                return
-            sess = session_store.get_session(wechat_uid, target_sid)
-            if not sess:
-                await self.send_message(from_user, context_token, f"❌ 会话 {target_sid} 不存在。发送 /list 查看可用会话。")
-                return
-            self._wechat_sessions[from_user] = target_sid
-            await self.send_message(from_user, context_token, f"✅ 已切换到会话 {target_sid}，可以继续对话了")
-            logger.info("[微信Bot:%s] 用户 %s 切换到会话 %s", self.user_id, from_user[:16], target_sid)
-            return
-
-        # ── /delete 命令：删除一个或多个历史会话（序号或 sessionId，空格分隔，限当前项目内）──
-        if text.strip().startswith("/delete "):
-            raw = text.strip()[len("/delete "):].strip()
-            if not raw:
-                await self.send_message(from_user, context_token, "❌ 请指定会话序号或 ID，格式：/delete &lt;序号|sessionId&gt; [&lt;...&gt;]")
-                return
-            tokens = raw.split()
-            current_pid = self._wechat_current_project.get(from_user, "")
-            deleted_sids: list[str] = []
-            invalid: list[str] = []   # 序号无效，无法解析
-            skipped: list[str] = []   # 解析到但不存在，跳过
-            failed: list[str] = []    # 删除失败
-            current_deleted = False
-            for tok in tokens:
-                sid = _resolve_session_ref(wechat_uid, tok, self._wechat_session_menu.get(from_user), current_pid)
-                if sid is None:
-                    invalid.append(tok)
-                    continue
-                sess = session_store.get_session(wechat_uid, sid)
-                if not sess:
-                    skipped.append(sid)
-                    continue
-                if not session_store.delete_session(wechat_uid, sid):
-                    failed.append(sid)
-                    continue
-                deleted_sids.append(sid)
-                # 若删除的是当前会话，清空映射，下一轮消息会重新创建默认会话
-                if self._wechat_sessions.get(from_user) == sid:
-                    self._wechat_sessions.pop(from_user, None)
-                    current_deleted = True
-            # 删除后列表已变，重新生成最新清单并刷新序号映射缓存
-            list_text = self._build_session_list_text(wechat_uid, from_user)
-            # 构造汇总回复
-            parts = [f"🗑️ 已删除 {len(deleted_sids)} 个会话"]
-            if deleted_sids:
-                parts.append("：" + "、".join(deleted_sids))
-            if invalid:
-                parts.append(f"\n⚠️ 无效序号已忽略：{', '.join(invalid)}")
-            if skipped:
-                parts.append(f"\n⚠️ 不存在已跳过：{', '.join(skipped)}")
-            if failed:
-                parts.append(f"\n❌ 删除失败：{', '.join(failed)}")
-            if current_deleted:
-                parts.append("\n（当前会话已删除，下一轮消息将自动重建默认会话）")
-            # 回显删除后的最新会话清单，便于用户确认与继续操作（序号映射已刷新）
-            parts.append("\n\n" + list_text)
-            await self.send_message(from_user, context_token, "".join(parts))
-            logger.info("[微信Bot:%s] 用户 %s 批量删除会话: 成功=%s 无效=%s 跳过=%s 失败=%s",
-                        self.user_id, from_user[:16], deleted_sids, invalid, skipped, failed)
-            return
-
-        # ── /projects 命令：列出所有项目 ──
-        if text.strip() == "/projects":
-            proj_text = self._build_project_list_text(wechat_uid, from_user)
-            await self.send_message(from_user, context_token, proj_text)
-            return
-
-        # ── /project 命令：切换到某项目（后续 /new 将归到该项目）──
-        if text.strip().startswith("/project "):
-            arg = text.strip()[len("/project "):].strip()
-            if not arg:
-                await self.send_message(from_user, context_token, "❌ 请指定项目序号或 ID，格式：/project &lt;序号|projectId&gt;")
-                return
-            target_pid = _resolve_project_ref(wechat_uid, arg, self._wechat_project_menu.get(from_user))
-            if target_pid is None:
-                await self.send_message(from_user, context_token, f"❌ 项目 {arg} 无效。发送 /projects 查看可用项目。")
-                return
-            proj = session_store.get_project(wechat_uid, target_pid)
-            if not proj:
-                await self.send_message(from_user, context_token, f"❌ 项目 {target_pid} 不存在。发送 /projects 查看可用项目。")
-                return
-            self._wechat_current_project[from_user] = target_pid
-            self._save_current_project()
-            # 项目上下文已变，会话序号映射失效
-            self._wechat_session_menu.pop(from_user, None)
-            await self.send_message(from_user, context_token, f"✅ 已切换到项目 {proj['name']} ({target_pid[:8]})，后续 /new 将归到该项目")
-            logger.info("[微信Bot:%s] 用户 %s 切换到项目 %s", self.user_id, from_user[:16], target_pid)
-            return
-
-        # ── /unproject 命令：取消当前项目绑定，回到未归属状态 ──
-        if text.strip() == "/unproject":
-            current = self._wechat_current_project.pop(from_user, None)
-            self._save_current_project()
-            self._wechat_session_menu.pop(from_user, None)
-            if current:
-                await self.send_message(from_user, context_token, "✅ 已取消项目绑定，后续 /new 将创建未归属会话")
-            else:
-                await self.send_message(from_user, context_token, "ℹ️ 当前未绑定任何项目")
-            return
-
-        # ── /sessions 命令：列出当前项目的会话（无项目时列出未归属会话）──
-        if text.strip() == "/sessions":
-            current_pid = self._wechat_current_project.get(from_user, "")
-            list_text = self._build_session_list_text(
-                wechat_uid, from_user,
-                project_id=current_pid if current_pid else "__unassigned__",
-            )
-            await self.send_message(from_user, context_token, list_text)
-            return
-
-        # ── /modals 命令：列出可用模型（仅已配置 API Key 的 Provider）──
-        if text.strip() == "/modals":
-            model_text = self._build_model_list_text(from_user)
-            await self.send_message(from_user, context_token, model_text)
-            return
-
-        # ── /modal 命令：切换模型（按 /modals 序号，或直接按模型名）──
-        if text.strip() == "/modal" or text.strip().startswith("/modal "):
-            arg = text.strip()[len("/modal "):].strip()
-            if not arg:
-                await self.send_message(
-                    from_user, context_token,
-                    "❌ 请指定模型序号或名称，格式：/modal <序号|模型名>（先发 /modals 查看可用模型）",
-                )
-                return
-            entry = None
-            if arg.isdigit():
-                entry = self._wechat_model_menu.get(from_user, {}).get(arg)
-                if entry is None:
-                    # 序号缓存可能过期（配置在 Web 端改过），重新构建列表再试一次
-                    self._build_model_list_text(from_user)
-                    entry = self._wechat_model_menu.get(from_user, {}).get(arg)
-                if entry is None:
-                    await self.send_message(
-                        from_user, context_token,
-                        f"❌ 序号 {arg} 无效。发送 /modals 查看最新可用模型。",
-                    )
-                    return
-            else:
-                # 按模型名匹配：精确优先，其次模糊；多个匹配时列出候选让用户用序号精确定位
-                cfg = self._ensure_agent().config
-                all_models = [
-                    (pid, m)
-                    for pid, prov in (cfg.providers or {}).items()
-                    for m in (prov or {}).get("models") or []
-                ]
-                exact = [e for e in all_models if e[1] == arg]
-                fuzzy = [e for e in all_models if arg in e[1]]
-                candidates = exact or fuzzy
-                if len(candidates) == 1:
-                    entry = candidates[0]
-                elif len(candidates) > 1:
-                    shown = ", ".join(f"{m}@{p}" for p, m in candidates[:5])
-                    await self.send_message(
-                        from_user, context_token,
-                        f"❌ 模型名 '{arg}' 匹配到多个：{shown}。请用 /modals 的序号切换。",
-                    )
-                    return
-                else:
-                    await self.send_message(
-                        from_user, context_token,
-                        f"❌ 未找到模型 '{arg}'。发送 /modals 查看可用模型。",
-                    )
-                    return
-            provider_id, model = entry
-            result = self._switch_model(from_user, provider_id, model)
-            await self.send_message(from_user, context_token, result)
-            logger.info("[微信Bot:%s] 用户 %s 切换模型 -> %s @ %s",
-                        self.user_id, from_user[:16], model, provider_id)
-            return
-
-        # ── /stop 命令：中断当前正在执行的 agent 请求 ──
-        if text.strip() == "/stop":
-            if self._cancel_active_run():
-                await self.send_message(from_user, context_token, "⏹️ 正在中断当前任务…")
-                logger.info("[微信Bot:%s] 用户 %s 发送 /stop，已请求中断当前任务",
-                            self.user_id, from_user[:16])
-            else:
-                await self.send_message(from_user, context_token, "ℹ️ 当前没有正在执行的任务")
-            return
-
-        # ── /help 命令：指令使用说明 ──
-        if text.strip() == "/help":
-            help_text = (
-                "📖 指令帮助\n"
-                "/projects — 列出所有项目\n"
-                "/project <序号|ID> — 切换项目\n"
-                "/unproject — 取消项目绑定\n"
-                "/list — 列出当前项目下的会话\n"
-                "/sessions — 列出会话（无项目时显示未归属）\n"
-                "/new — 创建新会话\n"
-                "/switch <序号|ID> — 切换会话\n"
-                "/delete <序号|ID> … — 删除会话\n"
-                "/modals — 列出可用模型\n"
-                "/modal <序号|模型名> — 切换模型\n"
-                "/stop — 中断当前正在执行的任务\n"
-                "/help — 显示本帮助"
-            )
-            await self.send_message(from_user, context_token, help_text)
-            return
-
         # ── 会话管理 ──
         # 用户发起了真正的对话，会话列表可能已变化，序号映射失效
         self._wechat_session_menu.pop(from_user, None)
@@ -1714,66 +660,75 @@ class WeChatBot:
                 short = text[:30] + ("..." if len(text) > 30 else "")
                 session_store.rename_session(wechat_uid, session_id, short)
 
-        # 发送回复（含图片检测 + 图片/文本分开发送）
-        if reply:
-            # 检查回复中是否包含浏览器截图引用 ![截图](/api/screenshot?token=xxx)
-            import re
-            screenshot_urls = re.findall(
-                r'!\[([^\]]*)\]\(/api/screenshot\?token=([^)]+)\)',
-                reply,
-            )
-            # 同时检查是否包含工作区内的直接图片路径
-            image_paths = re.findall(
-                r'(/[^\s]+\.(?:png|jpg|jpeg|gif|webp))',
-                reply,
-            )
+        # 发送回复（含图片检测 + 图片/文本分开发送 + 频控冷却感知）
+        await self._send_final_reply(from_user, context_token, reply)
 
-            # 如果有截图引用，下载并发送图片，剩余文本作为文字发送
-            sent_image = False
-            text_reply = reply
+    async def _send_final_reply(self, from_user: str, context_token: str, reply: str) -> None:
+        """发送最终回复（图片 + 文本），失败转入后台补发队列。
 
-            if screenshot_urls:
-                # 从 agent workspace 查找截图文件
-                ws = Path(self._ensure_agent().config.workspace)
-                for alt_text, token in screenshot_urls:
-                    try:
-                        if ws:
-                            img_path = ws / ".browser_screenshots" / f"{token}.png"
-                            if img_path.exists():
-                                send_resp = await self.send_image(
-                                    from_user, context_token, str(img_path),
+        2026-08-03 事故链：最终回复发送失败 → 入补发队列 → 补发/step 每次都在
+        微信频控窗口（实测 ≤12 分钟，prepare failed 每次失败都刷新窗口）内撞上，
+        窗口被不断刷新 → 45 分钟不解除 → 7 轮补发耗尽后放弃、回复永久丢失。
+        因此这里与 step 消息一致：**频控冷却中绝不发送**，冷却中直接入队、
+        等冷却结束由 _retry_loop 再发，避免冷却中强发刷新微信侧窗口、把频控拉得更长。
+        """
+        if not reply:
+            return
+        import re
+        screenshot_urls = re.findall(
+            r'!\[([^\]]*)\]\(/api/screenshot\?token=([^)]+)\)',
+            reply,
+        )
+
+        # 有截图引用：下载并发送图片，剩余文本作为文字发送
+        sent_image = False
+        text_reply = reply
+        if screenshot_urls:
+            # 从 agent workspace 查找截图文件
+            ws = Path(self._ensure_agent().config.workspace)
+            for alt_text, token in screenshot_urls:
+                try:
+                    if ws:
+                        img_path = ws / ".browser_screenshots" / f"{token}.png"
+                        if img_path.exists():
+                            send_resp = await self.send_image(
+                                from_user, context_token, str(img_path),
+                            )
+                            if send_resp.get("ret", -1) == 0:
+                                sent_image = True
+                                # 从文本中去掉已发送图片的 markdown
+                                text_reply = text_reply.replace(
+                                    f"![{alt_text}](/api/screenshot?token={token})", "",
                                 )
-                                if send_resp.get("ret", -1) == 0:
-                                    sent_image = True
-                                    # 从文本中去掉已发送图片的 markdown
-                                    text_reply = text_reply.replace(
-                                        f"![{alt_text}](/api/screenshot?token={token})", "",
-                                    )
-                                else:
-                                    # 图片发送失败，保留引用
-                                    pass
-                    except Exception as e:
-                        logger.warning("[微信Bot:%s] 发送截图失败: %s", self.user_id, e)
+                            # 图片发送失败：保留引用（文本里会带 URL，聊胜于无）
+                except Exception as e:
+                    logger.warning("[微信Bot:%s] 发送截图失败: %s", self.user_id, e)
 
-            # 发送剩余的文本（去掉图片引用后的纯净文本）
-            # 最终回复：不立即重试（max_retries=0），失败直接入补发队列。
-            # 理由（2026-08-03 事故）：立即重试 3 次（3s/6s/12s）在频控窗口内等于
-            # 持续踩频控，每次失败又把 _rate_limited_until 往后推（阶梯递增 60s→300s），反而拉长冷却；
-            # 正确做法是失败后交给 _retry_loop——它会等冷却结束再发，不刷新冷却窗口。
-            clean_text = re.sub(r'\n{3,}', '\n\n', text_reply).strip()
-            if clean_text:
-                await self._throttle_send()
-                send_resp = await self.send_message(from_user, context_token, clean_text, max_retries=0)
-                send_ret = send_resp.get("ret", -1)
-                send_msg_id = send_resp.get("message_id", "")
-                if send_ret != 0:
-                    logger.warning("[微信Bot:%s] 最终回复发送失败，转入后台补发: resp=%s",
-                                   self.user_id, json.dumps(send_resp, ensure_ascii=False)[:300])
-                    self._schedule_retry(from_user, context_token, clean_text)
-                else:
-                    logger.info("[微信Bot:%s] 回复: message_id=%s text=%s", self.user_id, send_msg_id, clean_text[:120])
-            elif sent_image:
+        # 发送剩余的文本（去掉图片引用后的纯净文本）
+        # 最终回复：不立即重试（max_retries=0），失败直接入补发队列。
+        clean_text = re.sub(r'\n{3,}', '\n\n', text_reply).strip()
+        if not clean_text:
+            if sent_image:
                 logger.info("[微信Bot:%s] 回复仅为图片，已发送", self.user_id)
+            return
+
+        # 频控冷却中（2026-08-03 事故：冷却中强发会刷新微信侧窗口，延长频控）：
+        # 不撞、直接入补发队列，由 _retry_loop 在冷却结束后发送。
+        if time.time() < self._rate_limited_until:
+            logger.info("[微信Bot:%s] 最终回复在频控冷却中，直接入补发队列（剩余 %.0fs）",
+                        self.user_id, self._rate_limited_until - time.time())
+            self._schedule_retry(from_user, context_token, clean_text)
+            return
+
+        await self._throttle_send()
+        send_resp = await self.send_message(from_user, context_token, clean_text, max_retries=0)
+        if send_resp.get("ret", -1) != 0:
+            logger.warning("[微信Bot:%s] 最终回复发送失败，转入后台补发: resp=%s",
+                           self.user_id, json.dumps(send_resp, ensure_ascii=False)[:300])
+            self._schedule_retry(from_user, context_token, clean_text)
+        else:
+            logger.info("[微信Bot:%s] 回复: message_id=%s text=%s",
+                        self.user_id, send_resp.get("message_id", ""), clean_text[:120])
 
     # ── 生命周期 ──────────────────────────────────
 

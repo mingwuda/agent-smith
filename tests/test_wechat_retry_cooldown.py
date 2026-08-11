@@ -74,8 +74,12 @@ def _patch_clock(monkeypatch, clock: _FakeClock):
     monkeypatch.setattr(wb.asyncio, "sleep", fake_sleep)
 
 
-def test_cooldown_waits_before_send_and_gives_up_after_7(monkeypatch):
-    """冷却中绝不发送；每次冷却结束后只试 1 次；7 轮全失败后放弃、队列清空。"""
+def test_cooldown_waits_before_send_and_gives_up_after_15(monkeypatch):
+    """冷却中绝不发送；每次冷却结束后只试 1 次；15 轮全失败后放弃、队列清空。
+
+    轮数=BACKOFF 长度（15，2026-08-03 事故后加长：微信频控窗口 ≤12 分钟且
+    失败会刷新窗口，旧 7 轮 300s 封顶仍在窗口内，45 分钟补发全失败）。
+    """
     clock = _FakeClock()
     _patch_clock(monkeypatch, clock)
 
@@ -95,8 +99,8 @@ def test_cooldown_waits_before_send_and_gives_up_after_7(monkeypatch):
     bot.send_message = fake_send
     asyncio.run(bot._retry_loop())
 
-    # 7 轮 BACKOFF 全失败后放弃
-    assert len(send_calls) == 7, f"应在每次冷却结束后各试 1 次，实际 {len(send_calls)} 次"
+    # 15 轮 BACKOFF 全失败后放弃
+    assert len(send_calls) == 15, f"应在每次冷却结束后各试 1 次，实际 {len(send_calls)} 次"
     # 每次都是"失败不立即重试"（max_retries=0）
     assert all(mr == 0 for mr, _ in send_calls), send_calls
     # 相邻两次发送间隔 ≥ 60s 冷却窗口（冷却中绝无发送）
@@ -104,7 +108,7 @@ def test_cooldown_waits_before_send_and_gives_up_after_7(monkeypatch):
         gap = send_calls[i + 1][1] - send_calls[i][1]
         assert gap >= 60.0, f"第 {i}->{i + 1} 次发送间隔 {gap:.1f}s，应 ≥ 冷却 60s"
     # 总窗口覆盖远超旧 405s（7 轮 × 60s 冷却）
-    assert send_calls[-1][1] - _CLOCK_START >= 7 * 60
+    assert send_calls[-1][1] - _CLOCK_START >= 15 * 60
     # 放弃后队列清空
     assert not bot._retry_queue
 
@@ -165,10 +169,11 @@ def test_recovery_from_disk_respects_persisted_state(monkeypatch, tmp_path):
 
 
 def test_send_message_cooldown_escalates_stepwise(monkeypatch):
-    """send_message 频控冷却阶梯递增：60s 起步、每失败 +60s、封顶 300s，成功清零。
+    """send_message 频控冷却阶梯递增：60s 起步、每失败 +60s、封顶 900s，成功清零。
 
-    回归（2026-08-03）：冷却曾是固定 60s，连续失败时被反复撞穿；也讨论过直接
-    300s，但频控可能是短时抖动、一上来就 5 分钟过度惩罚。改为连续失败阶梯递增。
+    回归（2026-08-03）：冷却曾是固定 60s，连续失败时被反复撞穿；也曾讨论过直接
+    300s，但频控可能是短时抖动、一上来就 5 分钟过度惩罚。改为连续失败阶梯递增，
+    封顶 900s（15 分钟，> 实测微信频控窗口 ≤12 分钟，见 test_cooldown_caps_at_900）。
     """
     from types import SimpleNamespace
 
@@ -214,3 +219,100 @@ def test_send_message_cooldown_escalates_stepwise(monkeypatch):
     assert resp["ret"] == 0 and resp["message_id"] == "m-ok"
     assert bot._rate_limit_strikes == 0
     assert bot._rate_limited_until == 0.0
+
+
+def test_send_message_cooldown_caps_at_900(monkeypatch):
+    """连续失败冷却阶梯递增到 900s 后封顶，不再无限拉长。
+
+    2026-08-03 事故根因之一：旧封顶 300s（5 分钟）< 实测微信频控窗口（≤12 分钟，
+    且每次失败刷新窗口），补发 45 分钟全失败。900s（15 分钟）> 窗口，保证
+    补发间隔能"撞不中窗口"、让频控自然过期。
+    """
+    from types import SimpleNamespace
+
+    clock = _FakeClock()
+    monkeypatch.setattr(wb.time, "time", clock.now)
+
+    bot = object.__new__(WeChatBot)
+    bot.bot_base_url = "http://fake"
+    bot._auth_headers = lambda: {}
+    bot._rate_limited_until = 0.0
+    bot._rate_limit_strikes = 0
+    bot._parse_sendmessage_response = Mock(side_effect=lambda *a, **k: {
+        "ret": -2, "message_id": "", "detail": {"errmsg": "prepare failed"}})
+
+    fake_client = AsyncMock()
+    fake_client.post.return_value = SimpleNamespace(status_code=200, text="{}")
+    fake_client.__aenter__.return_value = fake_client
+    fake_client.__aexit__.return_value = False
+    monkeypatch.setattr(wb.httpx, "AsyncClient", Mock(return_value=fake_client))
+
+    async def run():
+        for _ in range(15):
+            await bot.send_message("u1", "tok", "hi", max_retries=0)
+
+    asyncio.run(run())
+
+    # 15 次失败：60 → 120 → ... → 840 → 900（第 15 次封顶）
+    assert bot._rate_limit_strikes == 15
+    expected_caps = [60 * i for i in range(1, 16)]
+    got = bot._rate_limited_until - clock.now()
+    assert abs(got - 900) < 1e-6, f"第 15 次失败后冷却应为 900s，实际 {got:.1f}s"
+    assert expected_caps[-1] == 900
+    # 再失败一次仍封顶 900，不无限拉长
+    asyncio.run(run())
+    got2 = bot._rate_limited_until - clock.now()
+    assert abs(got2 - 900) < 1e-6, f"封顶后冷却仍应为 900s，实际 {got2:.1f}s"
+
+
+def test_final_reply_deferred_during_cooldown(monkeypatch):
+    """最终回复在频控冷却中：不发送、直接入补发队列（2026-08-03 事故修复）。
+
+    事故：18:54:46 最终回复在冷却窗口内强发（_rate_limited_until 尚未过期），
+    撞上 prepare failed 刷新微信侧窗口，频控被拉长到 45 分钟。
+    修复后：冷却中一律不发，交给 _retry_loop 等冷却结束再补发。
+    """
+    from unittest.mock import AsyncMock as _AM, Mock as _M
+
+    clock = _FakeClock()
+    monkeypatch.setattr(wb.time, "time", clock.now)
+
+    bot = object.__new__(WeChatBot)
+    bot.user_id = "test"
+    bot._rate_limited_until = clock.now() + 120.0  # 仍在冷却中
+    bot._schedule_retry = _M()
+    bot._throttle_send = _AM()
+    bot.send_message = _AM(return_value={"ret": 0, "message_id": "m-x"})
+
+    asyncio.run(bot._send_final_reply("u1", "tok", "你好，这是最终回复"))
+
+    # 冷却中：不调用 send_message，直接入队
+    bot.send_message.assert_not_awaited()
+    bot._schedule_retry.assert_called_once()
+    assert bot._schedule_retry.call_args[0][2] == "你好，这是最终回复"
+
+
+def test_final_reply_sends_when_not_in_cooldown(monkeypatch):
+    """最终回复不在冷却中：正常发送；失败才入补发队列。"""
+    from unittest.mock import AsyncMock as _AM, Mock as _M
+
+    clock = _FakeClock()
+    monkeypatch.setattr(wb.time, "time", clock.now)
+
+    bot = object.__new__(WeChatBot)
+    bot.user_id = "test"
+    bot._rate_limited_until = 0.0  # 无冷却
+    bot._schedule_retry = _M()
+    bot._throttle_send = _AM()
+    bot.send_message = _AM(return_value={"ret": 0, "message_id": "m-ok"})
+
+    asyncio.run(bot._send_final_reply("u1", "tok", "正常回复"))
+
+    bot.send_message.assert_awaited_once()
+    assert bot.send_message.call_args[0][0:3] == ("u1", "tok", "正常回复")
+    bot._schedule_retry.assert_not_called()
+
+    # 发送失败 → 入队
+    bot.send_message = _AM(return_value={"ret": -1, "detail": {"ret": -2}})
+    asyncio.run(bot._send_final_reply("u1", "tok", "失败回复"))
+    bot._schedule_retry.assert_called_once()

@@ -318,6 +318,24 @@
   .seg.collapsed > .seg-body { display: none; }
   .seg-title { font-size: 13px; font-weight: 500; color: #333; }
   .seg-time-summary { padding: 8px 14px 10px; font-size: 12px; color: #888; }
+  /* 第一段「工作耗时」展开区底部的收起按钮：看完所有 step 后无需翻回顶部，底部一键收起 */
+  .seg-collapse-bar {
+    display: flex; justify-content: center; align-items: center;
+    padding: 10px 0 14px;
+  }
+  .seg-collapse-btn {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 4px 14px;
+    border: 1px solid #dcdce0; border-radius: 999px;
+    background: #fff;
+    color: #666;
+    font-size: 12px; line-height: 1.5;
+    cursor: pointer; user-select: none;
+    box-shadow: 0 1px 4px rgba(0,0,0,.08);
+    transition: background .15s, color .15s, border-color .15s;
+  }
+  .seg-collapse-btn:hover { background: #f0f0f3; color: #333; border-color: #c9c9cf; }
+  .seg-collapse-arrow { font-size: 10px; }
   /* 第一段：完整 step 历史（步骤块自带内边距） */
   .seg-history { padding: 2px 0 8px; }
   /* 第二段：仅承载「最新一个 step」；空时收起避免占位 */

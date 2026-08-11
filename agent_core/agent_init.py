@@ -55,6 +55,7 @@ class AgentInitMixin:
         self._ctx_token_sizes: dict[str, int] = {}  # run_id(12位) -> 真实上下文 token 估算，用于 LLM_END 对比网关虚高
         self._agents_md_cache = ""
         self._agents_md_mtime = 0.0
+        self._agents_md_path = ""  # 当前缓存的 AGENTS.md 路径（工作区切换时失效）
 
 
     def set_user(self, user_id: str):
@@ -213,18 +214,25 @@ class AgentInitMixin:
             + "- 遇到\u201c今天/昨日/今年/最新/current/latest/recent\u201d等相对时间时，必须以这里的日期为准。\n"
         )
 
-        # ── 注入项目根目录的 AGENTS.md（如果存在，带缓存）──
+        # ── 注入当前工作区目录下的 AGENTS.md（仅当工作区恰为项目仓库/目录时注入，带缓存）──
+        # 原实现固定注入本仓库根的 AGENTS.md，导致普通会话（如微信日常问答）也背上
+        # ponytail 开发规范（~2.8KB）。改为按当前工作区查找：只有工作区目录下存在
+        # AGENTS.md（即用户正在操作该仓库）才注入，其余会话不再携带，节省每轮 token。
         try:
-            agents_md_path = Path(__file__).resolve().parent.parent / "AGENTS.md"
-            if agents_md_path.exists():
+            agents_md_path = Path(ws) / "AGENTS.md"
+            if agents_md_path.exists() and agents_md_path.is_file():
+                key = str(agents_md_path)
                 mtime = agents_md_path.stat().st_mtime
-                if self._agents_md_cache and self._agents_md_mtime == mtime:
+                if (self._agents_md_path == key
+                        and self._agents_md_cache
+                        and self._agents_md_mtime == mtime):
                     agents_content = self._agents_md_cache
                 else:
                     agents_content = agents_md_path.read_text(encoding="utf-8").strip()
                     if agents_content:
                         self._agents_md_cache = agents_content
                         self._agents_md_mtime = mtime
+                        self._agents_md_path = key
                 if agents_content:
                     prompt += "\n\n" + agents_content
         except Exception:
