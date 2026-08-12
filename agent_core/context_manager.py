@@ -1,8 +1,9 @@
 """Context budgeting and compaction helpers for long-running agent sessions."""
 from __future__ import annotations
 
+import hashlib
 import logging
-from typing import Iterable
+from typing import Iterable, Optional
 
 from langchain_core.messages import (
     AIMessage,
@@ -250,8 +251,31 @@ def _summarize_medium(entries: list, round_of: list[int]) -> str:
     return "\n".join(lines)
 
 
-def _summarize_old(entries: list, round_of: list[int]) -> str:
-    # P2: 仅保留用户关键指令，丢弃工具结果与助手回复
+def _archive_user_instruction(memory, content: str) -> str:
+    """把用户指令归档进长期记忆（SQLite FTS 可检索），返回摘要行文本。
+
+    - key 由内容 sha1 决定 → 同一指令只归档一次，反复压缩不产生重复记忆；
+    - 已归档 → 只写 `[见记忆: key]` 引用 + 60 字预览（帮助模型判断是否值得
+      recall_memory 召回全文），不重复写入；
+    - memory 为 None（纯函数/测试模式）→ 保持原裁剪行为，不写记忆。
+
+    ponytail: 记忆写入失败绝不阻断压缩——任何异常回退为裁剪预览。
+    """
+    preview = _clip_middle(content, 60)
+    if memory is None:
+        return preview
+    try:
+        key = "_ctx_old_" + hashlib.sha1(content.encode("utf-8")).hexdigest()[:16]
+        if memory.get(key) is None:
+            memory.set(key, content)
+        return f"[见记忆: {key}] {preview}"
+    except Exception:
+        return preview
+
+
+def _summarize_old(entries: list, round_of: list[int], memory=None) -> str:
+    # P2: 仅保留用户关键指令，丢弃工具结果与助手回复；
+    #     提供 memory 时每条指令归档进长期记忆，摘要行改为 [见记忆: key] 引用。
     seen = set()
     users = []
     for (g, start) in entries:
@@ -265,20 +289,20 @@ def _summarize_old(entries: list, round_of: list[int]) -> str:
             content = _squash(content)
             if content and content not in seen:
                 seen.add(content)
-                users.append(f"用户(第{r}轮): {_clip_middle(content, 120)}")
+                users.append(f"用户(第{r}轮): {_archive_user_instruction(memory, content)}")
     if not users:
         return ""
     lo = _group_round(entries[0], round_of)
     hi = _group_round(entries[-1], round_of)
-    return f"【早期摘要 - 仅关键指令（已丢弃工具结果/助手回复）- 第 {lo}~{hi} 轮】\n" + "\n".join(users)
+    return f"【早期摘要 - 已归档用户指令（详见长期记忆，可用 recall_memory 召回）- 第 {lo}~{hi} 轮】\n" + "\n".join(users)
 
 
-def _build_summary(medium_entries: list, old_entries: list, round_of: list[int], model: str) -> str:
+def _build_summary(medium_entries: list, old_entries: list, round_of: list[int], model: str, memory=None) -> str:
     parts = []
     if medium_entries:
         parts.append(_summarize_medium(medium_entries, round_of))
     if old_entries:
-        old_txt = _summarize_old(old_entries, round_of)
+        old_txt = _summarize_old(old_entries, round_of, memory)
         if old_txt:
             parts.append(old_txt)
     text = "\n\n".join(parts)
@@ -287,12 +311,14 @@ def _build_summary(medium_entries: list, old_entries: list, round_of: list[int],
     return text
 
 
-def compact_messages(messages: list[BaseMessage], model: str, configured_window: int = 0) -> list[BaseMessage]:
+def compact_messages(messages: list[BaseMessage], model: str, configured_window: int = 0, memory=None) -> list[BaseMessage]:
     """分层上下文压缩：
     - P0: system 消息永远保留，不参与压缩。
     - P1: 最近轮 verbatim，按 token 预算（阈值×50%）从最新向前累加（以工具组为原子单位）。
     - P2: 旧段再分 medium（每条精简至约 100 字摘要）/ old（仅保留用户关键指令）。
     - P3: 摘要按「用户/助手 + 轮次号」结构化呈现，保留时序。
+    - memory: 可选。传入 LocalMemory 实例时，old 段用户指令归档进长期记忆，
+      摘要行写 [见记忆: key] 引用（详见 _archive_user_instruction）。None 时行为不变。
     - 防抖动：若压缩后总 token 仍接近阈值，把最近轮里最老的整组降级为 old 段（仅留用户指令），
       保证总 token 单调下降、不会下一轮立刻再压；整组移动，工具链始终完整。
     """
@@ -329,10 +355,30 @@ def compact_messages(messages: list[BaseMessage], model: str, configured_window:
         recent = [m for g in recent_groups for m in g[0]]
         all_older = older_groups + demoted
         medium_entries, old_entries = _split_medium_old(all_older, threshold, model)
-        summary_text = _build_summary(medium_entries, old_entries, round_of, model)
+        summary_text = _build_summary(medium_entries, old_entries, round_of, model, memory)
         result = [*system_msgs, *([AIMessage(content=summary_text)] if summary_text else []), *recent]
         if (estimate_messages_tokens(result, model) <= threshold * 0.9
                 or len(recent_groups) <= 1 or guard >= len(recent_groups)):
+            # 底线保护：压缩结果必须保留「可继续」的最小上下文。
+            # 摘要为空 且 最近轮无任何 human 消息时（recent 可能只剩残缺工具块，随后还会
+            # 被 _drop_dangling_tool_call_messages 整块丢弃），从 old 段回捞最近一条含
+            # human 的组原样保留，避免压缩后无历史、用户说"继续"时 agent 失去指代。
+            if (not summary_text
+                    and not any(isinstance(m, HumanMessage) for m in recent)
+                    and all_older):
+                for gi in range(len(all_older) - 1, -1, -1):
+                    if any(isinstance(m, HumanMessage) for m in all_older[gi][0]):
+                        anchor = all_older.pop(gi)
+                        recent_groups.insert(0, anchor)
+                        recent = [m for g in recent_groups for m in g[0]]
+                        medium_entries, old_entries = _split_medium_old(all_older, threshold, model)
+                        summary_text = _build_summary(medium_entries, old_entries, round_of, model, memory)
+                        result = [*system_msgs, *([AIMessage(content=summary_text)] if summary_text else []), *recent]
+                        logger.info(
+                            "[Context] 底线保护: 摘要为空且最近轮无 human，回捞第 %d 轮原样保留",
+                            _group_round(anchor, round_of),
+                        )
+                        break
             after_tok = estimate_messages_tokens(result, model)
             recent_cnt = sum(len(g[0]) for g in recent_groups)
             logger.info(

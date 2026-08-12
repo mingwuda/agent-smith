@@ -28,7 +28,7 @@ from context_manager import (
     should_compact,
 )
 from logger import get_logger
-from memory.local_memory import set_current_user
+from memory.local_memory import get_memory, set_current_user
 from monitoring.usage_tracker import get_tracker, UsageTracker
 from network_resolver import configure_host_resolution
 from skills.registry import get_registry, SkillRegistry
@@ -41,7 +41,7 @@ from agent_helpers import (
     _human_content, _is_recursion_limit_error, _extract_reasoning, _message_text,
     _model_supports_vision, _normalize_messages, _recursion_limit_message, _retry_notifications_ctx,
     _sse, _strip_image_content_from_messages, _strip_think_tags, _synthesize_guard_summary,
-    _synthetic_ocr_sse_steps,
+    _synthetic_ocr_sse_steps, _split_inflight_tail,
     _tool_signature, _truncate, _ensure_no_image_for_non_vision,
 )
 from loop_guard import _detect_tool_loop  # 原版 agent.py:169 的文件中间导入,拆分时需显式补回
@@ -69,16 +69,74 @@ class AgentRunMixin:
             else:
                 return
         before = estimate_messages_tokens(messages)
-        compacted = compact_messages(messages, self.config.model, self.config.context_window_tokens)
+        compacted = compact_messages(messages, self.config.model, self.config.context_window_tokens, memory=get_memory(self._user_id))
         # 兜底：压缩切片仍可能在边界残留悬空/孤儿 tool 消息，写回前统一自净，
         # 保证喂给 graph 的历史永远满足 tool_call ↔ ToolMessage 配对（避免 INVALID_CHAT_HISTORY）。
         compacted, _ = _drop_dangling_tool_call_messages(compacted)
+        # 兜底：压缩结果若不含任何对话消息（理论极端：摘要为空 + 最近轮残缺工具块被
+        # dropper 清空），放弃本次压缩、保留原历史——宁可上下文大一点，也不让用户
+        # 说"继续"时 agent 失去指代。
+        if not any(not isinstance(m, SystemMessage) for m in compacted):
+            logger.warning(
+                "[压缩] 压缩后无任何对话历史（%d 条全被摘要/清理），放弃压缩，保留原 %d 条消息",
+                len(compacted), len(messages),
+            )
+            return
         await self._graph.aupdate_state(run_config, {"messages": checkpoint_replacement(compacted)})
         after = estimate_messages_tokens(compacted)
         logger.info(
             "🧹 上下文已压缩: %d -> %d messages, ~%d -> ~%d tokens, threshold=%d",
             len(messages), len(compacted), before, after,
             compaction_threshold_tokens(self.config.model, self.config.context_window_tokens),
+        )
+
+    async def _compact_checkpoint_before_tool(self, run_config: dict):
+        """工具执行前按需压缩（用户需求：工具链中达到阈值即压缩，不等下次 LLM 调用）。
+
+        与 `_compact_checkpoint_if_needed`（LLM 调用前压缩）的区别：
+        - 触发点更早：工具刚启动就检查，长工具链（连续多轮 read_file/run_shell 等）
+          期间上下文滚雪球时，压缩提前介入，而不是等工具链结束、下次 LLM 调用前才压。
+        - 保护在飞工具：压缩前先 `_split_inflight_tail` 切出「当前正在执行的
+          AI(tool_calls) 尾块」，只压缩 head。否则该块因缺少响应 ToolMessage 会被
+          判残缺整块丢弃，正在执行的工具调用凭空消失（当前工具结果仍会写入，
+          反而变成孤儿 ToolMessage）。tail 原样拼回，不动。
+        - 未超阈值只做轻量读取（aget_state + 估算），不写 checkpoint。
+        """
+        if not self._graph:
+            return
+        try:
+            snapshot = await self._graph.aget_state(run_config)
+        except Exception:
+            return
+        values = getattr(snapshot, "values", {}) or {}
+        messages = list(values.get("messages") or [])
+        if not messages:
+            return
+        head, tail = _split_inflight_tail(messages)
+        if not head:
+            return
+        # 硬上限同 LLM 前压缩：token 超阈值 或 消息数 > 50 才真正压缩
+        if not should_compact(head, self.config.model, self.config.context_window_tokens):
+            if len(head) <= 50:
+                return
+        before = estimate_messages_tokens(head)
+        compacted = compact_messages(head, self.config.model, self.config.context_window_tokens, memory=get_memory(self._user_id))
+        compacted, _ = _drop_dangling_tool_call_messages(compacted)
+        if not compacted:
+            return
+        # 兜底同 LLM 前压缩：结果无任何对话消息则放弃写回（保留原历史 + 在飞尾块）
+        if not any(not isinstance(m, SystemMessage) for m in compacted):
+            logger.warning(
+                "[压缩] 工具前压缩结果无任何对话历史，放弃压缩，保留原历史",
+            )
+            return
+        await self._graph.aupdate_state(run_config, {"messages": checkpoint_replacement([*compacted, *tail])})
+        after = estimate_messages_tokens(compacted)
+        logger.info(
+            "🧹 工具前压缩: %d -> %d messages, ~%d -> ~%d tokens (阈值 %d), 在飞工具尾块 %d 条已保留",
+            len(head), len(compacted), before, after,
+            compaction_threshold_tokens(self.config.model, self.config.context_window_tokens),
+            len(tail),
         )
 
 
@@ -185,7 +243,7 @@ class AgentRunMixin:
         await self._repair_checkpoint_tool_history(config, graph)
         await self._strip_checkpoint_images(config, graph)
         if thread_key not in self._hydrated_threads:
-            input_messages = compact_history_messages(session_messages_to_langchain(history or [], ocr_fallback=not _model_supports_vision(self.config)), self.config)
+            input_messages = compact_history_messages(session_messages_to_langchain(history or [], ocr_fallback=not _model_supports_vision(self.config)), self.config, memory=get_memory(self._user_id))
         ocr_sink: list = []
         current_content = _human_content(message, attachments, ocr_fallback=not _model_supports_vision(self.config), ocr_sink=ocr_sink)
         input_messages.append(HumanMessage(content=current_content))
@@ -403,7 +461,7 @@ class AgentRunMixin:
         await self._strip_checkpoint_images(run_config, graph)
         ocr_sink: list = []
         if thread_key not in self._hydrated_threads:
-            input_messages = compact_history_messages(session_messages_to_langchain(history or [], ocr_fallback=not _model_supports_vision(self.config)), self.config)
+            input_messages = compact_history_messages(session_messages_to_langchain(history or [], ocr_fallback=not _model_supports_vision(self.config)), self.config, memory=get_memory(self._user_id))
         input_messages.append(HumanMessage(content=_human_content(message, attachments, ocr_fallback=not _model_supports_vision(self.config), ocr_sink=ocr_sink)))
         # 兜底：模型不支持视觉时，清除任何残留 image_url（防御未来新路径漏图）
         input_messages = _ensure_no_image_for_non_vision(input_messages, self.config)
@@ -743,7 +801,17 @@ class AgentRunMixin:
                             _done_yielded = True
                             yield _sse(done_data)
                             break
-                    
+
+                    # 工具执行前按需压缩（在飞工具尾块受保护）。与 LLM 前压缩互补：
+                    # 长工具链（连续多轮 read_file/run_shell 等）期间提前介入，
+                    # 避免上下文滚雪球到下次 LLM 调用才压。失败不中断工具执行。
+                    # TODO(ponytail): 当前在 SSE 流内调用 aupdate_state 会导致连接中断，
+                    # 先回退到仅 LLM 前压缩；后续改为工具结束后压缩或异步后台压缩。
+                    # try:
+                    #     await self._compact_checkpoint_before_tool(run_config)
+                    # except Exception as exc:
+                    #     logger.warning("[压缩] 工具前压缩失败（已忽略，不影响工具执行）: %s", exc)
+
                     started_at = time.time()
                     last_model_activity_at = time.time()
                     running_tools[run_id] = {

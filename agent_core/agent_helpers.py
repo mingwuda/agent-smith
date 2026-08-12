@@ -33,7 +33,7 @@ from memory.local_memory import set_current_user
 from monitoring.usage_tracker import get_tracker, UsageTracker
 from network_resolver import configure_host_resolution
 from skills.registry import get_registry, SkillRegistry
-__all__ = ['logger', '_extract_tool_name', '_extract_tool_args', '_truncate', '_sse', '_tool_signature', '_tool_call_label', '_loop_guard_message', '_SCENE_PROMPTS', '_detect_scene', '_get_nested', '_extract_usage_tokens', '_message_text', '_normalize_messages', '_dump_context_profile', '_is_recursion_limit_error', '_recursion_limit_message', '_synthesize_guard_summary', '_connection_diagnostic', '_human_content', '_synthetic_ocr_sse_steps', '_SCREENSHOT_URL_RE', '_strip_screenshot_urls_from_text', '_strip_image_content_from_message', '_strip_image_content_from_messages', '_tool_call_ids', '_tool_message_id', '_drop_dangling_tool_call_messages', '_recent_round_user_indexes', 'session_messages_to_langchain', 'compact_history_messages', '_extract_steps_from_messages', '_truncate_args', '_on_llm_idle_retry', '_astream_with_idle_timeout', 'RetryableLLM']
+__all__ = ['logger', '_extract_tool_name', '_extract_tool_args', '_truncate', '_sse', '_tool_signature', '_tool_call_label', '_loop_guard_message', '_SCENE_PROMPTS', '_detect_scene', '_get_nested', '_extract_usage_tokens', '_message_text', '_normalize_messages', '_dump_context_profile', '_is_recursion_limit_error', '_recursion_limit_message', '_synthesize_guard_summary', '_connection_diagnostic', '_human_content', '_synthetic_ocr_sse_steps', '_SCREENSHOT_URL_RE', '_strip_screenshot_urls_from_text', '_strip_image_content_from_message', '_strip_image_content_from_messages', '_tool_call_ids', '_tool_message_id', '_drop_dangling_tool_call_messages', '_split_inflight_tail', '_recent_round_user_indexes', 'session_messages_to_langchain', 'compact_history_messages', '_extract_steps_from_messages', '_truncate_args', '_on_llm_idle_retry', '_astream_with_idle_timeout', 'RetryableLLM']
 
 
 """桌面 AI 智能体核心"""
@@ -722,6 +722,25 @@ def _drop_dangling_tool_call_messages(messages: list) -> tuple[list, bool]:
     return result, changed
 
 
+def _split_inflight_tail(messages: list) -> tuple[list, list]:
+    """把消息切成 [可压缩历史 head, 在飞工具尾块 tail]。
+
+    在飞工具尾块 = 从**最后一条**「带 tool_calls 的 AIMessage」起（含）到末尾。
+    工具刚启动时，该 AI(tool_calls) 对应的 ToolMessage 尚未写入 checkpoint；若把
+    它连同前面历史一起压缩，会被 `_drop_dangling_tool_call_messages` 判定为残缺
+    整块丢弃，导致**当前正在执行的工具调用凭空消失**。工具前的按需压缩必须
+    跳过这个尾块——压缩只作用于 head。
+
+    保守语义：即使最后一条 AI(tool_calls) 已完整配对（后随 ToolMessage），也整块
+    归入 tail 不压缩（最近的完整工具块保留，与「最近轮 verbatim」策略一致，换取
+    安全）；无任何 tool_calls 时 tail 为空、head 为全部。
+    """
+    for i in range(len(messages) - 1, -1, -1):
+        if getattr(messages[i], "type", "") == "ai" and _tool_call_ids(messages[i]):
+            return messages[:i], messages[i:]
+    return messages, []
+
+
 def _recent_round_user_indexes(messages: list[dict], round_count: int = 5) -> set[int]:
     """计算最近 N 轮对话对应的 user 消息索引集合。
 
@@ -843,9 +862,9 @@ def _ensure_no_image_for_non_vision(messages: list, config: AgentConfig) -> list
     return out
 
 
-def compact_history_messages(messages: list, config: AgentConfig) -> list:
+def compact_history_messages(messages: list, config: AgentConfig, memory=None) -> list:
     if should_compact(messages, config.model, config.context_window_tokens):
-        return compact_messages(messages, config.model, config.context_window_tokens)
+        return compact_messages(messages, config.model, config.context_window_tokens, memory)
     return messages
 
 
