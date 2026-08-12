@@ -805,12 +805,10 @@ class AgentRunMixin:
                     # 工具执行前按需压缩（在飞工具尾块受保护）。与 LLM 前压缩互补：
                     # 长工具链（连续多轮 read_file/run_shell 等）期间提前介入，
                     # 避免上下文滚雪球到下次 LLM 调用才压。失败不中断工具执行。
-                    # TODO(ponytail): 当前在 SSE 流内调用 aupdate_state 会导致连接中断，
-                    # 先回退到仅 LLM 前压缩；后续改为工具结束后压缩或异步后台压缩。
-                    # try:
-                    #     await self._compact_checkpoint_before_tool(run_config)
-                    # except Exception as exc:
-                    #     logger.warning("[压缩] 工具前压缩失败（已忽略，不影响工具执行）: %s", exc)
+                    try:
+                        await self._compact_checkpoint_before_tool(run_config)
+                    except Exception as exc:
+                        logger.warning("[压缩] 工具前压缩失败（已忽略，不影响工具执行）: %s", exc)
 
                     started_at = time.time()
                     last_model_activity_at = time.time()
