@@ -1,8 +1,8 @@
 """微信 Bot 指令处理（command handling）mixin。
 
 从 wechat_bot.py 拆分（2026-08-03 大文件治理）：把 _handle_message 里
-12 个斜杠命令分支（/new /list /switch /delete /projects /project /unproject
-/sessions /modals /modal /stop /help）与菜单构建逻辑抽到独立模块。
+13 个斜杠命令分支（/new /list /switch /delete /projects /project /unproject
+/sessions /modals /modal /push /stop /help）与菜单构建逻辑抽到独立模块。
 
 新增一个指令时只改这里，无需通读轮询/发送/生命周期代码。
 """
@@ -285,6 +285,31 @@ class WeChatCommandMixin:
                         self.user_id, from_user[:16], model, provider_id)
             return True
 
+        # ── /push 命令：消息入队，当前任务结束后自动发送（不打断当前任务）──
+        stripped = text.strip()
+        if stripped == "/push" or stripped.startswith("/push "):
+            queued = stripped[len("/push"):].strip()
+            if not queued:
+                await self.send_message(from_user, context_token,
+                    "📥 用法：/push <内容> — 将内容加入队列，当前任务结束后自动发送；空闲时立即执行")
+                return True
+            q = self._push_queues.setdefault(from_user, [])
+            q.append(queued)
+            task = self._active_run_task
+            if task is not None and not task.done():
+                # 任务执行中：入队，等任务结束由 _handle_message 尾部 flush
+                await self.send_message(from_user, context_token,
+                    f"📥 已入队（当前任务结束后自动发送，队列 {len(q)} 条）")
+                logger.info("[微信Bot:%s] 用户 %s /push 入队: %s (队列 %d 条)",
+                            self.user_id, from_user[:16], queued[:80], len(q))
+            else:
+                # 空闲：直接按普通消息完整处理（持锁串行，避免与并发消息乱序）
+                logger.info("[微信Bot:%s] 用户 %s /push 空闲直发: %s",
+                            self.user_id, from_user[:16], queued[:80])
+                async with self._msg_lock:
+                    await self._flush_push_queue(from_user, context_token)
+            return True
+
         # ── /stop 命令：中断当前正在执行的 agent 请求 ──
         if text.strip() == "/stop":
             if self._cancel_active_run():
@@ -309,6 +334,7 @@ class WeChatCommandMixin:
                 "/delete <序号|ID> … — 删除会话\n"
                 "/modals — 列出可用模型\n"
                 "/modal <序号|模型名> — 切换模型\n"
+                "/push <内容> — 消息入队，当前任务结束后自动发送\n"
                 "/stop — 中断当前正在执行的任务\n"
                 "/help — 显示本帮助"
             )

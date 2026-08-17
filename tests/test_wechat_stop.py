@@ -54,6 +54,8 @@ def _make_bot() -> WeChatBot:
     bot._rate_limited_until = 0.0
     bot._last_send_at = 0.0
     bot._active_run_task = None
+    bot._push_queues = {}
+    bot._push_seq = 0
     bot._msg_lock = asyncio.Lock()
     bot._handle_tasks = set()
     bot._retry_queue = deque()

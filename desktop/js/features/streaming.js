@@ -370,8 +370,8 @@ function syncStreamingActive() {
   setSendButtonRunning(streamingActive);
 }
 
-async function send() {
-  const text = input.value.trim();
+async function send(queuedText) {
+  const text = (queuedText || input.value).trim();
   const attachments = pendingAttachments.slice();
   if ((!text && attachments.length === 0)) return;
 
@@ -380,8 +380,20 @@ async function send() {
   const targetSource = currentSessionSource || 'web';
   const targetKey = visibleSessionKey || (targetSessionId + '_' + targetSource);
   const rt = getOrCreateRuntime(targetSessionId, targetSource);
-  // 该会话仍在执行中：不重复发起（再次回车会走 stopCurrentRun 停止逻辑）
-  if (rt.status === 'streaming') return;
+  // 该会话仍在执行中：把消息推入 push 队列（不打断当前回复），
+  // 本轮结束后由 send() 的 finally 按序自动发送；红色按钮才是「停止」。
+  if (rt.status === 'streaming') {
+    if (!queuedText && text) {
+      rt.interventionQueue = rt.interventionQueue || [];
+      rt.interventionQueue.push(text);
+      input.value = '';
+      pendingAttachments = [];
+      renderAttachmentPreview();
+      resizeComposer();
+      addMessage('📥 ' + t('pushQueued'), 'system');
+    }
+    return;
+  }
 
   addUserMessage(text, attachments);
   // 推入输入历史
@@ -574,6 +586,19 @@ async function send() {
     rt.controller = null;
     rt.live = false;
     currentAbortController = null;
+
+    // push 队列：本轮结束后，按序自动发送流式执行中入队的消息（send 入队时已清空输入框）。
+    // 放在「后台会话 runtime 清理」之前，保证用户切走后、后台会话结束时队列消息也不丢。
+    // 用 setTimeout(0) 延后一拍：等 finally 剩余清理（按钮还原等）完成后再发起新一轮。
+    const pushQueue = rt.interventionQueue;
+    if (pushQueue && pushQueue.length) {
+      const next = pushQueue.shift();
+      setTimeout(function() {
+        send(next).catch(function(err) {
+          console.error('[push] 队列消息发送失败:', err);
+        });
+      }, 0);
+    }
 
     // 内存回收: 后台完成的会话不再需要保留(历史消息从后端加载, reconstruct 不依赖它)
     // 可见会话暂留——等 switchSession 切走时再清

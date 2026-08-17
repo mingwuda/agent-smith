@@ -138,7 +138,11 @@ class WeChatBot(WeChatCommandMixin, WeChatSendMixin):
         # 同一 bot 同一时刻至多一个普通对话消息在跑 agent（_msg_lock 串行），
         # 因此单值即可；被 /stop cancel 后由 _handle_message 的 except 分支收尾。
         self._active_run_task: Optional[asyncio.Task] = None
-        # 普通对话消息串行锁：命令消息（含 /stop）不排队即时处理，
+        # push 队列：/push <内容> 在当前任务执行中入队（key=from_user），
+        # 当前任务结束后由 _handle_message 尾部 _flush_push_queue 按序自动发送。
+        self._push_queues: dict[str, list[str]] = {}
+        self._push_seq: int = 0  # 合成消息 message_id 用自增序号，避免与真实消息 id 撞车
+        # 普通对话消息串行锁：命令消息（含 /stop /push）不排队即时处理，
         # 普通消息排队执行，避免并发导致会话 history 乱序 / 回复错位。
         self._msg_lock = asyncio.Lock()
         # 消息处理任务集合：_poll_loop 并行派发 _dispatch_message 后跟踪，
@@ -339,6 +343,27 @@ class WeChatBot(WeChatCommandMixin, WeChatSendMixin):
             return True
         return False
 
+    async def _flush_push_queue(self, from_user: str, context_token: str) -> None:
+        """按序处理该用户的 push 队列（/push 入队内容），当前任务结束后调用。
+
+        每取出一条就完整走一遍 _handle_message（会话解析→历史加载→agent 执行→
+        保存/发送最终回复），其尾部又会再调本方法，直到队列清空，天然串行。
+        调用方必须已持有 _msg_lock（_handle_message 尾部 / /push 空闲分支），
+        保证与并发普通消息不产生 history 乱序；合成 message_id 绕过 _seen_msg_ids 去重。
+        """
+        q = self._push_queues.get(from_user)
+        while q:
+            next_text = q.pop(0)
+            self._push_seq += 1
+            fake_msg = {
+                "from_user_id": from_user,
+                "context_token": context_token,
+                "message_id": f"push_{self.user_id}_{time.time_ns()}_{self._push_seq}",
+                "item_list": [{"type": 1, "text_item": {"text": next_text}}],
+            }
+            logger.info("[微信Bot:%s] flush push 队列消息: %s", self.user_id, next_text[:80])
+            await self._handle_message(fake_msg)
+
     async def _dispatch_message(self, msg: dict) -> None:
         """消息分派：命令消息即时并行处理；普通对话消息串行排队。
 
@@ -349,8 +374,9 @@ class WeChatBot(WeChatCommandMixin, WeChatSendMixin):
         执行的顺序一致（并发处理普通消息会导致 history 乱序、回复错位）。
         """
         if _extract_text(msg).strip().startswith("/"):
-            # 命令类消息：即时处理（不排队）。命令分支都不跑 agent（各自直接 return），
-            # 与正在执行的 agent 并发安全；/stop 需要立即响应才可达中断目的。
+            # 命令类消息：即时处理（不排队）。除 /push 空闲直发外，
+            # 命令分支都不跑 agent（各自直接 return），与正在执行的 agent 并发安全；
+            # /stop 需要立即响应才可达中断目的，/push 忙时只入队不打断。
             await self._handle_message(msg)
             return
         async with self._msg_lock:
@@ -443,7 +469,7 @@ class WeChatBot(WeChatCommandMixin, WeChatSendMixin):
                 logger.warning("[微信Bot:%s] 会话迁移失败: %s", self.user_id, e)
 
         # ── 命令处理（/new /list /switch /delete /projects /project /unproject
-        #   /sessions /modals /modal /stop /help）── 实现见 wechat_commands.py。
+        #   /sessions /modals /modal /push /stop /help）── 实现见 wechat_commands.py。
         # 命令分支都不跑 agent、各自 send_message 后 return；返回 True 表示已处理。
         if text.strip().startswith("/") and await self._handle_command(text, from_user, context_token, wechat_uid):
             return
@@ -548,79 +574,96 @@ class WeChatBot(WeChatCommandMixin, WeChatSendMixin):
             self._step_sent_count = 0  # 每轮任务重置 step 消息预算计数
             agent = self._ensure_agent()
             try:
+                # 工具调用间歇期持续发送 typing，让用户手机端看到"正在输入"
+                typing_stop = asyncio.Event()
+
+                async def _typing_loop():
+                    while not typing_stop.is_set():
+                        await self.send_typing(from_user, context_token)
+                        try:
+                            await asyncio.wait_for(typing_stop.wait(), timeout=4)
+                        except asyncio.TimeoutError:
+                            continue
+                        else:
+                            break
+
+                typing_task = asyncio.create_task(_typing_loop())
                 # 串行化 agent 执行段：工具工作区（file_tools/shell_tools/browser_tools）是
                 # 模块级全局状态，_apply_session_workspace 会改写它。若两个用户的微信消息
                 # 并发处理，A 的工具调用会读到 B 的工作区文件（跨用户内容串扰的根因之一）。
                 # 用全局锁保证同一时刻只有一个用户在跑 agent。
                 async with _WECHAT_AGENT_LOCK:
-                    # 根据当前会话/项目设置工具工作目录（全局工具工作区，与 agent 调用同锁）
-                    try:
-                        from agent_core.services.agent_service import _apply_session_workspace
-                        _apply_session_workspace(wechat_uid, session_id, self._wechat_current_project.get(from_user, ""))
-                    except Exception:
-                        pass
-                    # 同步该用户专属 agent 的工作区（_apply_session_workspace 只设置全局 Web agent）
-                    try:
-                        from services.workspace import _workspace_for_user
-                        eff_ws = session_store.get_session_workspace(wechat_uid, session_id) or str(_workspace_for_user(wechat_uid))
-                        agent.set_workspace(str(Path(eff_ws).expanduser().resolve()))
-                    except Exception:
-                        pass
-                    async for ev in agent.chat_stream_events(
-                        text, attachments=attachments, thread_id=session_id, history=history,
-                    ):
-                        et = ev.get("type")
-                        # 步骤卡片一律收集（无论 step_reply_enabled），随最终回复保存，
-                        # 供 Web 端回放渲染工具卡片（与 Web 端 /run/stream 的 collected_steps 一致）
-                        if et == "thought":
-                            thought = str(ev.get("thought", "")).strip()
-                            if thought:
-                                collected_steps.append({"type": "thought", "thought": thought[:200]})
-                                if self.step_reply_enabled:
-                                    pending_thought = thought[:200]
-                        elif et == "tool_start":
-                            collected_steps.append(ev)
-                        elif et == "tool_result":
-                            collected_steps.append(ev)
-                            if not self.step_reply_enabled:
-                                continue
-                            tool = ev.get("tool", "")
-                            result = str(ev.get("result", "") or "").strip()
-                            ok = not ev.get("error")
-                            dur = ev.get("duration_ms") or 0
-                            dur_txt = f"（{dur / 1000:.1f}s）" if dur else ""
-                            snippet = result[:150].replace("\n", " ")
-                            # step 消息 markdown 化：工具名加粗、结果摘要用引用块，便于阅读。
-                            # 每个工具仍是 pending_step_lines 的一个元素（内部多行），
-                            # 攒批条件按工具数计（len(pending_step_lines) >= step_msg_batch）。
-                            tool_line = f"{'✅' if ok else '❌'} **{tool}**{dur_txt}"
-                            pending_step_lines.append(
-                                f"{tool_line}\n> {snippet}" if snippet else tool_line
-                            )
-                            # 攒批：满 batch 条或超过 batch_timeout 秒即合并发送（省配额 + 反馈及时）
-                            if len(pending_step_lines) >= self.step_msg_batch or (
-                                pending_step_lines and time.time() - pending_step_since >= self.step_msg_batch_timeout
-                            ):
-                                for batch_text in self._build_step_batches(pending_step_lines, self.step_msg_batch, pending_thought):
-                                    await self._send_step_msg(from_user, context_token, batch_text)
-                                pending_step_lines.clear()
-                                pending_thought = ""
-                                pending_step_since = time.time()
-                        elif et == "done":
-                            reply = ev.get("content", "")
-                            # flush 残余批量 step（不足 batch 条的尾批也合并一条发出去，不留过程死角）
-                            if self.step_reply_enabled and pending_step_lines:
-                                for batch_text in self._build_step_batches(pending_step_lines, self.step_msg_batch, pending_thought):
-                                    await self._send_step_msg(from_user, context_token, batch_text)
-                                pending_step_lines.clear()
-                                pending_thought = ""
-                        elif et == "error":
-                            content = ev.get("content", "")
-                            if not reply:
-                                reply = f"❌ {content}"
+                        # 根据当前会话/项目设置工具工作目录（全局工具工作区，与 agent 调用同锁）
+                        try:
+                            from agent_core.services.agent_service import _apply_session_workspace
+                            _apply_session_workspace(wechat_uid, session_id, self._wechat_current_project.get(from_user, ""))
+                        except Exception:
+                            pass
+                        # 同步该用户专属 agent 的工作区（_apply_session_workspace 只设置全局 Web agent）
+                        try:
+                            from services.workspace import _workspace_for_user
+                            eff_ws = session_store.get_session_workspace(wechat_uid, session_id) or str(_workspace_for_user(wechat_uid))
+                            agent.set_workspace(str(Path(eff_ws).expanduser().resolve()))
+                        except Exception:
+                            pass
+                        async for ev in agent.chat_stream_events(
+                            text, attachments=attachments, thread_id=session_id, history=history,
+                        ):
+                            et = ev.get("type")
+                            # 步骤卡片一律收集（无论 step_reply_enabled），随最终回复保存，
+                            # 供 Web 端回放渲染工具卡片（与 Web 端 /run/stream 的 collected_steps 一致）
+                            if et == "thought":
+                                thought = str(ev.get("thought", "")).strip()
+                                if thought:
+                                    collected_steps.append({"type": "thought", "thought": thought[:200]})
+                                    if self.step_reply_enabled:
+                                        pending_thought = thought[:200]
+                            elif et == "tool_start":
+                                collected_steps.append(ev)
+                            elif et == "tool_result":
+                                collected_steps.append(ev)
+                                if not self.step_reply_enabled:
+                                    continue
+                                tool = ev.get("tool", "")
+                                result = str(ev.get("result", "") or "").strip()
+                                ok = not ev.get("error")
+                                dur = ev.get("duration_ms") or 0
+                                dur_txt = f"（{dur / 1000:.1f}s）" if dur else ""
+                                snippet = result[:150].replace("\n", " ")
+                                # step 消息 markdown 化：工具名加粗、结果摘要用引用块，便于阅读。
+                                # 每个工具仍是 pending_step_lines 的一个元素（内部多行），
+                                # 攒批条件按工具数计（len(pending_step_lines) >= step_msg_batch）。
+                                tool_line = f"{'✅' if ok else '❌'} **{tool}**{dur_txt}"
+                                pending_step_lines.append(
+                                    f"{tool_line}\n> {snippet}" if snippet else tool_line
+                                )
+                                # 攒批：满 batch 条或超过 batch_timeout 秒即合并发送（省配额 + 反馈及时）
+                                if len(pending_step_lines) >= self.step_msg_batch or (
+                                    pending_step_lines and time.time() - pending_step_since >= self.step_msg_batch_timeout
+                                ):
+                                    for batch_text in self._build_step_batches(pending_step_lines, self.step_msg_batch, pending_thought):
+                                        await self._send_step_msg(from_user, context_token, batch_text)
+                                    pending_step_lines.clear()
+                                    pending_thought = ""
+                                    pending_step_since = time.time()
+                            elif et == "done":
+                                reply = ev.get("content", "")
+                                # flush 残余批量 step（不足 batch 条的尾批也合并一条发出去，不留过程死角）
+                                if self.step_reply_enabled and pending_step_lines:
+                                    for batch_text in self._build_step_batches(pending_step_lines, self.step_msg_batch, pending_thought):
+                                        await self._send_step_msg(from_user, context_token, batch_text)
+                                    pending_step_lines.clear()
+                                    pending_thought = ""
+                            elif et == "error":
+                                content = ev.get("content", "")
+                                if not reply:
+                                    reply = f"❌ {content}"
             except Exception as e:
                 logger.exception("[微信Bot] agent 调用异常")
                 reply = f"❌ 处理出错: {e}"
+            finally:
+                typing_stop.set()
+                typing_task.cancel()
             return reply, collected_steps
 
         self._active_run_task = asyncio.create_task(_run_agent_body())
@@ -662,6 +705,10 @@ class WeChatBot(WeChatCommandMixin, WeChatSendMixin):
 
         # 发送回复（含图片检测 + 图片/文本分开发送 + 频控冷却感知）
         await self._send_final_reply(from_user, context_token, reply)
+
+        # push 队列：当前任务（及其最终回复发送）已结束，按序处理 /push 入队的内容。
+        # 此处必然持有 _msg_lock（普通消息路径），递归 _handle_message 天然串行。
+        await self._flush_push_queue(from_user, context_token)
 
     async def _send_final_reply(self, from_user: str, context_token: str, reply: str) -> None:
         """发送最终回复（图片 + 文本），失败转入后台补发队列。
