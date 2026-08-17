@@ -422,6 +422,14 @@ const I18N = {
     defaultWorkspace: 'Default workspace',
     loadFailed: 'Failed to load',
     copied: 'Copied',
+    // ===== Context compaction card =====
+    contextCompaction: '上下文压缩',
+    compactionAuto: '自动',
+    compactionBeforeTool: '工具前自动',
+    compactionManual: '手动',
+    compactionResult: '压缩后的上下文',
+    compactionStats: '{a} → {b} 条 · ~{c} → ~{d} tokens（−{e}%）',
+    compressingContext: '压缩上下文',
   },
 };
 

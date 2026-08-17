@@ -1617,6 +1617,55 @@ function handleStreamEvent(data) {
       }
       break;
 
+    case 'context_compacted': {
+      // 上下文压缩卡片（对齐 dsh-compaction 的 CompactionItem）：
+      // 头部展示「压缩被调用 + 压缩后大小」，正文展开可见「压缩后的上下文」摘要。
+      hideTyping();
+      removeThinkingHint();
+      removeGeneratingBadge();
+      ensureStepsContainer();
+      // 与其它 step 卡片一致：若上一 step 还在当前执行区，先提升进完整历史。
+      // isConnected 守卫：历史回放时 _historyBodyEl 可能是已脱离 DOM 的旧引用，
+      // 提升会把卡片移进不可见容器（只在有真实历史容器时提升）。
+      if (_historyBodyEl && _historyBodyEl.isConnected && currentStepsEl && currentStepsEl.children.length) {
+        _promoteCurrentToHistory();
+      }
+      const beforeT = data.before_tokens || 0;
+      const afterT = data.after_tokens || 0;
+      const savedT = Math.max(0, beforeT - afterT);
+      const pct = data.reduction_pct != null ? data.reduction_pct
+        : (beforeT > 0 ? Math.round(savedT / beforeT * 100) : 0);
+      const triggerLabel = data.trigger === 'tool' ? (t('compactionManual') || '手动')
+        : data.trigger === 'before_tool' ? (t('compactionBeforeTool') || '工具前自动')
+        : (t('compactionAuto') || '自动');
+      const stats = t('compactionStats', {
+        a: data.before_count || 0,
+        b: data.after_count || 0,
+        c: beforeT.toLocaleString(),
+        d: afterT.toLocaleString(),
+        e: pct,
+      });
+      const cardDiv = document.createElement('div');
+      cardDiv.className = 'tool-card compaction-card';
+      if (data.compaction_id) cardDiv.dataset.compactionId = String(data.compaction_id);
+      cardDiv.innerHTML =
+        '<div class="tool-card-header" onclick="toggleToolCard(this)">' +
+          '<span class="arrow">▶</span>' +
+          '<span class="tool-icon">🧹</span>' +
+          '<span class="tool-label">' + escapeHtml(t('contextCompaction') || '上下文压缩') + ':</span>' +
+          '<span class="tool-name-inline">' + escapeHtml(triggerLabel) + '</span>' +
+          '<span class="compaction-stats">' + escapeHtml(stats) + '</span>' +
+          '<span class="tool-status-dot done"></span>' +
+        '</div>' +
+        '<div class="tool-card-body">' +
+          '<div class="tool-section-label">' + escapeHtml(t('compactionResult') || '压缩后的上下文') + '</div>' +
+          '<div class="tool-result-markdown">' + renderMarkdown(data.summary || '') + '</div>' +
+        '</div>';
+      currentStepsEl.appendChild(cardDiv);
+      smartScroll(container);
+      break;
+    }
+
     case 'progress':
       _finalizeThinking();  // 进度更新，结束 thought 顶部面板
       hideTyping();
@@ -1947,6 +1996,7 @@ function getToolIcon(toolName) {
     'list_files': '📂', 'delete_file': '🗑️', 'search_files': '🔍',
     'get_workspace_path': '📁', 'run_python': '🐍', 'get_system_info': '💻',
     'web_search': '🌐', 'web_fetch': '📄', 'bash': '💻', 'shell': '💻',
+    'compress_context': '🧹',
   };
   return icons[toolName] || '🔧';
 }
@@ -1967,6 +2017,7 @@ function getToolLabel(toolName, args) {
     'web_fetch': t('fetchingWeb') || '抓取网页',
     'bash': t('runningShell') || '运行 Shell 命令',
     'shell': t('runningShell') || '运行 Shell 命令',
+    'compress_context': t('compressingContext') || '压缩上下文',
   };
   var label = labels[toolName] || (t('callingTool') || '调用工具: ') + toolName;
   // 追加关键参数（截断避免过长）

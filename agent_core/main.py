@@ -90,7 +90,7 @@ from agent import DesktopAgent
 from tools import (
     file_tools, code_tools, system_tools, web_tools, memory_tools, session_tools,
     git_tools, database_tool, shell_tools, browser_tools, todo_tools,
-    ocr_tools,
+    ocr_tools, context_tools,
 )
 import subagents
 from monitoring.usage_tracker import get_tracker
@@ -310,6 +310,7 @@ def init_agent(caller: str = "unknown", force: bool = False):
     all_tools.extend(todo_tools.TOOLS)
     all_tools.extend(ocr_tools.TOOLS)
     all_tools.extend(session_tools.TOOLS)
+    all_tools.extend(context_tools.TOOLS)
 
     subagents.manager.configure(config, all_tools, review_llm=None)
     
@@ -325,6 +326,7 @@ def init_agent(caller: str = "unknown", force: bool = False):
 
     # 初始化 Agent
     agent_obj = DesktopAgent(config)
+    context_tools.bind_agent(agent_obj)
     agent_obj.set_tools(all_tools)
     app_state.set_agent(agent_obj)
     # 捕获基准工具集（不含 MCP），供会话级 MCP 重载时作为 set_tools 的基准

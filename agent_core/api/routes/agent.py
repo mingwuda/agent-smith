@@ -304,6 +304,13 @@ async def run_agent_stream(req: RunRequest, request: Request):
                             collected_steps.append(json.loads(m.group(1)))
                     except Exception:
                         pass
+                elif '"type": "context_compacted"' in sse_event:
+                    try:
+                        m = re.search(r'data: ({.*})', sse_event)
+                        if m:
+                            collected_steps.append(json.loads(m.group(1)))
+                    except Exception:
+                        pass
                 elif '"type": "todo"' in sse_event:
                     try:
                         m = re.search(r'data: ({.*})', sse_event)

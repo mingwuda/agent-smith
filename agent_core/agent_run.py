@@ -21,7 +21,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from config import AgentConfig
 from context_manager import (
     checkpoint_replacement,
-    compact_messages,
+    compact_messages_report,
     compaction_threshold_tokens,
     estimate_message_tokens,
     estimate_messages_tokens,
@@ -51,25 +51,32 @@ logger = get_logger(__name__)
 
 
 class AgentRunMixin:
-    async def _compact_checkpoint_if_needed(self, run_config: dict):
+    async def _compact_checkpoint_if_needed(self, run_config: dict, trigger: str = "auto", reason: str = "") -> Optional[dict]:
+        """LLM 调用前按需压缩 checkpoint。
+
+        返回本次压缩的报告 dict（`context_compacted` SSE 事件载荷）；
+        未触发压缩或压缩被放弃时返回 None。
+        """
         if not self._graph:
-            return
+            return None
         try:
             snapshot = await self._graph.aget_state(run_config)
         except Exception:
-            return
+            return None
         values = getattr(snapshot, "values", {}) or {}
         messages = list(values.get("messages") or [])
         if not messages:
-            return
+            return None
         # 硬上限：消息数超过 50 时强制压缩，避免长会话无限制膨胀
         if not should_compact(messages, self.config.model, self.config.context_window_tokens):
             if len(messages) > 50:
                 logger.info("[压缩] 消息数=%d 超过硬上限 50，强制压缩", len(messages))
             else:
-                return
-        before = estimate_messages_tokens(messages)
-        compacted = compact_messages(messages, self.config.model, self.config.context_window_tokens, memory=get_memory(self._user_id))
+                return None
+        compacted, report = compact_messages_report(
+            messages, self.config.model, self.config.context_window_tokens,
+            memory=get_memory(self._user_id), trigger=trigger, reason=reason,
+        )
         # 兜底：压缩切片仍可能在边界残留悬空/孤儿 tool 消息，写回前统一自净，
         # 保证喂给 graph 的历史永远满足 tool_call ↔ ToolMessage 配对（避免 INVALID_CHAT_HISTORY）。
         compacted, _ = _drop_dangling_tool_call_messages(compacted)
@@ -81,16 +88,23 @@ class AgentRunMixin:
                 "[压缩] 压缩后无任何对话历史（%d 条全被摘要/清理），放弃压缩，保留原 %d 条消息",
                 len(compacted), len(messages),
             )
-            return
+            return None
         await self._graph.aupdate_state(run_config, {"messages": checkpoint_replacement(compacted)})
         after = estimate_messages_tokens(compacted)
+        _before_tok = report.before_tokens if report else estimate_messages_tokens(messages)
         logger.info(
             "🧹 上下文已压缩: %d -> %d messages, ~%d -> ~%d tokens, threshold=%d",
-            len(messages), len(compacted), before, after,
+            len(messages), len(compacted), _before_tok, after,
             compaction_threshold_tokens(self.config.model, self.config.context_window_tokens),
         )
+        if report is None:
+            return None
+        # 报告数字对齐实际写回结果（dropper 可能进一步减少消息）
+        report.after_count = len(compacted)
+        report.after_tokens = after
+        return report.to_dict()
 
-    async def _compact_checkpoint_before_tool(self, run_config: dict):
+    async def _compact_checkpoint_before_tool(self, run_config: dict, trigger: str = "before_tool", reason: str = "") -> Optional[dict]:
         """工具执行前按需压缩（用户需求：工具链中达到阈值即压缩，不等下次 LLM 调用）。
 
         与 `_compact_checkpoint_if_needed`（LLM 调用前压缩）的区别：
@@ -101,43 +115,53 @@ class AgentRunMixin:
           判残缺整块丢弃，正在执行的工具调用凭空消失（当前工具结果仍会写入，
           反而变成孤儿 ToolMessage）。tail 原样拼回，不动。
         - 未超阈值只做轻量读取（aget_state + 估算），不写 checkpoint。
+
+        返回本次压缩的报告 dict（`context_compacted` SSE 事件载荷）；未触发返回 None。
         """
         if not self._graph:
-            return
+            return None
         try:
             snapshot = await self._graph.aget_state(run_config)
         except Exception:
-            return
+            return None
         values = getattr(snapshot, "values", {}) or {}
         messages = list(values.get("messages") or [])
         if not messages:
-            return
+            return None
         head, tail = _split_inflight_tail(messages)
         if not head:
-            return
+            return None
         # 硬上限同 LLM 前压缩：token 超阈值 或 消息数 > 50 才真正压缩
         if not should_compact(head, self.config.model, self.config.context_window_tokens):
             if len(head) <= 50:
-                return
-        before = estimate_messages_tokens(head)
-        compacted = compact_messages(head, self.config.model, self.config.context_window_tokens, memory=get_memory(self._user_id))
+                return None
+        compacted, report = compact_messages_report(
+            head, self.config.model, self.config.context_window_tokens,
+            memory=get_memory(self._user_id), trigger=trigger, reason=reason,
+        )
         compacted, _ = _drop_dangling_tool_call_messages(compacted)
         if not compacted:
-            return
+            return None
         # 兜底同 LLM 前压缩：结果无任何对话消息则放弃写回（保留原历史 + 在飞尾块）
         if not any(not isinstance(m, SystemMessage) for m in compacted):
             logger.warning(
                 "[压缩] 工具前压缩结果无任何对话历史，放弃压缩，保留原历史",
             )
-            return
+            return None
         await self._graph.aupdate_state(run_config, {"messages": checkpoint_replacement([*compacted, *tail])})
         after = estimate_messages_tokens(compacted)
+        _before_tok = report.before_tokens if report else estimate_messages_tokens(head)
         logger.info(
             "🧹 工具前压缩: %d -> %d messages, ~%d -> ~%d tokens (阈值 %d), 在飞工具尾块 %d 条已保留",
-            len(head), len(compacted), before, after,
+            len(head), len(compacted), _before_tok, after,
             compaction_threshold_tokens(self.config.model, self.config.context_window_tokens),
             len(tail),
         )
+        if report is None:
+            return None
+        report.after_count = len(compacted)
+        report.after_tokens = after
+        return report.to_dict()
 
 
     async def _repair_checkpoint_tool_history(self, run_config: dict, graph=None):
@@ -534,7 +558,9 @@ class AgentRunMixin:
                 self.config.api_timeout_seconds,
                 len(message),
             )
-            await self._compact_checkpoint_if_needed(run_config)
+            _compact_report = await self._compact_checkpoint_if_needed(run_config)
+            if _compact_report:
+                yield _sse({"type": "context_compacted", **_compact_report})
             # 方案A：OCR 降级动作以 synthetic 工具卡片先行发出。纯文本模型收到图片时，
             # 图片在进入 LLM 前已被转成 OCR 文本，模型不会真的调用 ocr_image 工具，
             # 历史里就看不到"识别图片"步骤；这里补发 tool_start/tool_result 事件对，
@@ -692,7 +718,9 @@ class AgentRunMixin:
                         except Exception as exc:
                             logger.warning("[修复] 单轮内 tool 历史修复失败（已忽略，不影响主流程）: %s", exc)
                         try:
-                            await self._compact_checkpoint_if_needed(run_config)
+                            _report = await self._compact_checkpoint_if_needed(run_config)
+                            if _report:
+                                yield _sse({"type": "context_compacted", **_report})
                         except Exception as exc:
                             logger.warning("[压缩] 单轮内压缩失败（已忽略，不影响主流程）: %s", exc)
                     _input = event.get("data", {}).get("input", {})
@@ -805,8 +833,13 @@ class AgentRunMixin:
                     # 工具执行前按需压缩（在飞工具尾块受保护）。与 LLM 前压缩互补：
                     # 长工具链（连续多轮 read_file/run_shell 等）期间提前介入，
                     # 避免上下文滚雪球到下次 LLM 调用才压。失败不中断工具执行。
+                    # compress_context 手动工具例外：压缩由工具自身在其执行中完成
+                    # （结果文本即压缩报告），此处跳过避免同一轮压缩两次。
                     try:
-                        await self._compact_checkpoint_before_tool(run_config)
+                        if tool_name != "compress_context":
+                            _report = await self._compact_checkpoint_before_tool(run_config)
+                            if _report:
+                                yield _sse({"type": "context_compacted", **_report})
                     except Exception as exc:
                         logger.warning("[压缩] 工具前压缩失败（已忽略，不影响工具执行）: %s", exc)
 
