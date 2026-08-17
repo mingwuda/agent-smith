@@ -513,6 +513,12 @@
   .agent-body .tool-card-body { display:none;padding:0 12px 10px; }
   .agent-body .tool-card.open .tool-card-body { display:block; }
 
+  /* 上下文压缩卡片：紫色左边框区分于普通工具卡片 */
+  .agent-body .tool-card.compaction-card { border-left-color:#8b5cf6;background:#fafaff; }
+  .agent-body .tool-card.compaction-card .tool-card-header:hover { background:#f5f3ff; }
+  .agent-body .tool-card.compaction-card .compaction-stats { font-size:11px;color:#7c3aed;font-weight:600;flex-shrink:0;margin-left:6px;white-space:nowrap; }
+  .agent-body .tool-card.compaction-card .tool-result-markdown { max-height:320px;overflow-y:auto;font-size:12.5px; }
+
   /* 兼容旧的 steps-container（历史回放等场景） */
   .steps-container { clear:both; margin:8px 0; max-width:85%; }
   .steps-container + .msg.bot { margin-top:12px; }

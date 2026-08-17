@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import uuid
+from dataclasses import dataclass, field
 from typing import Iterable, Optional
 
 from langchain_core.messages import (
@@ -32,6 +34,58 @@ RECENT_BUDGET_RATIO = 0.5        # P1：最近轮 verbatim 预算 = 阈值的 50
 MEDIUM_BUDGET_RATIO = 0.3        # P2：中段摘要预算 = 阈值的 30%（超出部分归入 old 段）
 RECENT_MAX_MESSAGES = 24         # 最近轮 verbatim 上限（约等于「最近 8-12 轮」）
 SUMMARY_MAX_CHARS = 6000         # 摘要文本安全上限（分层后实际远小于此）
+
+
+@dataclass
+class CompactionReport:
+    """一次上下文压缩的结构化结果（对齐 dsh-compaction 的 CompactionResult 语义）。
+
+    供调用方在 UI 上展示「压缩被调用 / 压缩后的上下文 / 压缩后大小」。
+    """
+
+    compaction_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
+    trigger: str = "auto"               # auto | before_tool | tool | 其它调用点自定义
+    summary: str = ""                   # 压缩后注入的摘要文本（压缩后的上下文本身）
+    before_tokens: int = 0
+    after_tokens: int = 0
+    threshold_tokens: int = 0
+    before_count: int = 0               # 压缩前消息条数（含 system）
+    after_count: int = 0                # 压缩后消息条数（含 system）
+    shadowed_count: int = 0             # 被合并进摘要的消息条数
+    recent_verbatim: int = 0            # P1 最近轮 verbatim 保留条数
+    medium_groups: int = 0              # P2 中段摘要组数
+    old_groups: int = 0                 # P2 早期归档组数
+    reason: str = ""                    # 可选触发原因说明（手动工具传入）
+
+    @property
+    def saved_tokens(self) -> int:
+        return max(0, self.before_tokens - self.after_tokens)
+
+    @property
+    def reduction_pct(self) -> float:
+        if self.before_tokens <= 0:
+            return 0.0
+        return (1 - self.after_tokens / self.before_tokens) * 100
+
+    def to_dict(self) -> dict:
+        """序列化为 SSE 事件载荷（前端卡片 + 历史回放共用）。"""
+        return {
+            "compaction_id": self.compaction_id,
+            "trigger": self.trigger,
+            "summary": self.summary,
+            "before_tokens": self.before_tokens,
+            "after_tokens": self.after_tokens,
+            "threshold_tokens": self.threshold_tokens,
+            "before_count": self.before_count,
+            "after_count": self.after_count,
+            "shadowed_count": self.shadowed_count,
+            "recent_verbatim": self.recent_verbatim,
+            "medium_groups": self.medium_groups,
+            "old_groups": self.old_groups,
+            "saved_tokens": self.saved_tokens,
+            "reduction_pct": round(self.reduction_pct, 1),
+            "reason": self.reason,
+        }
 
 
 MODEL_CONTEXT_WINDOWS = {
@@ -312,24 +366,35 @@ def _build_summary(medium_entries: list, old_entries: list, round_of: list[int],
 
 
 def compact_messages(messages: list[BaseMessage], model: str, configured_window: int = 0, memory=None) -> list[BaseMessage]:
-    """分层上下文压缩：
+    """分层上下文压缩（向后兼容入口，仅返回压缩后的消息列表）。"""
+    result, _report = compact_messages_report(messages, model, configured_window, memory)
+    return result
+
+
+def compact_messages_report(messages: list[BaseMessage], model: str, configured_window: int = 0,
+                            memory=None, trigger: str = "auto", reason: str = "") -> tuple[list[BaseMessage], Optional[CompactionReport]]:
+    """分层上下文压缩，并返回结构化报告（供 UI 卡片展示）。
+
+    与 `compact_messages` 行为完全一致，仅额外产出 CompactionReport：
     - P0: system 消息永远保留，不参与压缩。
     - P1: 最近轮 verbatim，按 token 预算（阈值×50%）从最新向前累加（以工具组为原子单位）。
     - P2: 旧段再分 medium（每条精简至约 100 字摘要）/ old（仅保留用户关键指令）。
     - P3: 摘要按「用户/助手 + 轮次号」结构化呈现，保留时序。
     - memory: 可选。传入 LocalMemory 实例时，old 段用户指令归档进长期记忆，
       摘要行写 [见记忆: key] 引用（详见 _archive_user_instruction）。None 时行为不变。
+    - trigger / reason: 记录本次压缩的触发来源（自动阈值 / 工具前 / 手动工具），随报告展示。
     - 防抖动：若压缩后总 token 仍接近阈值，把最近轮里最老的整组降级为 old 段（仅留用户指令），
       保证总 token 单调下降、不会下一轮立刻再压；整组移动，工具链始终完整。
+    - 未触发压缩（低于阈值）时返回 (原消息, None)。
     """
     if not messages:
-        return []
+        return [], None
     system_msgs = [m for m in messages if isinstance(m, SystemMessage)]
     dialogue = [m for m in messages if not isinstance(m, SystemMessage)]
     threshold = compaction_threshold_tokens(model, configured_window)
     before_tok = estimate_messages_tokens(messages, model)
     if before_tok < threshold:
-        return messages
+        return messages, None
 
     groups = _group_messages(dialogue)
     round_of = _assign_rounds(dialogue)
@@ -387,7 +452,21 @@ def compact_messages(messages: list[BaseMessage], model: str, configured_window:
                 (1 - after_tok / before_tok) * 100,
                 recent_cnt, len(medium_entries), len(old_entries),
             )
-            return result
+            report = CompactionReport(
+                trigger=trigger,
+                summary=summary_text,
+                before_tokens=before_tok,
+                after_tokens=after_tok,
+                threshold_tokens=threshold,
+                before_count=len(messages),
+                after_count=len(result),
+                shadowed_count=len(messages) - len(result),
+                recent_verbatim=recent_cnt,
+                medium_groups=len(medium_entries),
+                old_groups=len(old_entries),
+                reason=reason,
+            )
+            return result, report
         demoted.append(recent_groups.pop(0))
         guard += 1
 
