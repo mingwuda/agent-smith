@@ -162,19 +162,73 @@ function closeNewProjectModal() {
 }
 
 function chooseProjectDirectory() {
-  const fileInput = document.getElementById('np-dir-file');
   const dirInput = document.getElementById('np-dir');
+  const pickerEl = document.getElementById('np-dir-picker');
   const hintEl = document.getElementById('np-dir-hint');
-  if (!fileInput) return;
-  fileInput.value = '';
-  fileInput.onchange = function() {
-    const path = fileInput.value;
-    if (path) {
-      if (dirInput) dirInput.value = path;
-      if (hintEl) { hintEl.textContent = (t('selectedDirPrefix') || '已选择：') + path; hintEl.style.display = ''; }
+  if (!pickerEl) return;
+
+  const isOpen = pickerEl.style.display !== 'none';
+  if (isOpen) {
+    pickerEl.style.display = 'none';
+    return;
+  }
+
+  pickerEl.innerHTML = '<div style="padding:8px 12px;font-size:12px;color:#999;">加载中...</div>';
+  pickerEl.style.display = 'block';
+
+  const currentPath = (dirInput && dirInput.value || '').trim();
+  // 不传 path 参数时后端返回默认 workspace root；传空字符串或 "/" 会按绝对路径解析导致越权
+  const qs = currentPath ? `/files/browse?path=${encodeURIComponent(currentPath)}` : '/files/browse';
+  fetch(qs)
+    .then(r => r.json())
+    .then(data => {
+      _renderPickerDirs(data, currentPath, dirInput, hintEl, pickerEl);
+    })
+    .catch(() => {
+      pickerEl.innerHTML = '<div style="padding:8px 12px;font-size:12px;color:#ff453a;">加载失败</div>';
+    });
+}
+
+function _renderPickerDirs(data, currentPath, dirInput, hintEl, pickerEl) {
+  pickerEl.innerHTML = '';
+  if (!data.entries || data.entries.length === 0) {
+    pickerEl.innerHTML = '<div style="padding:8px 12px;font-size:12px;color:#999;">(空目录)</div>';
+    return;
+  }
+  data.entries.forEach(e => {
+    if (e.type !== 'directory') return;
+    const isRoot = !currentPath;
+    const fullPath = isRoot ? '/' + e.name : (currentPath.replace(/\/$/, '') + '/' + e.name);
+    const item = document.createElement('div');
+    item.style.cssText = 'display:flex;align-items:center;gap:6px;padding:6px 12px;cursor:pointer;font-size:13px;color:#333;';
+    item.innerHTML = '<span style="font-size:14px;">📁</span><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHtml(e.name) + '</span>';
+    item.onclick = () => {
+      if (dirInput) dirInput.value = fullPath;
+      if (hintEl) { hintEl.textContent = (t('selectedDirPrefix') || '已选择：') + fullPath; hintEl.style.display = ''; }
+      pickerEl.style.display = 'none';
+    };
+    item.onmouseenter = () => item.style.background = '#f0f0f5';
+    item.onmouseleave = () => item.style.background = '';
+    pickerEl.appendChild(item);
+  });
+  // 返回上级：只在非根路径且父路径可达时才显示
+  if (currentPath && currentPath !== '/') {
+    const parentPath = currentPath.split('/').slice(0, -1).join('/') || '';
+    if (parentPath) {
+      const upItem = document.createElement('div');
+      upItem.style.cssText = 'display:flex;align-items:center;gap:6px;padding:6px 12px;cursor:pointer;font-size:13px;color:#888;border-top:1px solid #e5e5ea;margin-top:4px;';
+      upItem.innerHTML = '<span style="font-size:14px;">⬆️</span><span style="flex:1;">..</span>';
+      upItem.onclick = () => {
+        const qs = parentPath ? `/files/browse?path=${encodeURIComponent(parentPath)}` : '/files/browse';
+        fetch(qs).then(r => r.json()).then(d => {
+          _renderPickerDirs(d, parentPath, dirInput, hintEl, pickerEl);
+        }).catch(() => {
+          // 父路径超出允许范围，不处理
+        });
+      };
+      pickerEl.insertBefore(upItem, pickerEl.firstChild);
     }
-  };
-  fileInput.click();
+  }
 }
 
 function submitNewProjectModal() {

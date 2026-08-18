@@ -287,8 +287,8 @@
         <input id="np-dir" type="text" placeholder="例如 /home/user/my-project" style="flex:1;" />
         <button type="button" id="np-choose-dir-btn" class="btn-secondary" data-i18n="chooseDirButton" onclick="chooseProjectDirectory()">选择目录</button>
       </div>
-      <input id="np-dir-file" type="file" webkitdirectory style="display:none;" />
       <div class="hint" id="np-dir-hint" data-i18n="projectDirHint">可选择目录，也可直接手工输入路径。</div>
+      <div id="np-dir-picker" style="display:none;margin-top:8px;border:1px solid #e0e0e3;border-radius:8px;max-height:180px;overflow-y:auto;background:#fff;"></div>
     </div>
     <div class="modal-actions">
       <button class="btn-secondary" onclick="closeNewProjectModal()" data-i18n="cancelButton">取消</button>
