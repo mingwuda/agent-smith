@@ -8,6 +8,7 @@
   #sidebar {
     width: 280px; background:#1c1c1e; color:#fff; display:flex; flex-direction:column; flex-shrink:0;
     border-right:1px solid #2c2c2e;
+    z-index: 1002;
   }
   #main { flex:1; display:flex; flex-direction:column; min-width:0; min-height:0; height:100%; overflow:hidden; }
   /* 头部包裹层：固定为头部高度，不参与伸缩，避免被压缩 */
