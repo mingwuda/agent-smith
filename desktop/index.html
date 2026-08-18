@@ -273,6 +273,30 @@
   </div>
 </div>
 
+<!-- 新建项目弹窗 -->
+<div class="modal-overlay" id="new-project-modal" onclick="if(event.target===this)closeNewProjectModal()">
+  <div class="modal">
+    <h2 data-i18n="newProjectTitle">新建项目</h2>
+    <div class="form-group">
+      <label for="np-name" data-i18n="projectNameLabel">项目名称</label>
+      <input id="np-name" placeholder="例如 MyProject" />
+    </div>
+    <div class="form-group">
+      <label data-i18n="projectDirLabel">项目目录（留空则使用默认工作区）</label>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <input id="np-dir" type="text" placeholder="例如 /home/user/my-project" style="flex:1;" />
+        <button type="button" id="np-choose-dir-btn" class="btn-secondary" data-i18n="chooseDirButton" onclick="chooseProjectDirectory()">选择目录</button>
+      </div>
+      <input id="np-dir-file" type="file" webkitdirectory style="display:none;" />
+      <div class="hint" id="np-dir-hint" data-i18n="projectDirHint">可选择目录，也可直接手工输入路径。</div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="closeNewProjectModal()" data-i18n="cancelButton">取消</button>
+      <button class="btn-primary" id="np-create-btn" data-i18n="createProjectButton" onclick="submitNewProjectModal()">创建</button>
+    </div>
+  </div>
+</div>
+
 <!-- 设置弹窗 -->
 <div class="modal-overlay" id="settings-modal">
   <div class="settings-modal">

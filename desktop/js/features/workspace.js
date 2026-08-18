@@ -144,11 +144,51 @@ async function newSessionInProject(projectId) {
 }
 
 function showNewProjectModal() {
-  const name = prompt(t('projectNamePrompt') || '项目名称：');
-  if (!name || !name.trim()) return;
-  const dir = prompt(t('projectDirPrompt') || '项目目录路径（留空则使用默认工作区）：', '');
-  if (dir === null) return; // 取消
-  createProject(name.trim(), (dir || '').trim());
+  const modal = document.getElementById('new-project-modal');
+  if (!modal) return;
+  const nameInput = document.getElementById('np-name');
+  const dirInput = document.getElementById('np-dir');
+  const hintEl = document.getElementById('np-dir-hint');
+  if (nameInput) nameInput.value = '';
+  if (dirInput) dirInput.value = '';
+  if (hintEl) { hintEl.textContent = t('projectDirHint') || '可选择目录，也可直接手工输入路径。'; hintEl.style.display = ''; }
+  modal.classList.add('active');
+  if (nameInput) setTimeout(() => nameInput.focus(), 0);
+}
+
+function closeNewProjectModal() {
+  const modal = document.getElementById('new-project-modal');
+  if (modal) modal.classList.remove('active');
+}
+
+function chooseProjectDirectory() {
+  const fileInput = document.getElementById('np-dir-file');
+  const dirInput = document.getElementById('np-dir');
+  const hintEl = document.getElementById('np-dir-hint');
+  if (!fileInput) return;
+  fileInput.value = '';
+  fileInput.onchange = function() {
+    const path = fileInput.value;
+    if (path) {
+      if (dirInput) dirInput.value = path;
+      if (hintEl) { hintEl.textContent = (t('selectedDirPrefix') || '已选择：') + path; hintEl.style.display = ''; }
+    }
+  };
+  fileInput.click();
+}
+
+function submitNewProjectModal() {
+  const nameInput = document.getElementById('np-name');
+  const dirInput = document.getElementById('np-dir');
+  const name = (nameInput && nameInput.value || '').trim();
+  const dir = (dirInput && dirInput.value || '').trim();
+  if (!name) {
+    alert(t('projectNamePrompt') || '项目名称：');
+    if (nameInput) nameInput.focus();
+    return;
+  }
+  closeNewProjectModal();
+  createProject(name, dir);
 }
 
 async function createProject(name, dir) {
