@@ -36,11 +36,14 @@ def _resolve_base_path(request: Request) -> Path:
     return _workspace_for_user(uid)
 
 
-def _resolve_allowed_root(request: Request, path: Optional[str] = None, project_id: Optional[str] = None) -> Path:
+def _resolve_allowed_root(request: Request, path: Optional[str] = None, project_id: Optional[str] = None, allow_root_access: bool = False) -> Path:
     """
     解析允许访问的根目录。
     - path 为空：返回默认 workspace 或项目目录
     - path 为绝对/相对路径：强制限制在允许的根目录内
+    - allow_root_access=True 时：允许浏览整个文件系统（用于创建项目时选择任意服务器目录）。
+      此时 path 为空则从第 0 层根目录（/）开始浏览，path 给定则允许其下任意已存在的目录，
+      便于向上导航到任意挂载点（/opt、/srv、/data、/Users...）。
     - 返回安全的根路径对象
     """
     uid = getattr(request.state, "user_id", "default")
@@ -57,11 +60,20 @@ def _resolve_allowed_root(request: Request, path: Optional[str] = None, project_
         base = Path.home()
     base = base.resolve()
 
+    if allow_root_access:
+        # 创建项目时选择目录：allow_root_access 即“允许访问根/全文件系统”
+        # 不传 path 时从第 0 层根目录（/）开始，便于向上导航到任意挂载点
+        if not path or not path.strip():
+            return Path('/').resolve()
+        target = Path(path).expanduser().resolve()
+        if not target.exists():
+            raise HTTPException(status_code=404, detail=f"路径不存在: {path}")
+        return target
+
     if not path or not path.strip():
         return base
 
     target = Path(path).expanduser().resolve()
-
     # 安全检查：只允许访问允许根目录内的路径
     try:
         target.relative_to(base)
@@ -90,41 +102,55 @@ async def browse_directory(
     request: Request,
     path: str = Query("", description="要浏览的目录路径（相对或绝对）"),
     project_id: str = Query("", description="项目 ID，用于确定根目录"),
+    allow_root_access: bool = Query(False, description="是否允许浏览家目录（创建项目时选择目录用）"),
 ):
     """列出目录结构（树形数据），前端渲染为文件浏览器"""
-    root = _resolve_allowed_root(request, path, project_id)
+    root = _resolve_allowed_root(request, path, project_id, allow_root_access)
 
     if not root.is_dir():
         raise HTTPException(status_code=400, detail="指定路径不是目录")
 
     entries = []
     try:
-        for item in sorted(root.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower())):
-            # 跳过隐藏文件/目录（以 . 开头的）和 node_modules / __pycache__ 等
-            _skip_names = {'.git', '__pycache__', 'node_modules', '.idea', '.vscode',
-                          '.next', '.nuxt', 'dist', 'build', '.venv', 'venv',
-                          '.DS_Store', 'Thumbs.db'}
-            if item.name in _skip_names:
-                continue
-            stat = item.stat()
-            entry = {
-                "name": item.name,
-                "type": "directory" if item.is_dir() else "file",
-                "size": stat.st_size,
-                "modified": stat.st_mtime,
-            }
-            if item.is_file():
-                entry["ext"] = item.suffix.lower()
-                entry["previewable"] = _is_text_file(item)
-            entries.append(entry)
-
-        return {
-            "path": str(root),
-            "name": root.name,
-            "entries": entries,
-        }
-    except PermissionError:
+        items = root.iterdir()
+    except (PermissionError, OSError):
         raise HTTPException(status_code=403, detail=f"无权限访问: {path}")
+
+    # ponytail: 遍历中可能遇到无权限或已失效的条目（如 /proc、/sys、悬空链接 .VolumeIcon.icns），
+    # stat/is_dir 会抛 OSError，须逐个跳过，否则整个浏览请求会 500。
+    _skip_names = {'.git', '__pycache__', 'node_modules', '.idea', '.vscode',
+                   '.next', '.nuxt', 'dist', 'build', '.venv', 'venv',
+                   '.DS_Store', 'Thumbs.db'}
+
+    def _safe_is_dir(p: Path) -> bool:
+        try:
+            return p.is_dir()
+        except OSError:
+            return False
+
+    for item in sorted(items, key=lambda x: (not _safe_is_dir(x), x.name.lower())):
+        if item.name in _skip_names:
+            continue
+        try:
+            stat = item.stat()
+        except OSError:
+            continue  # 无权限或失效条目跳过，不阻断整个列表
+        entry = {
+            "name": item.name,
+            "type": "directory" if _safe_is_dir(item) else "file",
+            "size": stat.st_size,
+            "modified": stat.st_mtime,
+        }
+        if entry["type"] == "file":
+            entry["ext"] = item.suffix.lower()
+            entry["previewable"] = _is_text_file(item)
+        entries.append(entry)
+
+    return {
+        "path": str(root),
+        "name": root.name,
+        "entries": entries,
+    }
 
 
 @router.get("/files/read")

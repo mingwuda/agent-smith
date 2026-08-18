@@ -1886,10 +1886,7 @@ function handleStreamEvent(data) {
         responseCard.appendChild(finalOutputEl);
       }
 
-      // 为最终输出添加复制按钮
-      if (finalOutputEl) {
-        _addCopyButtonToMessage(finalOutputEl, 'bot');
-      }
+      // 复制按钮已在上方（currentBotMsgEl 复用路径 1859 / 新建路径 1865）挂过，此处无需重复
 
       // 第一段「工作耗时」折叠区填充汇总（共 N 步 · 耗时 X）
       if (responseCard) {

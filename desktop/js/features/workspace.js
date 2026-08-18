@@ -174,11 +174,11 @@ function chooseProjectDirectory() {
   }
 
   pickerEl.innerHTML = '<div style="padding:8px 12px;font-size:12px;color:#999;">加载中...</div>';
-  pickerEl.style.display = 'block';
+  pickerEl.style.display = 'flex';
 
   const currentPath = (dirInput && dirInput.value || '').trim();
   // 不传 path 参数时后端返回默认 workspace root；传空字符串或 "/" 会按绝对路径解析导致越权
-  const qs = currentPath ? `/files/browse?path=${encodeURIComponent(currentPath)}` : '/files/browse';
+  const qs = currentPath ? `/files/browse?path=${encodeURIComponent(currentPath)}&allow_root_access=true` : '/files/browse?allow_root_access=true';
   fetch(qs)
     .then(r => r.json())
     .then(data => {
@@ -191,44 +191,92 @@ function chooseProjectDirectory() {
 
 function _renderPickerDirs(data, currentPath, dirInput, hintEl, pickerEl) {
   pickerEl.innerHTML = '';
-  if (!data.entries || data.entries.length === 0) {
-    pickerEl.innerHTML = '<div style="padding:8px 12px;font-size:12px;color:#999;">(空目录)</div>';
-    return;
-  }
-  data.entries.forEach(e => {
-    if (e.type !== 'directory') return;
-    const isRoot = !currentPath;
-    const fullPath = isRoot ? '/' + e.name : (currentPath.replace(/\/$/, '') + '/' + e.name);
-    const item = document.createElement('div');
-    item.style.cssText = 'display:flex;align-items:center;gap:6px;padding:6px 12px;cursor:pointer;font-size:13px;color:#333;';
-    item.innerHTML = '<span style="font-size:14px;">📁</span><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHtml(e.name) + '</span>';
-    item.onclick = () => {
-      if (dirInput) dirInput.value = fullPath;
-      if (hintEl) { hintEl.textContent = (t('selectedDirPrefix') || '已选择：') + fullPath; hintEl.style.display = ''; }
-      pickerEl.style.display = 'none';
-    };
-    item.onmouseenter = () => item.style.background = '#f0f0f5';
-    item.onmouseleave = () => item.style.background = '';
-    pickerEl.appendChild(item);
-  });
-  // 返回上级：只在非根路径且父路径可达时才显示
-  if (currentPath && currentPath !== '/') {
+  const displayPath = currentPath || '/';
+
+  // 当前所在目录头部（固定顶部）
+  const header = document.createElement('div');
+  header.style.cssText = 'padding:6px 12px;font-size:12px;color:#666;border-bottom:1px solid #e5e5ea;background:#fafafa;word-break:break-all;flex-shrink:0;';
+  header.textContent = '当前目录：' + displayPath;
+  pickerEl.appendChild(header);
+
+  // 可滚动目录列表区
+  const listEl = document.createElement('div');
+  listEl.style.cssText = 'flex:1;overflow-y:auto;min-height:0;';
+  pickerEl.appendChild(listEl);
+
+  // 返回上级按钮
+  if (currentPath && currentPath !== '/' && currentPath !== '') {
     const parentPath = currentPath.replace(/\/$/, '').split('/').slice(0, -1).join('/') || '/';
-    if (parentPath) {
-      const upItem = document.createElement('div');
-      upItem.style.cssText = 'display:flex;align-items:center;gap:6px;padding:6px 12px;cursor:pointer;font-size:13px;color:#888;border-top:1px solid #e5e5ea;margin-top:4px;';
-      upItem.innerHTML = '<span style="font-size:14px;">⬆️</span><span style="flex:1;">..</span>';
-      upItem.onclick = () => {
-        const qs = parentPath ? `/files/browse?path=${encodeURIComponent(parentPath)}` : '/files/browse';
-        fetch(qs).then(r => r.json()).then(d => {
-          _renderPickerDirs(d, parentPath, dirInput, hintEl, pickerEl);
-        }).catch(() => {
-          // 父路径超出允许范围，不处理
-        });
-      };
-      pickerEl.insertBefore(upItem, pickerEl.firstChild);
+    const upItem = document.createElement('div');
+    upItem.style.cssText = 'display:flex;align-items:center;gap:6px;padding:6px 12px;cursor:pointer;font-size:13px;color:#888;';
+    upItem.innerHTML = '<span style="font-size:14px;">⬆️</span><span style="flex:1;">..（上级目录）</span>';
+    upItem.onclick = () => {
+      const qs = parentPath ? `/files/browse?path=${encodeURIComponent(parentPath)}&allow_root_access=true` : '/files/browse?allow_root_access=true';
+      pickerEl.innerHTML = '<div style="padding:8px 12px;font-size:12px;color:#999;">加载中...</div>';
+      fetch(qs).then(r => r.json()).then(d => {
+        if (d.detail) {
+          pickerEl.innerHTML = '<div style="padding:8px 12px;font-size:12px;color:#ff453a;">' + escapeHtml(d.detail) + '</div>';
+          return;
+        }
+        _renderPickerDirs(d, parentPath, dirInput, hintEl, pickerEl);
+      }).catch(() => {
+        pickerEl.innerHTML = '<div style="padding:8px 12px;font-size:12px;color:#ff453a;">加载失败</div>';
+      });
+    };
+    listEl.appendChild(upItem);
+  }
+
+  // 目录列表
+  if (!data.entries || data.entries.length === 0) {
+    const empty = document.createElement('div');
+    empty.style.cssText = 'padding:8px 12px;font-size:12px;color:#999;';
+    empty.textContent = '(空目录)';
+    listEl.appendChild(empty);
+  } else {
+    const dirs = data.entries.filter(e => e.type === 'directory');
+    if (dirs.length === 0) {
+      const tip = document.createElement('div');
+      tip.style.cssText = 'padding:8px 12px;font-size:12px;color:#888;';
+      tip.textContent = '当前目录没有子文件夹，请直接输入路径或选择其他目录';
+      listEl.appendChild(tip);
+    } else {
+      dirs.forEach(e => {
+        const isRoot = !currentPath;
+        const fullPath = isRoot ? '/' + e.name : (currentPath.replace(/\/$/, '') + '/' + e.name);
+        const item = document.createElement('div');
+        item.style.cssText = 'display:flex;align-items:center;gap:6px;padding:6px 12px;cursor:pointer;font-size:13px;color:#333;';
+        item.innerHTML = '<span style="font-size:14px;">📁</span><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHtml(e.name) + '</span>';
+        // 点击目录=进入该目录（展开子目录），不直接选定
+        item.onclick = () => {
+          const qs = `/files/browse?path=${encodeURIComponent(fullPath)}&allow_root_access=true`;
+          pickerEl.innerHTML = '<div style="padding:8px 12px;font-size:12px;color:#999;">加载中...</div>';
+          fetch(qs).then(r => r.json()).then(d => {
+            if (d.detail) {
+              pickerEl.innerHTML = '<div style="padding:8px 12px;font-size:12px;color:#ff453a;">' + escapeHtml(d.detail) + '</div>';
+              return;
+            }
+            _renderPickerDirs(d, fullPath, dirInput, hintEl, pickerEl);
+          }).catch(() => {
+            pickerEl.innerHTML = '<div style="padding:8px 12px;font-size:12px;color:#ff453a;">加载失败</div>';
+          });
+        };
+        item.onmouseenter = () => item.style.background = '#f0f0f5';
+        item.onmouseleave = () => item.style.background = '';
+        listEl.appendChild(item);
+      });
     }
   }
+
+  // 选择当前目录（确认按钮）：固定底部，不随目录列表滚动
+  const confirmBtn = document.createElement('div');
+  confirmBtn.style.cssText = 'display:flex;align-items:center;gap:6px;padding:8px 12px;cursor:pointer;font-size:13px;font-weight:600;color:#fff;background:#007aff;border-top:1px solid #e5e5ea;flex-shrink:0;';
+  confirmBtn.innerHTML = '<span style="flex:1;">✅ 选择此目录：' + escapeHtml(displayPath) + '</span>';
+  confirmBtn.onclick = () => {
+    if (dirInput) dirInput.value = displayPath;
+    if (hintEl) { hintEl.textContent = (t('selectedDirPrefix') || '已选择：') + displayPath; hintEl.style.display = ''; }
+    pickerEl.style.display = 'none';
+  };
+  pickerEl.appendChild(confirmBtn);
 }
 
 function submitNewProjectModal() {

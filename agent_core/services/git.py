@@ -28,7 +28,7 @@ def run_git(repo: Union[str, Path], *args: str, timeout: int = 20, extra_env: Un
     - FileNotFoundError / TimeoutExpired 原样抛出，由调用方按自身语义处理
       （HTTP 端点转 500/504，LLM 工具格式化为错误文本）
     """
-    env = {**os.environ, "LC_ALL": "C", "GIT_PAGER": "cat", "GIT_EXTERNAL_DIFF": ""}
+    env = {**os.environ, "LC_ALL": "C", "GIT_PAGER": "cat"}
     if extra_env:
         env.update(extra_env)
     try:
