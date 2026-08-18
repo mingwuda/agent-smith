@@ -213,7 +213,7 @@ function _renderPickerDirs(data, currentPath, dirInput, hintEl, pickerEl) {
   });
   // 返回上级：只在非根路径且父路径可达时才显示
   if (currentPath && currentPath !== '/') {
-    const parentPath = currentPath.split('/').slice(0, -1).join('/') || '';
+    const parentPath = currentPath.replace(/\/$/, '').split('/').slice(0, -1).join('/') || '/';
     if (parentPath) {
       const upItem = document.createElement('div');
       upItem.style.cssText = 'display:flex;align-items:center;gap:6px;padding:6px 12px;cursor:pointer;font-size:13px;color:#888;border-top:1px solid #e5e5ea;margin-top:4px;';
