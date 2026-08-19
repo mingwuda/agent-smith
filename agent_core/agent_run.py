@@ -294,13 +294,17 @@ class AgentRunMixin:
         _run_started_at = time.time()
 
         try:
-            await self._compact_checkpoint_if_needed(config)
+            # 在 LLM 调用前按需压缩 checkpoint，记录压缩报告以便历史回放时展示
+            compaction_step = None
+            _compact_report = await self._compact_checkpoint_if_needed(config)
+            if _compact_report:
+                compaction_step = {"type": "context_compacted", **_compact_report}
             result = await graph.ainvoke(
                 {"messages": input_messages},
                 config,
             )
             messages = result["messages"]
-            
+
             # 提取中间步骤
             current_start = 0
             for idx in range(len(messages) - 1, -1, -1):
@@ -313,6 +317,9 @@ class AgentRunMixin:
             # 工具步骤，让非流式 /run 的返回 steps 也能体现"识别图片"这一工作过程。
             if ocr_sink:
                 steps = _synthetic_ocr_sse_steps(ocr_sink) + steps
+            # 将压缩报告插入步骤列表开头，让历史回放时也能看到压缩卡片
+            if compaction_step:
+                steps = [compaction_step] + steps
             for step in steps:
                 if step.get("type") == "tool_result":
                     self._record_tool_call(step.get("tool") or "unknown", thread_id=tid)
