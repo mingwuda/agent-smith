@@ -81,8 +81,49 @@ class AgentChatMixin:
                     data = json.loads(line[6:])
                 except json.JSONDecodeError:
                     continue
-                if data.get("type") in ("thought", "tool_start", "tool_result", "done", "error"):
+                if data.get("type") in ("thought", "tool_start", "tool_result", "reflection", "done", "error"):
                     yield data
+
+
+    async def quick_reflection(
+        self,
+        user_message: str,
+        tool_call_history: list[dict],
+    ) -> Optional[str]:
+        """过程反思：任务执行中途快速自检是否偏航，返回纠偏提示（或 None=无需干预）。
+
+        - 与 reflect_on_task（任务结束后总结经验）互补，这里只关注「现在是否走偏了」。
+        - 用审核模型（可选回退主模型）做轻量判断，15s 超时，失败静默返回 None，
+          绝不阻塞主流程。
+        - 返回文本会作为 SystemMessage 注入 checkpoint，引导模型在下一轮 LLM 调用
+          时重新评估策略（ReAct 图会自然读取到该消息）。
+        """
+        # 无工具调用历史（首轮或纯问答）不反思
+        if not tool_call_history:
+            return None
+        tool_summary = "\n".join(
+            f"- {c.get('tool', '?')}({_truncate_args(c.get('args', {}))})"
+            for c in tool_call_history[-10:]  # 只看最近 10 步，控制 prompt 长度
+        )
+        context = (
+            "你是一个 AI 助手的执行监督者。该助手正在执行多步任务，请检查它是否偏航。\n\n"
+            f"## 用户需求\n{user_message[:300]}\n\n"
+            f"## 最近工具调用\n{tool_summary}\n\n"
+            "请判断：这些工具调用是否在推进用户任务？是否在无效重试或绕圈？\n"
+            "- 若进展正常，只回复：正常\n"
+            "- 若已偏航/停滞，用一句话（30 字以内）指出问题和建议的调整方向"
+        )
+        # 优先用审核模型（与主模型解耦、控成本）；未配置则回退主模型
+        llm = self._build_review_llm() or self._build_llm()
+        llm.request_timeout = 15  # 短超时，绝不阻塞主流程
+        try:
+            resp = await llm.ainvoke([HumanMessage(content=context)])
+            text = str(resp.content).strip()
+            if not text or "正常" in text[:10]:
+                return None
+            return text
+        except Exception:
+            return None
 
 
     async def reflect_on_task(

@@ -1122,6 +1122,23 @@ function handleStreamEvent(data) {
       break;
     }
 
+    case 'reflection': {
+      // 过程反思：执行监督者发现偏航时给出的纠偏提示，实时展示在思考面板
+      const advice = data.content || '';
+      if (!advice) break;
+      ensureStepsContainer();
+      _promoteCurrentToHistory();
+      const reflDiv = document.createElement('div');
+      reflDiv.className = 'reasoning-block reflection-block';
+      reflDiv.innerHTML =
+        '<div class="reasoning-header">🧭 ' + escapeHtml(t('reflection') || '执行监督') +
+        ' <span class="reasoning-state">发现偏航</span></div>' +
+        '<div class="reasoning-content">' + renderMarkdown(advice) + '</div>';
+      currentStepsEl.insertBefore(reflDiv, currentStepsEl.firstChild);
+      smartScroll(container);
+      break;
+    }
+
     case 'thought': {
       _finalizeReasoning();       // 思考阶段结束（本轮为工具轮）
       _finalizeThinking(true);    // 结束上一个 thought 顶部面板，立即淡出避免堆叠

@@ -103,6 +103,7 @@ class WeChatBot(WeChatCommandMixin, WeChatSendMixin):
         # 频控是频率型（ret=-2 rate limited，官方仓库 Tencent/openclaw-weixin#142 用 backoff 应对）。
         # 因此发送节奏由「批量合并省条数 + 滑动窗口限速 + 失败退避重试」保证，budget 仅在极端
         # 刷屏场景兜底（30 条 × 批量3 ≈ 覆盖 90 个工具过程，正常任务几乎触达不到；最终回复不受限）。
+        # ponytail: 原设计在 budget 耗尽时静默丢弃 step 消息，现已改为暂存队列等冷却后补发。
         self.step_msg_budget = int(os.environ.get("WECHAT_STEP_MSG_BUDGET", "30"))
         # step 消息批量合并：每 N 个工具结果攒批合并为 1 条消息（默认 3）。
         # 批量后 30 条防御上限可覆盖 30×3=90 个工具执行过程，过程消息几乎全程可见，
@@ -125,6 +126,11 @@ class WeChatBot(WeChatCommandMixin, WeChatSendMixin):
         # 新 bot 拿不到轮询锁」两类连锁故障（2026-08-03 线上事故根因）。
         self._retry_queue: deque = deque()
         self._retry_task: Optional[asyncio.Task] = None
+        # step 消息暂存队列：当 step_msg_budget 耗尽或频控冷却时，step 消息不入丢，
+        # 而是暂存到此队列；冷却结束/下一轮任务开始时由 _drain_step_pending_queue 统一发出。
+        # 避免工具调用多时用户看不到任何过程反馈（"以为卡死"的根本原因）。
+        self._step_pending_queue: deque = deque()
+        self._step_pending_draining: bool = False  # 防止 _drain 递归调用
         # 微信频控感知：sendmessage 返回 prepare failed 后进入冷却窗口，
         # 期间 step 消息暂停发送（不再持续踩频控，缩短频控持续时间），
         # 只保留最终回复的立即重试 + 后台补发。窗口内任一发送成功后清零。
@@ -572,6 +578,7 @@ class WeChatBot(WeChatCommandMixin, WeChatSendMixin):
             pending_step_since: float = time.time()  # 攒批起始时间，配合 step_msg_batch_timeout 保证反馈及时
             collected_steps: list[dict] = []  # 收集步骤卡片，随最终回复保存（Web 端回放渲染工具卡片）
             self._step_sent_count = 0  # 每轮任务重置 step 消息预算计数
+            self._step_pending_queue.clear()  # 每轮任务清空暂存队列
             agent = self._ensure_agent()
             try:
                 # 工具调用间歇期持续发送 typing，让用户手机端看到"正在输入"
@@ -646,6 +653,9 @@ class WeChatBot(WeChatCommandMixin, WeChatSendMixin):
                                     pending_step_lines.clear()
                                     pending_thought = ""
                                     pending_step_since = time.time()
+                            elif et == "context_compacted":
+                                # 压缩报告也收集，随最终回复保存供 Web 端回放
+                                collected_steps.append(ev)
                             elif et == "done":
                                 reply = ev.get("content", "")
                                 # flush 残余批量 step（不足 batch 条的尾批也合并一条发出去，不留过程死角）

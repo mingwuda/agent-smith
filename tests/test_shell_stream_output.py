@@ -54,7 +54,9 @@ def test_realtime_output_visible_during_run():
     result: dict = {}
 
     def _run():
-        result["out"] = run_shell.invoke({"command": "echo first; sleep 1; echo second; sleep 1; echo done"})
+        # ponytail: 显式 timeout=10（< 30s 异步阈值）走同步路径，drain 才能在 invoke 返回前抓到输出。
+        # 不传 timeout 会走异步路径，invoke 立刻返回拿不到中间块。
+        result["out"] = run_shell.invoke({"command": "echo first; sleep 1; echo second; sleep 1; echo done", "timeout": 10})
 
     t = threading.Thread(target=_run, daemon=True)
     t.start()

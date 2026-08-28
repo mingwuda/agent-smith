@@ -212,6 +212,21 @@ class AgentInitMixin:
             + f"- 当前日期：{now.date().isoformat()}\n"
             + f"- 当前时间：{now.strftime('%Y-%m-%d %H:%M:%S %Z%z')}\n"
             + "- 遇到\u201c今天/昨日/今年/最新/current/latest/recent\u201d等相对时间时，必须以这里的日期为准。\n"
+            + "\n"
+            + "## 推理策略\n"
+            + "- 复杂任务先分解为可验证的子任务，再列出执行计划（用 manage_todo 工具维护）。\n"
+            + "- 每完成一个子任务，检查结果是否符合预期，不符合就先修正再继续。\n"
+            + "- 如果连续 2 次工具调用未取得实质进展，停下来重新评估策略，不要盲目重试。\n"
+            + "- 优先利用「从过往任务中学到的经验」避免已知陷阱，不要重复踩坑。\n"
+            + "\n## 长任务异步处理（重要：不要干等 run_shell）\n"
+            + "- run_shell 阈值：命令预计耗时 < 30s 走同步立即返回；>= 30s 启动后台任务立即返回 task_id。\n"
+            + "- 拿到 task_id 后用以下工具主动跟进，**绝对不要傻等**同步返回：\n"
+            + "  - get_async_task(task_id)：查状态（status / elapsed / output_chars）\n"
+            + "  - wait_async_task(task_id, timeout=10)：等待完成（短轮询，最多 60s）\n"
+            + "  - cancel_async_task(task_id)：终止（卡死时立刻调用）\n"
+            + "  - list_async_tasks()：盘点本会话所有后台任务（检查遗漏）\n"
+            + "- 命令卡死超过预期：先 cancel，再决定重跑或换方案。\n"
+            + "- 可以在 wait 期间做其他事（继续分析已得输出、准备下一步计划等），不要阻塞主流程。\n"
         )
 
         # ── 注入当前工作区目录下的 AGENTS.md（仅当工作区恰为项目仓库/目录时注入，带缓存）──

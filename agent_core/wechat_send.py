@@ -168,16 +168,21 @@ class WeChatSendMixin:
         因此不做"失败即放弃后续 step"：滑动窗口限速 + 失败指数退避重试（max_retries=1,
         retry_delay=2s 即 2s→4s 退避），单条失败只记日志，后续 step 继续发，
         过程消息持续可见；最终回复有独立更长的重试兜底（send_message max_retries=3）。
+
+        ponytail: 当 step_msg_budget 耗尽或频控冷却中时，消息不再丢弃，而是暂存到
+        _step_pending_queue，由 _send_step_msg_immediate 在冷却结束后补发。
         """
         # 频控冷却中：微信侧限频未解除，step 消息暂停发送（避免持续踩频控拉长冷却），
         # 最终回复仍走立即重试 + 后台补发，不受影响。
         if time.time() < self._rate_limited_until:
-            logger.debug("[微信Bot:%s] 频控冷却中，跳过 step 消息: %s", self.user_id, text[:40])
+            logger.debug("[微信Bot:%s] 频控冷却中，暂存 step 消息: %s", self.user_id, text[:40])
+            self._step_pending_queue.append(text)
             return
         # 防御性上限：仅拦截极端刷屏场景，正常任务被限速器+批量约束不会触达
         if self._step_sent_count >= self.step_msg_budget:
-            logger.debug("[微信Bot:%s] step 消息达到防御上限(%d)，跳过: %s",
-                         self.user_id, self.step_msg_budget, text[:40])
+            logger.info("[微信Bot:%s] step 消息达到防御上限(%d)，暂存等待冷却后补发: %s",
+                        self.user_id, self.step_msg_budget, text[:40])
+            self._step_pending_queue.append(text)
             return
         try:
             await self._throttle_send()
@@ -191,6 +196,27 @@ class WeChatSendMixin:
                 logger.warning("[微信Bot:%s] step 消息发送失败（跳过）: %s", self.user_id, text[:60])
         except Exception as e:
             logger.warning("[微信Bot:%s] step 消息发送异常: %s", self.user_id, e)
+
+    async def _send_step_msg_immediate(self, to_user_id: str, context_token: str, text: str):
+        """直接发送 step 消息（跳过频控冷却检查），用于补发暂存队列中的消息。
+
+        在任务结束/冷却结束后调用，此时微信侧频控已解除，直接发送即可。
+        """
+        if self._step_pending_draining:
+            return  # 防止递归
+        self._step_pending_draining = True
+        try:
+            await self._throttle_send()
+            await self._rate_limit_send()
+            resp = await self.send_message(to_user_id, context_token, text, max_retries=0)
+            if resp.get("ret", -1) == 0:
+                logger.info("[微信Bot:%s] 补发 step 消息成功: %s", self.user_id, text[:40])
+            else:
+                logger.warning("[微信Bot:%s] 补发 step 消息失败: %s", self.user_id, text[:60])
+        except Exception as e:
+            logger.warning("[微信Bot:%s] 补发 step 消息异常: %s", self.user_id, e)
+        finally:
+            self._step_pending_draining = False
 
     async def send_image(
         self, to_user_id: str, context_token: str, image_path: str

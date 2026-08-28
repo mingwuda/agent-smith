@@ -14,6 +14,7 @@ async 方法、可控时钟（patch 模块级 time.time，与实现解耦）。
 import sys
 import asyncio
 import time as _real_time
+from collections import deque
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock
 
@@ -153,6 +154,8 @@ def _make_step_bot(clock: _Clock) -> WeChatBot:
     bot.step_msg_budget = 30
     bot._step_sent_count = 0
     bot._rate_limited_until = 0.0
+    bot._step_pending_queue = deque()  # 新增：暂存队列
+    bot._step_pending_draining = False  # 新增：防递归标志
     bot._throttle_send = AsyncMock()
     bot._rate_limit_send = AsyncMock()
     bot.send_message = AsyncMock(return_value={"ret": 0, "message_id": "m-1"})
@@ -160,7 +163,7 @@ def _make_step_bot(clock: _Clock) -> WeChatBot:
 
 
 def test_step_msg_skipped_during_cooldown(monkeypatch):
-    """频控冷却中：step 消息直接跳过，绝不调用 send_message（不踩频控）。"""
+    """频控冷却中：step 消息暂存到 _step_pending_queue，绝不调用 send_message（不踩频控）。"""
     clock = _Clock()
     monkeypatch.setattr("agent_core.wechat_bot.time.time", clock.now)
     bot = _make_step_bot(clock)
@@ -169,10 +172,12 @@ def test_step_msg_skipped_during_cooldown(monkeypatch):
     asyncio.run(bot._send_step_msg("u1", "tok", "正在执行…"))
     bot.send_message.assert_not_called()
     assert bot._step_sent_count == 0
+    assert len(bot._step_pending_queue) == 1
+    assert bot._step_pending_queue[0] == "正在执行…"
 
 
 def test_step_msg_skipped_when_budget_exhausted(monkeypatch):
-    """防御预算耗尽：step 消息跳过（最终回复不受限，budget 仅兜底刷屏）。"""
+    """防御预算耗尽：step 消息暂存到 _step_pending_queue，绝不调用 send_message。"""
     clock = _Clock()
     monkeypatch.setattr("agent_core.wechat_bot.time.time", clock.now)
     bot = _make_step_bot(clock)
@@ -181,6 +186,8 @@ def test_step_msg_skipped_when_budget_exhausted(monkeypatch):
 
     asyncio.run(bot._send_step_msg("u1", "tok", "正在执行…"))
     bot.send_message.assert_not_called()
+    assert len(bot._step_pending_queue) == 1
+    assert bot._step_pending_queue[0] == "正在执行…"
 
 
 def test_step_msg_success_increments_count(monkeypatch):
