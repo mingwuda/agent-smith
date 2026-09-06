@@ -249,6 +249,7 @@ class AgentConfig:
                 current.setdefault("model", "")
                 current.setdefault("base_url", "")
                 current.setdefault("is_custom", provider_id not in DEFAULT_PROVIDERS or provider_id == "custom")
+                current.setdefault("vision_models", [])
         self.providers = providers
 
         if self.active_provider not in self.providers:
@@ -318,6 +319,15 @@ class AgentConfig:
             return
         valid = [m for m in order if m in self.providers[provider_id].get("models", [])]
         self.providers[provider_id]["model_order"] = valid
+
+    def set_vision_models(self, provider_id: str, models: list[str]):
+        """标记该 provider 下哪些模型支持图片输入（来自设置页的显式勾选）。"""
+        self._normalize_providers()
+        if provider_id not in self.providers:
+            return
+        # 只保留该 provider 真实存在的模型，避免脏数据
+        valid = [m for m in models if m in self.providers[provider_id].get("models", [])]
+        self.providers[provider_id]["vision_models"] = valid
 
     def delete_provider(self, provider_id: str):
         """删除自定义 Provider"""
@@ -394,6 +404,7 @@ class AgentConfig:
                 "base_url": provider.get("base_url", ""),
                 "models": provider.get("models", []),
                 "model_order": provider.get("model_order", []),
+                "vision_models": provider.get("vision_models", []),
                 "api_key_configured": bool(api_key),
                 "api_key_preview": api_key[:8] + "..." if len(api_key) > 8 else ("已设置" if api_key else "未设置"),
             }

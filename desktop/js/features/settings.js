@@ -183,15 +183,10 @@ function renderProviderFields(providerId) {
     return ia - ib;
   });
   
-  const modelSelect = document.getElementById('s-model');
-  if (modelSelect) {
-    modelSelect.innerHTML = '';
-    models.forEach(modelName => {
-      const option = document.createElement('option');
-      option.value = modelName;
-      modelSelect.appendChild(option);
-    });
-    modelSelect.value = provider.model || '';
+  // 设置模型名称输入框的值
+  const modelInput = document.getElementById('s-model');
+  if (modelInput) {
+    modelInput.value = provider.model || '';
   }
   document.getElementById('s-base-url').value = provider.base_url || '';
   document.getElementById('s-api-key').value = '';
@@ -234,6 +229,10 @@ function renderProviderFields(providerId) {
       reviewModelOpts.appendChild(opt);
     });
   }
+
+  // ponytail: 视觉模型列表需要在每次切换厂商 / 加载设置页时重新渲染，
+  // 否则 #vision-models-list 会保持空状态，看起来"模型列表丢失了"。
+  renderVisionModels(provider);
 }
 
 function onReviewProviderChange() {
@@ -263,6 +262,39 @@ function onProviderChange() {
   renderProviderFields(document.getElementById('s-provider').value);
 }
 
+// 模型名称输入变化时，同步更新 provider.model
+function onModelChange() {
+  const providerId = document.getElementById('s-provider').value;
+  if (!providerId || !settingsData || !settingsData.providers) return;
+  const provider = settingsData.providers[providerId];
+  if (!provider) return;
+  provider.model = document.getElementById('s-model').value.trim();
+}
+
+// 将输入框中的模型名添加到当前厂商的 models 列表
+function addModelToProvider() {
+  const providerId = document.getElementById('s-provider').value;
+  if (!providerId || !settingsData || !settingsData.providers) return;
+  const provider = settingsData.providers[providerId];
+  if (!provider) return;
+  const input = document.getElementById('s-model');
+  const modelName = input.value.trim();
+  if (!modelName) return;
+  if (!Array.isArray(provider.models)) provider.models = [];
+  if (provider.models.includes(modelName)) {
+    showToast(currentLanguage === 'en' ? 'Model already exists' : '该模型已存在', 'error');
+    return;
+  }
+  provider.models.push(modelName);
+  // 同时设为当前 model
+  provider.model = modelName;
+  // 重新渲染视觉模型列表
+  renderVisionModels(provider);
+  persistOrder();
+  // 清空输入框
+  input.value = '';
+}
+
 function moveSelectedProvider(delta) {
   if (!settingsData || !settingsData.providers) return;
   const select = document.getElementById('s-provider');
@@ -279,69 +311,104 @@ function moveSelectedProvider(delta) {
   persistOrder();
 }
 
-function moveSelectedModel(delta) {
-  if (!settingsData || !settingsData.providers) return;
-  const providerId = document.getElementById('s-provider').value;
-  if (!providerId) return;
-  const provider = settingsData.providers[providerId];
-  if (!provider) return;
-  const modelSelect = document.getElementById('s-model');
-  const model = modelSelect ? modelSelect.value : provider.model;
-  if (!model) return;
-  const models = Array.from(provider.models || []);
-  const idx = models.indexOf(model);
-  const newIdx = idx + delta;
-  if (newIdx < 0 || newIdx >= models.length) return;
-  [models[idx], models[newIdx]] = [models[newIdx], models[idx]];
-  provider.models = models;
-  if (modelSelect) {
-    modelSelect.innerHTML = '';
-    models.forEach(m => {
-      const opt = document.createElement('option');
-      opt.value = m;
-      modelSelect.appendChild(opt);
-    });
-    modelSelect.value = model;
+// 渲染"视觉模型"标记区：列出当前厂商每个模型，并标注是否为视觉模型
+function renderVisionModels(provider) {
+  const list = document.getElementById('vision-models-list');
+  if (!list) return;
+  list.innerHTML = '';
+  const models = (provider && provider.models) || [];
+  if (!models.length) {
+    list.innerHTML = '<div class="hint" data-i18n="noModelForVision">该厂商暂无已配置模型，先添加模型后再标记视觉能力。</div>';
+    return;
   }
-  persistOrder();
+  const visionSet = new Set((provider && provider.vision_models || []).map(m => m));
+
+  // 建立拖拽状态
+  let _dragSrcIdx = null;
+
+  models.forEach((m, idx) => {
+    const isVision = visionSet.has(m);
+    const row = document.createElement('div');
+    row.className = 'vision-model-row';
+    row.setAttribute('draggable', 'true');
+    row.dataset.index = idx;
+
+    // 拖拽手柄（左侧四条横线图标）
+    const handle = document.createElement('span');
+    handle.className = 'vision-drag-handle';
+    handle.textContent = '⠿';
+    handle.title = currentLanguage === 'en' ? 'Drag to reorder' : '拖拽排序';
+
+    // 模型图标
+    const icon = document.createElement('span');
+    icon.className = 'vision-model-icon';
+    icon.textContent = isVision ? '👁' : '🚫';
+
+    // 模型名称
+    const label = document.createElement('span');
+    label.className = 'vision-model-name';
+    label.textContent = m + (isVision ? '（视觉）' : '');
+
+    // 删除按钮
+    const delBtn = document.createElement('button');
+    delBtn.type = 'button';
+    delBtn.className = 'vision-model-delete';
+    delBtn.title = currentLanguage === 'en' ? 'Delete model' : '删除模型';
+    delBtn.textContent = '✕';
+    delBtn.onclick = () => deleteModelFromProvider(m);
+
+    row.appendChild(handle);
+    row.appendChild(icon);
+    row.appendChild(label);
+    row.appendChild(delBtn);
+    list.appendChild(row);
+
+    // ── 拖拽事件 ──
+    row.addEventListener('dragstart', (e) => {
+      _dragSrcIdx = idx;
+      row.classList.add('dragging');
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', idx);
+    });
+    row.addEventListener('dragend', () => {
+      row.classList.remove('dragging');
+      document.querySelectorAll('.vision-model-row.drag-over').forEach(el => el.classList.remove('drag-over'));
+      _dragSrcIdx = null;
+    });
+    row.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      if (_dragSrcIdx !== null && _dragSrcIdx !== idx) {
+        row.classList.add('drag-over');
+      }
+    });
+    row.addEventListener('dragleave', () => {
+      row.classList.remove('drag-over');
+    });
+    row.addEventListener('drop', (e) => {
+      e.preventDefault();
+      row.classList.remove('drag-over');
+      const srcIdx = parseInt(e.dataTransfer.getData('text/plain'), 10);
+      const dstIdx = idx;
+      if (srcIdx === dstIdx || isNaN(srcIdx)) return;
+      // 重排 models 数组
+      const moved = models.splice(srcIdx, 1)[0];
+      models.splice(dstIdx, 0, moved);
+      provider.models = models;
+      // 同步更新 s-model 输入框
+      const modelInput = document.getElementById('s-model');
+      if (modelInput) {
+        if (!models.includes(modelInput.value)) {
+          modelInput.value = models[0] || '';
+        }
+      }
+      // 重新渲染视觉模型列表（保持当前视觉标记）
+      renderVisionModels(provider);
+      persistOrder();
+    });
+  });
 }
 
-// 将当前 provider_order / model_order 增量写回后端（不依赖"保存设置"按钮）
-let _persistOrderPending = false;
-async function persistOrder() {
-  if (!isAdmin || _persistOrderPending) return;
-  if (!settingsData || !settingsData.providers) return;
-  _persistOrderPending = true;
-  try {
-    const body = {
-      provider_order: settingsData.provider_order || Object.keys(settingsData.providers || {}),
-      model_order: (() => {
-        const out = {};
-        Object.entries(settingsData.providers).forEach(([pid, p]) => {
-          if (p.models && p.models.length) out[pid] = p.models;
-        });
-        return out;
-      })(),
-    };
-    const res = await fetch('/settings/order', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) {
-      const detail = await res.text().catch(() => '');
-      console.error('[persistOrder] 保存排序失败', res.status, detail);
-      if (res.status === 403) {
-        // 非 admin 无法保存排序，给出明确提示，避免"静默无效"
-        if (typeof addMessage === 'function') addMessage(t('orderSaveNeedAdmin') || '排序保存失败：需要以 admin 身份登录', 'system');
-      }
-    }
-  } catch (e) {
-    console.error('[persistOrder] 异常', e);
-  } finally {
-    _persistOrderPending = false;
-  }
-}
 
 function addCustomProvider() {
   if (!settingsData) settingsData = { providers: {} };

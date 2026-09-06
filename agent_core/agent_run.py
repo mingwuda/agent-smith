@@ -885,10 +885,11 @@ class AgentRunMixin:
                         "args": inp,
                     })
 
-                    # ── 过程反思：每 5 次工具调用后快速自检是否偏航 ──
+                    # ── 过程反思：每 8 次工具调用后快速自检是否偏航 ──
                     # 用审核模型（回退主模型）轻量判断，15s 超时失败静默，绝不阻塞主流程。
                     # 若判定偏航，把纠偏提示写入 checkpoint + 发 reflection 事件给前端。
-                    if len(tool_call_history) % 5 == 0 and len(tool_call_history) > 0:
+                    # ponytail: 触发间隔从 5 提到 8，平衡纠偏价值与噪音（反思卡片过频）。
+                    if len(tool_call_history) % 8 == 0 and len(tool_call_history) > 0:
                         try:
                             _advice = await self.quick_reflection(message, tool_call_history)
                             if _advice:

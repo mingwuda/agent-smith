@@ -371,6 +371,8 @@
   /* 思考过程面板：思考完成后延时 3s 淡出关闭 */
   .reasoning-block { transition: opacity .5s ease; }
   .reasoning-block.fading { opacity: 0; }
+  /* 反思卡片归档到「工作耗时」历史后：状态文案淡化，明确"已归档"语义 */
+  .reasoning-block.archived .reasoning-state { font-weight: 400; color: #999; }
 
   /* 第一行：头像 + 耗时 + 折叠箭头 */
   .agent-header {

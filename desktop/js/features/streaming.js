@@ -1136,6 +1136,28 @@ function handleStreamEvent(data) {
         '<div class="reasoning-content">' + renderMarkdown(advice) + '</div>';
       currentStepsEl.insertBefore(reflDiv, currentStepsEl.firstChild);
       smartScroll(container);
+
+      // 反思卡片默认只展示在执行区几秒，延时淡出后搬入「第一段·工作耗时」历史，
+      // 避免执行区被持续刷新堆叠。回放期间不动 DOM，保持视觉一致。
+      // ponytail: 反思频率较高（每个 step 都可能触发），若卡在执行区会越积越多；
+      // 4s 足够用户扫读，4s 后移入历史（第一段默认折叠），需要时展开即可查阅。
+      if (!_isReplaying) {
+        setTimeout(function() {
+          if (!reflDiv.isConnected) return;
+          reflDiv.classList.add('fading');
+          setTimeout(function() {
+            if (!reflDiv.isConnected) return;
+            if (_historyBodyEl && _historyBodyEl.isConnected) {
+              // 标记完成 + 搬入历史（第一段默认折叠），移除 fading 恢复不透明
+              reflDiv.classList.add('done', 'archived');
+              reflDiv.classList.remove('fading');
+              _historyBodyEl.appendChild(reflDiv);
+            } else {
+              reflDiv.remove();
+            }
+          }, 550);  // 与 CSS .reasoning-block .5s 过渡对齐
+        }, 4000);
+      }
       break;
     }
 
@@ -1176,11 +1198,23 @@ function handleStreamEvent(data) {
         _thinkingEl = thinkBlock;
       }
 
-      // 同时保留一个 .thought-block 在底部，后续提升进「第一段·工作耗时」历史
+      // 持久化的思考记录：直接挂到「第一段·工作耗时」历史（默认折叠），不再进执行区。
+      // ponytail: 旧逻辑把 .thought-block append 到 currentStepsEl 底部，等待下一次
+      // _promoteCurrentToHistory 提升进历史。这导致执行区同时存在：
+      //   - 顶部 thinking-block（临时"AI 正在思考..."面板）
+      //   - 底部 thought-block（持久记录，内容相同）
+      // 两块内容一致，看着像两个思考区。改为直接挂到 _historyBodyEl（默认折叠），
+      // 历史顺序仍正确：tool_start 会先 _promoteCurrentToHistory 把工具卡搬到历史，
+      // 然后 thought-block appendChild 到历史末尾，自然排在工具卡之后。
+      // 边界：_historyBodyEl 不可用时降级到 currentStepsEl，保持兼容。
       const thoughtDiv = document.createElement('div');
       thoughtDiv.className = 'thought-block';
       thoughtDiv.innerHTML = thoughtHtml;
-      currentStepsEl.appendChild(thoughtDiv);
+      if (_historyBodyEl && _historyBodyEl.isConnected) {
+        _historyBodyEl.appendChild(thoughtDiv);
+      } else {
+        currentStepsEl.appendChild(thoughtDiv);
+      }
       if (!_isReplaying) {
         showThinkingHint(t('keepAnalyzing'));
       }

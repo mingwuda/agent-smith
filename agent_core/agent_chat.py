@@ -109,9 +109,14 @@ class AgentChatMixin:
             "你是一个 AI 助手的执行监督者。该助手正在执行多步任务，请检查它是否偏航。\n\n"
             f"## 用户需求\n{user_message[:300]}\n\n"
             f"## 最近工具调用\n{tool_summary}\n\n"
-            "请判断：这些工具调用是否在推进用户任务？是否在无效重试或绕圈？\n"
-            "- 若进展正常，只回复：正常\n"
-            "- 若已偏航/停滞，用一句话（30 字以内）指出问题和建议的调整方向"
+            "## 判断准则（严格遵守）\n"
+            "- 仅在以下情况纠偏：明显重复同一工具相同参数（绕圈）、多次失败重试同一路径、"
+            "工具调用明显与用户需求无关、已偏离用户原始目标。\n"
+            "- 仅给出「下一步建议」但当前流程仍正常推进 → 不算偏航。\n"
+            "- 仅给出「可优化项」但当前任务未受影响 → 不算偏航。\n\n"
+            "## 回复格式\n"
+            "- 若一切正常，请**只**回复一个字：「正常」。不要补充说明、不要给下一步建议、不要列举可优化点。\n"
+            "- 若确实偏航/停滞，用一句话（30 字以内）指出问题。\n"
         )
         # 优先用审核模型（与主模型解耦、控成本）；未配置则回退主模型
         llm = self._build_review_llm() or self._build_llm()
@@ -119,7 +124,18 @@ class AgentChatMixin:
         try:
             resp = await llm.ainvoke([HumanMessage(content=context)])
             text = str(resp.content).strip()
-            if not text or "正常" in text[:10]:
+            if not text:
+                return None
+            # 抑制条件（ponytail：原只看前 10 字符，误判多）：
+            # 1) 标准"正常"回复（去标点后等于"正常"）
+            # 2) 开头即"进展正常/整体正常/基本正常/暂时正常/暂无偏航/无需干预"等正向短语
+            # 注：不开头"正常"是因为"正常情况下..."/"正常来说..."等句首修饰词会误伤（改为靠 rstrip 兜底纯"正常"回复）
+            if text.rstrip("。.,， ") == "正常":
+                return None
+            if any(text.startswith(kw) for kw in (
+                "进展正常", "整体正常", "基本正常", "暂时正常",
+                "暂无偏航", "暂无问题", "无需干预", "无需纠偏",
+            )):
                 return None
             return text
         except Exception:

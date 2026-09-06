@@ -226,9 +226,13 @@ def save_settings(req: SettingsRequest, request: Request):
 
 
 class SettingsOrderRequest(BaseModel):
-    """仅用于保存显示顺序（不影响 API Key / model / base_url 等其他设置）"""
+    """仅用于保存 provider 级轻量元数据（顺序 / 视觉模型标记）。
+
+    不影响 API Key / model / base_url 等其他设置。
+    """
     provider_order: list[str] = []
     model_order: dict[str, list[str]] = {}
+    vision_models: dict[str, list[str]] = {}  # {provider_id: [model, ...] 支持图片输入的模型}
 
 
 @router.post("/settings/order")
@@ -245,7 +249,25 @@ def save_settings_order(req: SettingsOrderRequest, request: Request):
     if req.model_order:
         for pid, order in req.model_order.items():
             cfg.set_model_order(pid, order)
+    # 视觉模型标记：始终遍历，空列表表示"该厂商已无视觉模型"，需要能清空
+    for pid, models in req.vision_models.items():
+        cfg.set_vision_models(pid, models)
     cfg.save()
+
+    # 视觉模型标记变化后，立即把磁盘上的最新 config 重新加载到运行中的 agent 实例，
+    # 使"点 👁 即时生效"，无需重启后端或点"保存设置"。
+    # 仅轻量替换 config 对象，不触发全量 reinit（避免重启微信 bot）。
+    if req.vision_models:
+        try:
+            from app_state import get_agent, set_agent_config
+            refreshed = AgentConfig.load()
+            ag = get_agent()
+            if ag is not None:
+                ag.config = refreshed
+            set_agent_config(refreshed)
+        except Exception:
+            logger.exception("视觉模型标记已保存，但热更新运行中的 Agent 配置失败")
+
     return {"status": "ok", "message": "排序已保存"}
 
 

@@ -567,9 +567,12 @@ def _model_supports_vision(config: AgentConfig) -> bool:
 
     判断顺序（优先级从高到低）：
       1. 环境变量 AGENT_OCR_FALLBACK=1/0 强制开关（覆盖关键词判断）
-      2. 命中视觉模型关键词 → 支持
-      3. 命中非视觉模型关键词 → 不支持
-      4. 未知模型 → 默认支持（保持原行为，不误伤）
+      2. 用户在设置页显式标记的支持视觉的模型（provider.vision_models）——只要该厂商
+         有显式标记，就完全采信用户的勾选（勾了=视觉，没勾=非视觉），不再回退关键词；
+         这样用户能精确控制，例如把 step/video 等网关实际支持的视觉模型标记为视觉。
+      3. 命中视觉模型关键词 → 支持
+      4. 命中非视觉模型关键词 → 不支持
+      5. 未知模型 → 默认不支持（走 OCR 降级），绝不让纯文本模型收到 image_url
     """
     env_flag = os.getenv("AGENT_OCR_FALLBACK", "").strip().lower()
     if env_flag in ("1", "true", "on", "force"):
@@ -579,6 +582,14 @@ def _model_supports_vision(config: AgentConfig) -> bool:
 
     model = str(config.model or "").lower()
     provider = str(config.active_provider or "").lower()
+
+    # 优先采信用户在设置页显式标记的视觉模型（vision_models）。
+    # 仅当该厂商被用户配置过视觉列表时才采信——否则回退关键词启发式。
+    prov = (config.providers or {}).get(config.active_provider, {})
+    vision_models = [str(m).lower() for m in (prov.get("vision_models") or [])]
+    if vision_models:
+        return model in vision_models
+
     combined = f"{provider}/{model}"
     if any(k in model for k in _VISION_MODEL_KEYWORDS):
         return True
