@@ -11,8 +11,11 @@
 下第一个被标记为 vision_models 的模型名作为"图片描述模型"。
 """
 import base64
+import logging
 import re
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 
 _DATA_URL_RE = re.compile(r"^data:image/[a-zA-Z0-9.+-]+;base64,(.+)$")
@@ -63,6 +66,18 @@ def _resolve_vision_model():
     return None
 
 
+def _current_active_pid() -> str:
+    """读取当前 active_provider id，仅用于诊断日志。失败返回空串。"""
+    try:
+        from app_state import get_agent_config
+        cfg = get_agent_config()
+    except Exception:
+        return ""
+    if cfg is None:
+        return ""
+    return str(getattr(cfg, "active_provider", "") or "")
+
+
 def describe_image_data_url(data_url: str) -> Optional[str]:
     """把 data URL 图片发给视觉模型，生成中文描述。
 
@@ -71,21 +86,29 @@ def describe_image_data_url(data_url: str) -> Optional[str]:
       - None：无视觉模型配置 / 调用失败（调用方应回退 OCR）
 
     异常：本函数吞掉所有视觉模型调用异常并返回 None，调用方无需 try/except。
+    ponytail：失败时一律打 warning 日志，方便排查为什么视觉路由没命中——
+    否则调用方只会看到"OCR 兜底了"而不知道根本原因。
     """
     triple = _resolve_vision_model()
     if not triple:
+        logger.warning(
+            "[vision_router] 未解析到任何视觉模型（active_provider=%s），回退 OCR/错误提示",
+            _current_active_pid(),
+        )
         return None
     api_key, base_url, vision_model = triple
 
     # 防御：data_url 必须可解 base64
     if _data_url_to_bytes(data_url) is None:
+        logger.warning("[vision_router] data_url 解析失败（不是合法的 data:image/...;base64,...）")
         return None
 
     try:
         # 使用 langchain 的 ChatOpenAI（兼容 OpenAI 风格接口的厂商都可用）
         from langchain_openai import ChatOpenAI
         from langchain_core.messages import HumanMessage
-    except Exception:
+    except Exception as e:
+        logger.warning("[vision_router] langchain 依赖缺失: %s", e)
         return None
 
     try:
@@ -106,8 +129,16 @@ def describe_image_data_url(data_url: str) -> Optional[str]:
         ])
         resp = llm.invoke([msg])
         text = str(getattr(resp, "content", "") or "").strip()
-        return text or None
-    except Exception:
+        if not text:
+            logger.warning("[vision_router] %s 调用成功但返回内容为空", vision_model)
+            return None
+        logger.info("[vision_router] %s 视觉描述成功（%d 字符）", vision_model, len(text))
+        return text
+    except Exception as e:
+        logger.warning(
+            "[vision_router] 调用视觉模型 %s 失败（base=%s）: %s: %s",
+            vision_model, base_url or "(default)", type(e).__name__, e,
+        )
         return None
 
 
