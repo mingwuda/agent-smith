@@ -523,9 +523,12 @@ def _human_content(message: str, attachments: Optional[list[dict]] = None, ocr_f
                 })
         return "\n\n".join(parts)
 
+    # 主模型本身支持视觉（ocr_fallback=False）：图片直接以 image_url 给模型，
+    # 但仍先压缩（降分辨率/转 JPEG），减小 payload 与超时概率。
+    from tools.vision_router import _compress_image_data_url
     content = []
     for item in valid_images:
-        content.append({"type": "image_url", "image_url": {"url": item["data_url"]}})
+        content.append({"type": "image_url", "image_url": {"url": _compress_image_data_url(item["data_url"])}})
     content.append({"type": "text", "text": message or "请分析这些图片。"})
     return content
 

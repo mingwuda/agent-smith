@@ -12,6 +12,7 @@
 """
 import base64
 import logging
+import os
 import re
 import time
 from typing import Optional
@@ -37,6 +38,62 @@ def _data_url_to_bytes(data_url: str) -> Optional[bytes]:
         return base64.b64decode(m.group(1))
     except Exception:
         return None
+
+
+def _compress_image_data_url(data_url: str) -> str:
+    """把 data URL 图片压缩（降分辨率 + 转 JPEG/PNG）后回传新的 data URL。
+
+    目的：减小送视觉模型的 payload，降低超大截图导致的请求超时与 token 开销。
+      - 仅当原始体积 > 300KB 或最大边长 > max_edge 时才压缩（小图不损失质量）。
+      - 含透明通道（RGBA/LA/带透明 P）保留 PNG；其余转 JPEG（质量 quality）。
+      - 任何异常（含未装 Pillow）一律原样返回，绝不阻断主流程。
+    可通过环境变量调节：AGENT_IMAGE_MAX_EDGE（默认 1280）、AGENT_IMAGE_QUALITY（默认 82）、
+    AGENT_IMAGE_COMPRESS=0 关闭压缩。
+    """
+    try:
+        from io import BytesIO
+        from PIL import Image
+    except Exception:
+        return data_url
+    raw = _data_url_to_bytes(data_url)
+    if raw is None:
+        return data_url
+    compress_on = str(os.getenv("AGENT_IMAGE_COMPRESS", "1")).strip().lower() not in ("0", "false", "off", "no")
+    if not compress_on:
+        return data_url
+    max_edge = int(os.getenv("AGENT_IMAGE_MAX_EDGE", "1280") or 1280)
+    quality = int(os.getenv("AGENT_IMAGE_QUALITY", "82") or 82)
+    # 先尝试读取尺寸与模式（失败则原样返回）
+    try:
+        img = Image.open(BytesIO(raw))
+        img.load()
+    except Exception:
+        return data_url
+    small = len(raw) < 300 * 1024 and max(img.size) <= max_edge
+    if small:
+        return data_url
+    # 等比缩小到 max_edge 以内
+    if max(img.size) > max_edge:
+        scale = max_edge / float(max(img.size))
+        new_size = (max(1, int(img.size[0] * scale)), max(1, int(img.size[1] * scale)))
+        img = img.resize(new_size, Image.LANCZOS)
+    has_alpha = img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info)
+    buf = BytesIO()
+    if has_alpha:
+        img.save(buf, format="PNG")
+    else:
+        img = img.convert("RGB")
+        img.save(buf, format="JPEG", quality=quality, optimize=True)
+    out = buf.getvalue()
+    if not out:
+        return data_url
+    before_kb = len(raw) // 1024
+    after_kb = len(out) // 1024
+    if after_kb < before_kb:
+        logger.info("[vision_router] 图片已压缩 %d→%d KB（%s）", before_kb, after_kb, "png" if has_alpha else "jpeg")
+    b64 = base64.b64encode(out).decode("ascii")
+    mime = "image/png" if has_alpha else "image/jpeg"
+    return f"data:{mime};base64,{b64}"
 
 
 def _resolve_vision_model():
@@ -110,6 +167,9 @@ def describe_image_data_url(data_url: str) -> Optional[str]:
     if _data_url_to_bytes(data_url) is None:
         logger.warning("[vision_router] data_url 解析失败（不是合法的 data:image/...;base64,...）")
         return None
+
+    # 压缩：减小 payload，降低超大截图导致的请求超时与 token 开销
+    data_url = _compress_image_data_url(data_url)
 
     try:
         # 使用 langchain 的 ChatOpenAI（兼容 OpenAI 风格接口的厂商都可用）
