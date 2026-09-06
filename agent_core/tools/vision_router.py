@@ -13,12 +13,20 @@
 import base64
 import logging
 import re
+import time
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
 
 _DATA_URL_RE = re.compile(r"^data:image/[a-zA-Z0-9.+-]+;base64,(.+)$")
+
+# 视觉模型单次调用超时（秒）。截图 + 慢接口的推理常常 >30s，给足余量避免误判超时。
+_VISION_TIMEOUT = 90
+# 对瞬时限流/超时重试次数（不重试确定性失败，如鉴权/参数错误）。
+_MAX_RETRIES = 2
+# 触发重试的瞬时异常类名关键字（其余异常直接放弃，避免无谓重试）。
+_RETRYABLE = ("Timeout", "RateLimit", "APIStatus", "ServiceUnavailable", "Connection")
 
 
 def _data_url_to_bytes(data_url: str) -> Optional[bytes]:
@@ -111,35 +119,51 @@ def describe_image_data_url(data_url: str) -> Optional[str]:
         logger.warning("[vision_router] langchain 依赖缺失: %s", e)
         return None
 
-    try:
-        llm = ChatOpenAI(
-            model=vision_model,
-            api_key=api_key,
-            base_url=base_url or None,
-            timeout=30,
-            max_retries=0,
-        )
-        prompt_text = (
-            "请用中文详细描述这张图片的内容，包括主体、场景、文字（如果有）、布局、风格等关键信息。"
-            "描述应能让看不到图片的人完整重建图片内容。控制在 500 字以内。"
-        )
-        msg = HumanMessage(content=[
-            {"type": "text", "text": prompt_text},
-            {"type": "image_url", "image_url": {"url": data_url}},
-        ])
-        resp = llm.invoke([msg])
-        text = str(getattr(resp, "content", "") or "").strip()
-        if not text:
-            logger.warning("[vision_router] %s 调用成功但返回内容为空", vision_model)
+    prompt_text = (
+        "请用中文详细描述这张图片的内容，包括主体、场景、文字（如果有）、布局、风格等关键信息。"
+        "描述应能让看不到图片的人完整重建图片内容。控制在 500 字以内。"
+    )
+    msg = HumanMessage(content=[
+        {"type": "text", "text": prompt_text},
+        {"type": "image_url", "image_url": {"url": data_url}},
+    ])
+
+    last_err: Optional[BaseException] = None
+    for attempt in range(1, _MAX_RETRIES + 1):
+        try:
+            llm = ChatOpenAI(
+                model=vision_model,
+                api_key=api_key,
+                base_url=base_url or None,
+                timeout=_VISION_TIMEOUT,
+                max_retries=0,  # 重试由本函数控制，避免 langchain 内部叠加
+            )
+            resp = llm.invoke([msg])
+            text = str(getattr(resp, "content", "") or "").strip()
+            if not text:
+                logger.warning("[vision_router] %s 调用成功但返回内容为空", vision_model)
+                return None
+            logger.info("[vision_router] %s 视觉描述成功（%d 字符）", vision_model, len(text))
+            return text
+        except Exception as e:  # noqa: BLE001
+            last_err = e
+            etype = type(e).__name__
+            retryable = any(k in etype for k in _RETRYABLE)
+            if retryable and attempt < _MAX_RETRIES:
+                backoff = 2 * attempt
+                logger.warning(
+                    "[vision_router] 调用视觉模型 %s 瞬时失败（第 %d/%d 次，base=%s）: %s: %s，%ds 后重试",
+                    vision_model, attempt, _MAX_RETRIES, base_url or "(default)", etype, e, backoff,
+                )
+                time.sleep(backoff)
+                continue
+            logger.warning(
+                "[vision_router] 调用视觉模型 %s 失败（base=%s）: %s: %s",
+                vision_model, base_url or "(default)", etype, e,
+            )
             return None
-        logger.info("[vision_router] %s 视觉描述成功（%d 字符）", vision_model, len(text))
-        return text
-    except Exception as e:
-        logger.warning(
-            "[vision_router] 调用视觉模型 %s 失败（base=%s）: %s: %s",
-            vision_model, base_url or "(default)", type(e).__name__, e,
-        )
-        return None
+    logger.warning("[vision_router] 调用视觉模型 %s 重试耗尽，放弃", vision_model)
+    return None
 
 
 def describe_image_file(file_path: str) -> Optional[str]:
