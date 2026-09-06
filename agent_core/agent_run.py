@@ -43,6 +43,7 @@ from agent_helpers import (
     _sse, _strip_image_content_from_messages, _strip_think_tags, _synthesize_guard_summary,
     _synthetic_ocr_sse_steps, _split_inflight_tail,
     _tool_signature, _truncate, _ensure_no_image_for_non_vision,
+    is_image_input_error, record_model_image_unsupported,
 )
 from loop_guard import _detect_tool_loop  # 原版 agent.py:169 的文件中间导入,拆分时需显式补回
 from tools.shell_tools import drain_shell_output  # run_shell 实时输出（心跳循环 drain 队列）
@@ -266,13 +267,18 @@ class AgentRunMixin:
         thread_key = self._thread_key(tid)
         await self._repair_checkpoint_tool_history(config, graph)
         await self._strip_checkpoint_images(config, graph)
+        # ponytail: 用"本次解析出的 provider/model"判断视觉能力，而非全局 config.model——
+        # 切换厂商发送时，实际模型是该厂商自己的 model（如 step-router-v1），否则会误判为
+        # 支持视觉、图片原样直发非视觉模型 → 400 image input not supported。
+        _run_pid, _run_mdl, *_ = self._resolve_provider_config(model_override, provider_override)
+        _ocr_fallback = not _model_supports_vision(self.config, provider_id=_run_pid, model=_run_mdl)
         if thread_key not in self._hydrated_threads:
-            input_messages = compact_history_messages(session_messages_to_langchain(history or [], ocr_fallback=not _model_supports_vision(self.config)), self.config, memory=get_memory(self._user_id))
+            input_messages = compact_history_messages(session_messages_to_langchain(history or [], ocr_fallback=_ocr_fallback), self.config, memory=get_memory(self._user_id))
         ocr_sink: list = []
-        current_content = _human_content(message, attachments, ocr_fallback=not _model_supports_vision(self.config), ocr_sink=ocr_sink)
+        current_content = _human_content(message, attachments, ocr_fallback=_ocr_fallback, ocr_sink=ocr_sink)
         input_messages.append(HumanMessage(content=current_content))
         # 兜底：模型不支持视觉时，清除任何残留 image_url（防御未来新路径漏图）
-        input_messages = _ensure_no_image_for_non_vision(input_messages, self.config)
+        input_messages = _ensure_no_image_for_non_vision(input_messages, self.config, provider_id=_run_pid, model=_run_mdl)
 
         # ── 按场景注入专项指导（仅在命中时插入 SystemMessage，不污染基础 prompt）──
         scene = _detect_scene(message, history)
@@ -348,6 +354,26 @@ class AgentRunMixin:
         except Exception as e:
             if _is_recursion_limit_error(e):
                 return f"❌ {_recursion_limit_message(config['recursion_limit'])}", []
+            # ponytail: API 拒绝图片输入 → 自动把当前模型标记为"实际不支持视觉"，
+            # 下次调用即走视觉路由（图片交给用户标记的真实视觉模型 → 描述 → 文本）。
+            # 仅 in-memory，进程重启后清空，给厂商升级/换模型留机会。
+            if attachments and is_image_input_error(e):
+                # ponytail: 必须用 _resolve_provider_config 解析"本次实际使用的模型"，
+                # 不能直接取 self.config.model——发送区切换 provider 后，实际模型是
+                # 该 provider 自己的 model（如 step-router-v1），而非全局 config.model
+                # （如 agnes-2.5-flash）。取错会把视觉模型冤枉成"不支持图片"。
+                pid, mdl, _key, _url, _is_anth = self._resolve_provider_config(
+                    model_override, provider_override
+                )
+                record_model_image_unsupported(pid, mdl)
+                return (
+                    f"❌ 当前模型 {mdl}（厂商 {pid}）不支持图片输入，已自动标记为非视觉模型。"
+                    f"\n👉 请重试本条消息：图片会先发给你标记过的视觉模型生成描述，"
+                    f"再由 {mdl} 基于描述继续工作。"
+                    f"\n💡 永久修复：在「设置 → 模型」取消 {mdl} 的 👁 视觉标记，"
+                    f"或在发送区切换到已标记视觉模型的厂商。",
+                    [],
+                )
             return f"❌ 执行出错: {_connection_diagnostic(e, self.config)}", []
         finally:
             elapsed = time.time() - _run_started_at
@@ -491,11 +517,16 @@ class AgentRunMixin:
         await self._repair_checkpoint_tool_history(run_config, graph)
         await self._strip_checkpoint_images(run_config, graph)
         ocr_sink: list = []
+        # ponytail: 用"本次解析出的 provider/model"判断视觉能力，而非全局 config.model——
+        # 切换厂商发送时，实际模型是该厂商自己的 model（如 step-router-v1），否则会误判为
+        # 支持视觉、图片原样直发非视觉模型 → 400 image input not supported。
+        _run_pid, _run_mdl, *_ = self._resolve_provider_config(model_override, provider_override)
+        _ocr_fallback = not _model_supports_vision(self.config, provider_id=_run_pid, model=_run_mdl)
         if thread_key not in self._hydrated_threads:
-            input_messages = compact_history_messages(session_messages_to_langchain(history or [], ocr_fallback=not _model_supports_vision(self.config)), self.config, memory=get_memory(self._user_id))
-        input_messages.append(HumanMessage(content=_human_content(message, attachments, ocr_fallback=not _model_supports_vision(self.config), ocr_sink=ocr_sink)))
+            input_messages = compact_history_messages(session_messages_to_langchain(history or [], ocr_fallback=_ocr_fallback), self.config, memory=get_memory(self._user_id))
+        input_messages.append(HumanMessage(content=_human_content(message, attachments, ocr_fallback=_ocr_fallback, ocr_sink=ocr_sink)))
         # 兜底：模型不支持视觉时，清除任何残留 image_url（防御未来新路径漏图）
-        input_messages = _ensure_no_image_for_non_vision(input_messages, self.config)
+        input_messages = _ensure_no_image_for_non_vision(input_messages, self.config, provider_id=_run_pid, model=_run_mdl)
 
         # ── 按场景注入专项指导（仅在命中时插入 SystemMessage，不污染基础 prompt）──
         scene = _detect_scene(message, history)
@@ -620,10 +651,35 @@ class AgentRunMixin:
                         })
                     else:
                         logger.error("[stream_run] 模型事件流异常 tid=%s: %s", tid, err_msg[:300])
-                        yield _sse({
-                            "type": "error",
-                            "content": f"模型事件流异常，本次回复已中断：{err_msg[:200]}",
-                        })
+                        # ponytail: API 拒绝图片输入 → 自动把当前模型标记为"实际不支持视觉"，
+                        # 下次调用即走视觉路由（图片交给真视觉模型描述 → 文本喂给当前模型）。
+                        # 仅 in-memory，进程重启后清空，给厂商升级/换模型留机会。
+                        # 注意：本分支是流式路径最内层捕获点，错误不会传播到外层 handler，
+                        # 所以自适应标记必须在这里做，否则永远触发不到。
+                        if attachments and is_image_input_error(err_msg):
+                            # ponytail: 必须用 _resolve_provider_config 解析"本次实际使用的模型"，
+                            # 不能直接取 self.config.model——发送区切换 provider 后，实际模型是
+                            # 该 provider 自己的 model（如 step-router-v1），而非全局 config.model
+                            # （如 agnes-2.5-flash）。取错会把视觉模型冤枉成"不支持图片"。
+                            pid, mdl, _k, _u, _a = self._resolve_provider_config(
+                                model_override, provider_override
+                            )
+                            record_model_image_unsupported(pid, mdl)
+                            yield _sse({
+                                "type": "error",
+                                "content": (
+                                    f"❌ 当前模型 {mdl}（厂商 {pid}）不支持图片输入，已自动标记为非视觉模型。"
+                                    f"\n👉 请重试本条消息：图片会先发给你标记过的视觉模型生成描述，"
+                                    f"再由 {mdl} 基于描述继续工作。"
+                                    f"\n💡 永久修复：在「设置 → 模型」取消 {mdl} 的 👁 视觉标记，"
+                                    f"或在发送区切换到已标记视觉模型的厂商。"
+                                ),
+                            })
+                        else:
+                            yield _sse({
+                                "type": "error",
+                                "content": f"模型事件流异常，本次回复已中断：{err_msg[:200]}",
+                            })
                     _done_yielded = True
                     return
                 if event.get("_heartbeat"):
@@ -1245,7 +1301,24 @@ class AgentRunMixin:
                 yield _sse({"type": "done", "content": final_buffer})
             else:
                 logger.error("[stream_run] 异常: %s", e, exc_info=True)
-                final_buffer = _connection_diagnostic(e, self.config)
+                # ponytail: API 拒绝图片输入 → 自动把当前模型标记为"实际不支持视觉"，
+                # 下次调用即走视觉路由。仅 in-memory，重启后清空。
+                if attachments and is_image_input_error(e):
+                    # ponytail: 必须用 _resolve_provider_config 解析"本次实际使用的模型"，
+                    # 不能直接取 self.config.model——切换厂商后实际模型是该厂商自己的 model
+                    # （如 step-router-v1），取错会把视觉模型冤枉成"不支持图片"。
+                    pid, mdl, _key, _url, _is_anth = self._resolve_provider_config(
+                        model_override, provider_override
+                    )
+                    record_model_image_unsupported(pid, mdl)
+                    final_buffer = (
+                        f"❌ 当前模型 {mdl} 不支持图片输入，已自动标记为非视觉模型。"
+                        f"\n👉 请重试本条消息：图片会先发给你标记过的视觉模型生成描述，"
+                        f"再由 {mdl} 基于描述继续工作。"
+                        f"\n💡 永久修复：在「设置 → 模型」取消 {mdl} 的 👁 视觉标记，避免误判。"
+                    )
+                else:
+                    final_buffer = _connection_diagnostic(e, self.config)
                 yield _sse({"type": "error", "content": final_buffer})
             
             # 清理因异常中断而残留的运行中工具——发送合成的失败事件

@@ -106,21 +106,33 @@ def ocr_data_url(data_url: str, lang: str = _DEFAULT_LANG) -> str:
 
 @tool
 def ocr_image(image: str, lang: str = "chi_sim+eng") -> str:
-    """识别图片中的文字（OCR），返回识别出的文本内容。
+    """识别图片内容（OCR / 视觉模型描述）。
 
-    适用于模型不支持图片输入、或需要从截图/票据/文档图片中提取文字的场景。
+    路由策略（ponytail：用户要求非视觉模型也能"看图"）：
+      1) 若用户在设置页标记了视觉模型 → 用视觉模型生成中文描述（不限于文字）
+      2) 否则回退 tesseract OCR（仅文字提取）
+
     image 参数支持两种格式：
       1. 图片文件路径（工作区相对路径或绝对路径，如 "screenshot.png"、"/tmp/a.jpg"）
       2. data URL（以 data:image/ 开头，用于前端粘贴的图片）
 
     参数:
       - image: 图片路径或 data URL
-      - lang: OCR 语言，默认 "chi_sim+eng"（简体中文+英文）；纯英文可传 "eng"
+      - lang: OCR 语言，默认 "chi_sim+eng"（简体中文+英文）；纯英文可传 "eng"。
+      仅对 OCR 兜底路径生效，视觉模型描述不受此参数影响。
 
-    返回: 图片中的文字内容；图片不含文字或识别失败时返回相应说明。
+    返回: 图片描述文本（视觉模型）/ 图片中的文字（OCR）。
     """
     data_url = image if str(image).startswith("data:image/") else ""
     if data_url:
+        # ponytail: 先尝试视觉模型描述（更通用、能识别非文字图像），失败再 OCR 兜底
+        try:
+            from tools.vision_router import describe_image_data_url
+            desc = describe_image_data_url(data_url)
+            if desc:
+                return f"[视觉模型描述]\n{desc}"
+        except Exception:
+            pass
         return ocr_data_url(data_url, lang)
 
     # 文件路径：支持工作区相对与绝对路径
@@ -135,6 +147,14 @@ def ocr_image(image: str, lang: str = "chi_sim+eng") -> str:
         img_bytes = target.read_bytes()
     except Exception as e:
         return f"❌ 读取图片失败: {e}"
+    # ponytail: 文件路径也先尝试视觉模型
+    try:
+        from tools.vision_router import describe_image_file
+        desc = describe_image_file(str(target))
+        if desc:
+            return f"[视觉模型描述]\n{desc}"
+    except Exception:
+        pass
     return _ocr_image_bytes(img_bytes, lang)
 
 

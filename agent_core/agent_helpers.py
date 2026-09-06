@@ -486,25 +486,40 @@ def _human_content(message: str, attachments: Optional[list[dict]] = None, ocr_f
     if not valid_images:
         return message
 
-    # OCR 降级：模型不支持图片输入时，用 OCR 工具提取图片文字，以纯文本代替 image_url。
+    # 图片路由（ponytail：用户要求"非视觉模型不要直接失败，先给视觉模型描述再发文本"）：
+    #   1) 若 active_provider 下用户标记了视觉模型 → 调视觉模型生成中文描述（不暴露 OCR 失败细节）
+    #   2) 否则回退 tesseract OCR
+    #   3) 视觉模型 / OCR 都失败时，保留图片降级文本中带 ❌ 让用户/agent 看到原因
     # ocr_sink 非 None 时，把每次降级动作记录进列表，供上层注入 synthetic 工具卡片
-    # （方案A：纯文本模型收图时模型不会真的调用 ocr_image 工具，历史里就看不到
+    # （纯文本模型收图时模型不会真的调用 ocr_image 工具，历史里就看不到
     # "识别图片"这个步骤；把降级动作补成工具卡片后，实时流与历史回放都能显示）。
     if ocr_fallback:
         from tools.ocr_tools import ocr_data_url
+        from tools.vision_router import describe_image_data_url
         parts = [message] if message else []
         for idx, item in enumerate(valid_images, 1):
-            ocr_text = ocr_data_url(item["data_url"])
-            parts.append(f"[图片 {idx} OCR 识别结果]\n{ocr_text}")
+            # 优先级 1：视觉模型描述
+            desc = describe_image_data_url(item["data_url"])
+            via = "vision"
+            if not desc:
+                # 优先级 2：OCR 兜底
+                desc = ocr_data_url(item["data_url"])
+                via = "ocr"
+            parts.append(f"[图片 {idx} 描述（{'视觉模型' if via == 'vision' else 'OCR'}）]\n{desc}")
             if ocr_sink is not None:
                 ocr_sink.append({
                     "tool": "ocr_image",
                     "args": {
                         "index": idx,
                         "mime": str(item.get("mime_type") or ""),
-                        "reason": "模型不支持图片输入，自动 OCR 降级",
+                        "reason": (
+                            "当前模型不支持视觉，已自动路由至视觉模型描述"
+                            if via == "vision"
+                            else "当前模型不支持视觉，已自动 OCR 降级"
+                        ),
+                        "via": via,
                     },
-                    "result": ocr_text,
+                    "result": desc,
                 })
         return "\n\n".join(parts)
 
@@ -562,10 +577,18 @@ _VISION_MODEL_KEYWORDS = [
 ]
 
 
-def _model_supports_vision(config: AgentConfig) -> bool:
-    """判断当前配置的模型是否支持图片输入。
+def _model_supports_vision(config: AgentConfig, provider_id: str = "", model: str = "") -> bool:
+    """判断（本次请求实际使用的）模型是否支持图片输入。
+
+    provider_id / model 可选：传入时基于"本次解析出的 provider/model"判断，而非全局
+    config.model。修复：发送区切换厂商后，实际模型是该厂商自己的 model（如 step-router-v1），
+    但旧逻辑读全局 config.model（可能是另一个被标视觉的模型如 agnes-2.5-flash），导致误判为
+    支持视觉、图片原样直发非视觉模型 → 400 image input not supported。
 
     判断顺序（优先级从高到低）：
+      0. 自适应缓存：若 provider/model 在 _model_image_unsupported 缓存里（说明该模型
+         曾因"doesn't support image input"报错），直接返回 False，走视觉路由。
+         优先级最高，避免用户错标后反复失败。
       1. 环境变量 AGENT_OCR_FALLBACK=1/0 强制开关（覆盖关键词判断）
       2. 用户在设置页显式标记的支持视觉的模型（provider.vision_models）——只要该厂商
          有显式标记，就完全采信用户的勾选（勾了=视觉，没勾=非视觉），不再回退关键词；
@@ -580,22 +603,114 @@ def _model_supports_vision(config: AgentConfig) -> bool:
     if env_flag in ("0", "false", "off", "no"):
         return True   # 强制关闭 OCR 降级
 
-    model = str(config.model or "").lower()
-    provider = str(config.active_provider or "").lower()
+    pid = (provider_id or config.active_provider or "").strip()
+    mdl = (model or config.model or "").strip()
+    # 优先级 0：自适应缓存（provider/model 维度）
+    if f"{pid}/{mdl}" in _model_image_unsupported:
+        return False
+
+    model_lower = mdl.lower()
+    provider_lower = pid.lower()
 
     # 优先采信用户在设置页显式标记的视觉模型（vision_models）。
     # 仅当该厂商被用户配置过视觉列表时才采信——否则回退关键词启发式。
-    prov = (config.providers or {}).get(config.active_provider, {})
+    prov = (config.providers or {}).get(pid, {})
     vision_models = [str(m).lower() for m in (prov.get("vision_models") or [])]
     if vision_models:
-        return model in vision_models
+        return model_lower in vision_models
 
-    combined = f"{provider}/{model}"
-    if any(k in model for k in _VISION_MODEL_KEYWORDS):
+    combined = f"{provider_lower}/{model_lower}"
+    if any(k in model_lower for k in _VISION_MODEL_KEYWORDS):
         return True
     if any(k in combined for k in _NON_VISION_MODEL_KEYWORDS):
         return False
     return False  # 未知模型默认不支持视觉（走 OCR 降级），绝不让纯文本模型收到 image_url
+
+
+# ── 自适应缓存：API 拒绝图片后把 provider/model 标为"实际不支持视觉"，让下次自动走路由 ──
+_model_image_unsupported: set[str] = set()
+
+
+def record_model_image_unsupported(provider_id: str, model: str) -> None:
+    """把"API 已拒绝过该模型收图"的事实记入内存缓存。
+
+    调用时机：agent_run.py 捕获到 400 + "doesn't support image input" / "model_incompatible"
+    类错误时。后续 _model_supports_vision() 会优先检查这个缓存，避免重蹈覆辙。
+
+    ponytail: 仅 in-memory，进程重启后清空（用户也可能改了供应商配置）。这是好事——
+    重启后第一次会再试一次图片直传，如果厂商更新了服务或换了模型，又能恢复视觉能力。
+    """
+    if not provider_id or not model:
+        return
+    key = f"{provider_id}/{model}"
+    if key in _model_image_unsupported:
+        return
+    _model_image_unsupported.add(key)
+    logger.warning(
+        "[视觉自适应] 模型 %s 已被 API 拒绝图片输入，自动加入不支持视觉缓存（用户可取消 vision_models 标记或重启后端清除）",
+        key,
+    )
+
+
+def is_image_input_error(exc: BaseException) -> bool:
+    """判断异常是否为"模型不支持图片输入"类型。
+
+    ponytail: 匹配用「归一化 + 宽松子串」而非精确短语——真实错误消息里厂商可能写
+    `doesn't` / `doesnt` / `does not` 三种变体。归一化后只要命中 `does not support image`
+    即可覆盖全部写法；再用 `model_incompatible`（OpenAI 兼容网关 type 字段）和中文
+    变体兜底，避免厂商微调措辞就漏判。
+    """
+    msg = (str(exc) or "").lower()
+    if not msg:
+        return False
+    # 归一化：把缩写/无撇号变体统一成 "does not" 等完整写法
+    normalized = (
+        msg.replace("doesn't", "does not")
+           .replace("doesnt", "does not")
+           .replace("don't", "do not")
+           .replace("dont", "do not")
+           .replace("can't", "cannot")
+           .replace("cant", "cannot")
+           .replace("isn't", "is not")
+           .replace("isnt", "is not")
+    )
+    needles = (
+        "does not support image",        # 覆盖 doesn't / doesnt / does not 三种写法
+        "does not support the image",
+        "do not support image",
+        "cannot support image",
+        "not support image input",
+        "image input is not supported",
+        "image input not supported",
+        "image_url is not supported",
+        "image_url not supported",
+        "does not support vision",
+        "does not support multimodal",
+        "model_incompatible",            # OpenAI 兼容网关的 type 字段
+        "不支持图片",                      # 中文：不支持图片输入/识别
+        "不支持图像",                      # 中文：图像
+        "不支持视觉",
+    )
+    return any(n.lower() in normalized for n in needles)
+
+
+def get_unsupported_image_models() -> set[str]:
+    """返回当前自适应的"不支持视觉"模型集合（仅供调试/前端展示）。"""
+    return set(_model_image_unsupported)
+
+
+def clear_unsupported_image_model(provider_id: str, model: str) -> bool:
+    """手动清除某模型的"不支持视觉"标记（用户可前端触发重试视觉能力）。
+
+    返回 True 表示清除了一个条目，False 表示该条目不存在。
+    """
+    if not provider_id or not model:
+        return False
+    key = f"{provider_id}/{model}"
+    if key in _model_image_unsupported:
+        _model_image_unsupported.discard(key)
+        return True
+    return False
 
 
 _SCREENSHOT_URL_RE = re.compile(r"!\[([^\]]*)\]\(/api/screenshot\?token=[^)]+\)")
@@ -821,15 +936,18 @@ def session_messages_to_langchain(messages: list[dict], ocr_fallback: bool = Fal
     return converted
 
 
-def _ensure_no_image_for_non_vision(messages: list, config: AgentConfig) -> list:
+def _ensure_no_image_for_non_vision(messages: list, config: AgentConfig, provider_id: str = "", model: str = "") -> list:
     """兜底：模型不支持图片输入时，把消息列表中残留的 image_url 一律转成 OCR 文本。
 
     正常情况下图片应在组装消息时（_human_content / session_messages_to_langchain）
     就完成 OCR 降级；此函数用于防御未来任何新路径把 image_url 漏进来（例如
     某些工具/注入块直接向消息追加图片），避免纯文本模型再次收到 400
     unknown variant `image_url`。命中非视觉模型且无图片时原样返回。
+
+    provider_id / model 可选：与 _model_supports_vision 一致，基于本次实际使用的模型判断，
+    而非全局 config.model（修复切换厂商后误判）。
     """
-    if _model_supports_vision(config):
+    if _model_supports_vision(config, provider_id=provider_id, model=model):
         return messages
 
     from tools.ocr_tools import ocr_data_url
