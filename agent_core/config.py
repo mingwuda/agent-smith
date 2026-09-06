@@ -25,61 +25,7 @@ def _env_bool(value: str) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on", "y"}
 
 
-DEFAULT_PROVIDERS: dict[str, dict[str, Any]] = {
-    "openai": {
-        "name": "OpenAI",
-        "is_custom": False,
-        "api_key": "",
-        "model": "gpt-4o",
-        "base_url": "",
-        "models": ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini"],
-    },
-    "deepseek": {
-        "name": "DeepSeek",
-        "is_custom": False,
-        "api_key": "",
-        "model": "deepseek-chat",
-        "base_url": "https://api.deepseek.com",
-        "models": ["deepseek-chat", "deepseek-reasoner"],
-    },
-    "qwen": {
-        "name": "通义千问",
-        "is_custom": False,
-        "api_key": "",
-        "model": "qwen-plus",
-        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        "models": ["qwen-plus", "qwen-max", "qwen-turbo", "qwen-long"],
-    },
-    "ollama": {
-        "name": "Ollama（本地）",
-        "is_custom": False,
-        "api_key": "",
-        "model": "qwen2",
-        "base_url": "http://localhost:11434/v1",
-        "models": ["llama3", "qwen2", "qwen2.5", "gemma2", "mistral", "phi3", "deepseek-r1"],
-    },
-    "anthropic": {
-        "name": "Anthropic",
-        "is_custom": False,
-        "api_key": "",
-        "model": "claude-sonnet-4-20250514",
-        "base_url": "https://api.anthropic.com/v1",
-        "models": [
-            "claude-sonnet-4-20250514",
-            "claude-opus-4-20250514",
-            "claude-haiku-4-20250414",
-            "claude-3-5-sonnet-20241022",
-        ],
-    },
-    "custom": {
-        "name": "自定义",
-        "is_custom": True,
-        "api_key": "",
-        "model": "",
-        "base_url": "",
-        "models": [],
-    },
-}
+DEFAULT_PROVIDERS: dict[str, dict[str, Any]] = {}
 
 
 @dataclass
@@ -285,6 +231,8 @@ class AgentConfig:
         if isinstance(self.providers, dict):
             for provider_id, values in self.providers.items():
                 if not isinstance(values, dict):
+                    # 保留 __provider_order__ 等非 provider 条目（否则每次归一化都会丢排序）
+                    providers[provider_id] = values
                     continue
                 current = providers.setdefault(provider_id, {
                     "name": provider_id,
@@ -304,11 +252,12 @@ class AgentConfig:
         self.providers = providers
 
         if self.active_provider not in self.providers:
-            self.active_provider = "openai"
+            # ponytail: DEFAULT_PROVIDERS 已清空，无内置回退，取第一个 provider 或空
+            self.active_provider = next(iter(self.providers)) if self.providers else ""
 
         # 兼容旧配置和环境变量：只有显式提供顶层字段时，才写入当前厂商。
         if apply_legacy:
-            active = self.providers[self.active_provider]
+            active = self.providers.get(self.active_provider, {})
             if self.api_key:
                 active["api_key"] = self.api_key
             if self.model:
@@ -321,7 +270,7 @@ class AgentConfig:
     def _sync_effective_model(self):
         active = self.providers.get(self.active_provider, {})
         self.api_key = str(active.get("api_key", "") or "")
-        self.model = str(active.get("model", "") or DEFAULT_PROVIDERS["openai"]["model"])
+        self.model = str(active.get("model", "") or "")
         self.base_url = str(active.get("base_url", "") or "")
 
     def update_provider(
@@ -355,7 +304,21 @@ class AgentConfig:
                 models.append(model)
         provider["base_url"] = base_url
         self._sync_effective_model()
-    
+
+    def set_provider_order(self, order: list[str]):
+        """保存 provider 的显示顺序（用于前端拖拽排序）"""
+        self._normalize_providers()
+        valid_ids = [pid for pid in order if pid in self.providers and pid != "__provider_order__"]
+        self.providers["__provider_order__"] = valid_ids
+
+    def set_model_order(self, provider_id: str, order: list[str]):
+        """保存指定 provider 的模型显示顺序"""
+        self._normalize_providers()
+        if provider_id not in self.providers:
+            return
+        valid = [m for m in order if m in self.providers[provider_id].get("models", [])]
+        self.providers[provider_id]["model_order"] = valid
+
     def delete_provider(self, provider_id: str):
         """删除自定义 Provider"""
         self._normalize_providers()
@@ -365,9 +328,14 @@ class AgentConfig:
         if not provider.get("is_custom"):
             raise ValueError(f"内置 Provider '{provider_id}' 不可删除")
         del self.providers[provider_id]
-        # 如果删除的是当前激活的 provider，回退到 openai
+        # 同步移除 order 数组中的条目
+        order = self.providers.get("__provider_order__", [])
+        if provider_id in order:
+            order.remove(provider_id)
+            self.providers["__provider_order__"] = order
+        # 如果删除的是当前激活的 provider，取第一个或清空
         if self.active_provider == provider_id:
-            self.active_provider = "openai"
+            self.active_provider = next(iter(self.providers)) if self.providers else ""
         self._sync_effective_model()
 
     def save(self):
@@ -406,12 +374,18 @@ class AgentConfig:
             "mcp_servers": self.mcp_servers,
         }
         CONFIG_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    
+
     def to_api_dict(self) -> dict:
         """返回给前端展示的配置（脱敏 API Key）"""
         self._normalize_providers()
+        # 按 provider_order 排序（若不存在则保持字典序）
+        raw_order = self.providers.get("__provider_order__", []) or []
+        # 过滤掉 __provider_order__ 等内部键，避免它们被当成 provider 返回给前端
+        ordered_ids = [pid for pid in (raw_order or list(self.providers.keys())) if not str(pid).startswith("__")]
         providers = {}
         for provider_id, provider in self.providers.items():
+            if provider_id == "__provider_order__":
+                continue
             api_key = str(provider.get("api_key", "") or "")
             providers[provider_id] = {
                 "name": provider.get("name", provider_id),
@@ -419,14 +393,16 @@ class AgentConfig:
                 "model": provider.get("model", ""),
                 "base_url": provider.get("base_url", ""),
                 "models": provider.get("models", []),
+                "model_order": provider.get("model_order", []),
                 "api_key_configured": bool(api_key),
                 "api_key_preview": api_key[:8] + "..." if len(api_key) > 8 else ("已设置" if api_key else "未设置"),
             }
         tavily_key = str(self.tavily_api_key or "")
         return {
             "active_provider": self.active_provider,
-            "provider_name": self.providers[self.active_provider].get("name", self.active_provider),
+            "provider_name": self.providers.get(self.active_provider, {}).get("name", self.active_provider),
             "providers": providers,
+            "provider_order": ordered_ids,
             "model": self.model,
             "api_key_configured": bool(self.api_key),
             "api_key_preview": self.api_key[:8] + "..." if len(self.api_key) > 8 else ("已设置" if self.api_key else "未设置"),

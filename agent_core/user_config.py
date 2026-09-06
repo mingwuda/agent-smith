@@ -41,6 +41,9 @@ def get_user_effective_config(user_id: str) -> dict[str, Any]:
     # 为每个 provider 补充 api_key_configured 标记，供前端过滤使用
     enriched_providers = {}
     for pid, p in providers.items():
+        if not isinstance(p, dict):
+            # 跳过 __provider_order__ 等非 provider 条目（它们可能是 list）
+            continue
         enriched_providers[pid] = dict(p)
         enriched_providers[pid]["api_key_configured"] = bool(str(p.get("api_key", "") or ""))
     merged = {

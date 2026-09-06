@@ -38,12 +38,34 @@ function populateProviderOptions(select, data, includeMissing = false) {
 function populateProviderSelect(data) {
   const select = document.getElementById('s-provider');
   populateProviderOptions(select, data, true);
-  select.value = data.active_provider || 'openai';
+  // 按 provider_order 排序（若存在）
+  const order = data.provider_order || [];
+  const entries = Array.from(select.options);
+  entries.sort((a, b) => {
+    const ia = order.indexOf(a.value);
+    const ib = order.indexOf(b.value);
+    if (ia === -1 && ib === -1) return 0;
+    if (ia === -1) return 1;
+    if (ib === -1) return -1;
+    return ia - ib;
+  });
+  select.innerHTML = '';
+  entries.forEach(opt => select.appendChild(opt));
+  select.value = data.active_provider || '';
   // 同时填充审核模型下拉框
   const reviewSelect = document.getElementById('s-review-provider');
   var curVal = reviewSelect.value;
   reviewSelect.innerHTML = '<option value="">— 不启用 —</option>';
-  Object.entries(data.providers || {}).forEach(function(entry) {
+  const reviewEntries = Object.entries(data.providers || {});
+  reviewEntries.sort((a, b) => {
+    const ia = order.indexOf(a[0]);
+    const ib = order.indexOf(b[0]);
+    if (ia === -1 && ib === -1) return 0;
+    if (ia === -1) return 1;
+    if (ib === -1) return -1;
+    return ia - ib;
+  });
+  reviewEntries.forEach(function(entry) {
     var id = entry[0], provider = entry[1];
     var opt = document.createElement('option');
     opt.value = id;
@@ -68,6 +90,17 @@ function refreshProviderSelects(data) {
 
   // 只显示已配置 API Key 的 provider（当前选中项始终显示，避免空列表）
   const filtered = entries.filter(([id, p]) => id === active || (p.model && p.api_key_configured));
+
+  // 按 provider_order 排序（与设置页一致）
+  const order = data.provider_order || [];
+  filtered.sort((a, b) => {
+    const ia = order.indexOf(a[0]);  // a[0] = provider id
+    const ib = order.indexOf(b[0]);
+    if (ia === -1 && ib === -1) return 0;
+    if (ia === -1) return 1;
+    if (ib === -1) return -1;
+    return ia - ib;
+  });
 
   filtered.forEach(([id, provider]) => {
     const option = document.createElement('option');
@@ -138,15 +171,28 @@ function renderProviderFields(providerId) {
     deleteBtn.style.display = isCustom ? '' : 'none';
   }
   
-  const modelOptions = document.getElementById('s-model-options');
-  modelOptions.innerHTML = '';
-  (provider.models || []).forEach(modelName => {
-    const option = document.createElement('option');
-    option.value = modelName;
-    modelOptions.appendChild(option);
+  // 按 model_order 排序模型列表
+  const modelOrder = provider.model_order || [];
+  const models = Array.from(provider.models || []);
+  models.sort((a, b) => {
+    const ia = modelOrder.indexOf(a);
+    const ib = modelOrder.indexOf(b);
+    if (ia === -1 && ib === -1) return 0;
+    if (ia === -1) return 1;
+    if (ib === -1) return -1;
+    return ia - ib;
   });
   
-  document.getElementById('s-model').value = provider.model || '';
+  const modelSelect = document.getElementById('s-model');
+  if (modelSelect) {
+    modelSelect.innerHTML = '';
+    models.forEach(modelName => {
+      const option = document.createElement('option');
+      option.value = modelName;
+      modelSelect.appendChild(option);
+    });
+    modelSelect.value = provider.model || '';
+  }
   document.getElementById('s-base-url').value = provider.base_url || '';
   document.getElementById('s-api-key').value = '';
   document.getElementById('s-provider-name').value = provider.name || '';
@@ -172,7 +218,17 @@ function renderProviderFields(providerId) {
   reviewModelOpts.innerHTML = '';
   var selProv = settingsData.providers[currentReview];
   if (selProv && selProv.models) {
-    selProv.models.forEach(function(m) {
+    const rOrder = selProv.model_order || [];
+    const rModels = Array.from(selProv.models);
+    rModels.sort((a, b) => {
+      const ia = rOrder.indexOf(a);
+      const ib = rOrder.indexOf(b);
+      if (ia === -1 && ib === -1) return 0;
+      if (ia === -1) return 1;
+      if (ib === -1) return -1;
+      return ia - ib;
+    });
+    rModels.forEach(function(m) {
       var opt = document.createElement('option');
       opt.value = m;
       reviewModelOpts.appendChild(opt);
@@ -205,6 +261,86 @@ function onReviewProviderChange() {
 
 function onProviderChange() {
   renderProviderFields(document.getElementById('s-provider').value);
+}
+
+function moveSelectedProvider(delta) {
+  if (!settingsData || !settingsData.providers) return;
+  const select = document.getElementById('s-provider');
+  const providerId = select.value;
+  if (!providerId) return;
+  const order = settingsData.provider_order ? Array.from(settingsData.provider_order) : Object.keys(settingsData.providers || {});
+  const idx = order.indexOf(providerId);
+  const newIdx = idx + delta;
+  if (newIdx < 0 || newIdx >= order.length) return;
+  [order[idx], order[newIdx]] = [order[newIdx], order[idx]];
+  settingsData.provider_order = order;
+  populateProviderSelect(settingsData);
+  select.value = providerId;
+  persistOrder();
+}
+
+function moveSelectedModel(delta) {
+  if (!settingsData || !settingsData.providers) return;
+  const providerId = document.getElementById('s-provider').value;
+  if (!providerId) return;
+  const provider = settingsData.providers[providerId];
+  if (!provider) return;
+  const modelSelect = document.getElementById('s-model');
+  const model = modelSelect ? modelSelect.value : provider.model;
+  if (!model) return;
+  const models = Array.from(provider.models || []);
+  const idx = models.indexOf(model);
+  const newIdx = idx + delta;
+  if (newIdx < 0 || newIdx >= models.length) return;
+  [models[idx], models[newIdx]] = [models[newIdx], models[idx]];
+  provider.models = models;
+  if (modelSelect) {
+    modelSelect.innerHTML = '';
+    models.forEach(m => {
+      const opt = document.createElement('option');
+      opt.value = m;
+      modelSelect.appendChild(opt);
+    });
+    modelSelect.value = model;
+  }
+  persistOrder();
+}
+
+// 将当前 provider_order / model_order 增量写回后端（不依赖"保存设置"按钮）
+let _persistOrderPending = false;
+async function persistOrder() {
+  if (!isAdmin || _persistOrderPending) return;
+  if (!settingsData || !settingsData.providers) return;
+  _persistOrderPending = true;
+  try {
+    const body = {
+      provider_order: settingsData.provider_order || Object.keys(settingsData.providers || {}),
+      model_order: (() => {
+        const out = {};
+        Object.entries(settingsData.providers).forEach(([pid, p]) => {
+          if (p.models && p.models.length) out[pid] = p.models;
+        });
+        return out;
+      })(),
+    };
+    const res = await fetch('/settings/order', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '');
+      console.error('[persistOrder] 保存排序失败', res.status, detail);
+      if (res.status === 403) {
+        // 非 admin 无法保存排序，给出明确提示，避免"静默无效"
+        if (typeof addMessage === 'function') addMessage(t('orderSaveNeedAdmin') || '排序保存失败：需要以 admin 身份登录', 'system');
+      }
+    }
+  } catch (e) {
+    console.error('[persistOrder] 异常', e);
+  } finally {
+    _persistOrderPending = false;
+  }
 }
 
 function addCustomProvider() {
@@ -318,6 +454,15 @@ async function saveSettings() {
         llm_idle_timeout_seconds: Number(document.getElementById('s-llm-idle-timeout').value || 60),
         llm_idle_max_retries: Number(document.getElementById('s-llm-idle-retries').value || 2),
         llm_hard_timeout_seconds: Number(document.getElementById('s-llm-hard-timeout').value || 600),
+        provider_order: settingsData?.provider_order || Object.keys(settingsData?.providers || {}),
+        model_order: (() => {
+          const out = {};
+          if (!settingsData?.providers) return out;
+          Object.entries(settingsData.providers).forEach(([pid, p]) => {
+            if (p.models && p.models.length) out[pid] = p.models;
+          });
+          return out;
+        })(),
       }),
     });
     const data = await res.json();

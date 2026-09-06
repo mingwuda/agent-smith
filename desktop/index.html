@@ -339,6 +339,10 @@
             <label for="s-provider" data-i18n="providerLabel">模型厂商</label>
             <div class="provider-row">
               <select id="s-provider" onchange="onProviderChange()"></select>
+              <div class="order-btns">
+                <button type="button" onclick="moveSelectedProvider(-1)" title="上移">↑</button>
+                <button type="button" onclick="moveSelectedProvider(1)" title="下移">↓</button>
+              </div>
               <button type="button" onclick="addCustomProvider()" data-i18n="addCustomProvider">新增自定义</button>
               <button type="button" id="delete-provider-btn" onclick="deleteProvider()" class="btn-danger" style="display:none" data-i18n="deleteProvider">删除</button>
             </div>
@@ -356,8 +360,13 @@
           </div>
           <div class="form-group">
             <label for="s-model" data-i18n="modelLabel">模型名称</label>
-            <input id="s-model" list="s-model-options" placeholder="选择或输入模型名称" data-i18n-placeholder="modelPlaceholder" />
-            <datalist id="s-model-options"></datalist>
+            <div class="provider-row">
+              <select id="s-model" onchange="onModelChange()"></select>
+              <div class="order-btns">
+                <button type="button" onclick="moveSelectedModel(-1)" title="上移">↑</button>
+                <button type="button" onclick="moveSelectedModel(1)" title="下移">↓</button>
+              </div>
+            </div>
             <div class="hint" data-i18n="modelHint">可从候选中选择，也可以输入兼容接口支持的模型名。</div>
           </div>
           <div class="form-group">

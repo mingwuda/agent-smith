@@ -48,6 +48,8 @@ class SettingsRequest(BaseModel):
     review_provider_id: str = ""
     review_model: str = ""
     update_server: str = ""
+    provider_order: list[str] = []
+    model_order: dict[str, list[str]] = {}  # {provider_id: [model, ...]}
     llm_idle_timeout_seconds: float = 60.0
     llm_idle_max_retries: int = 2
     llm_hard_timeout_seconds: float = 600.0
@@ -156,7 +158,14 @@ def save_settings(req: SettingsRequest, request: Request):
     if req.anysearch_api_key:
         cfg.anysearch_api_key = req.anysearch_api_key
     cfg.update_server = req.update_server or cfg.update_server
-    
+
+    # 保存排序
+    if req.provider_order:
+        cfg.set_provider_order(req.provider_order)
+    if req.model_order:
+        for pid, order in req.model_order.items():
+            cfg.set_model_order(pid, order)
+
     # 持久化到文件（现在包含 API Key）
     cfg.save()
     
@@ -214,6 +223,30 @@ def save_settings(req: SettingsRequest, request: Request):
     except Exception as e:
         logger.exception("保存设置后 Agent 重新初始化失败")
         return {"status": "error", "message": f"设置已保存，但 Agent 初始化失败: {str(e)}"}
+
+
+class SettingsOrderRequest(BaseModel):
+    """仅用于保存显示顺序（不影响 API Key / model / base_url 等其他设置）"""
+    provider_order: list[str] = []
+    model_order: dict[str, list[str]] = {}
+
+
+@router.post("/settings/order")
+def save_settings_order(req: SettingsOrderRequest, request: Request):
+    """仅持久化 provider / model 的显示顺序。
+
+    与 POST /settings 的区别：本端点不会调用 update_provider，
+    因此不会因为缺失字段而清空 active_provider / api_key / model。
+    """
+    _require_admin(request)
+    cfg = AgentConfig.load()
+    if req.provider_order:
+        cfg.set_provider_order(req.provider_order)
+    if req.model_order:
+        for pid, order in req.model_order.items():
+            cfg.set_model_order(pid, order)
+    cfg.save()
+    return {"status": "ok", "message": "排序已保存"}
 
 
 @router.get("/users", response_model=list[UserInfo])
