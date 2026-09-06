@@ -994,6 +994,37 @@
   /* token 配色交给 highlight.js(github-dark) 主题；代码区保持深色以保证高亮可读 */
   .fpp-code code.hljs { background: transparent; }
 
+  /* ponytail: 文件内联编辑器（textarea + 行号列） */
+  .fpp-edit-toolbar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 6px 14px; background: #1f1f23; border-bottom: 1px solid #2c2c2e;
+    font-size: 11px; color: #a1a1a6;
+  }
+  .fpp-edit-hint { color: #ffd60a; }
+  .fpp-edit-actions { display: flex; gap: 6px; }
+  .fpp-save-btn { color: #4ade80; }
+  .fpp-save-btn:disabled { color: #6b6b70; cursor: wait; }
+  .fpp-editor-wrap {
+    display: grid; grid-template-columns: auto 1fr; overflow: auto;
+    background: #161618; height: 100%;
+  }
+  .fpp-editor-gutter {
+    position: sticky; left: 0; margin: 0;
+    padding: 14px 10px 14px 14px;
+    text-align: right; white-space: pre; user-select: none;
+    font-family: "SF Mono", Menlo, monospace; font-size: 12.5px; line-height: 1.6;
+    color: #6b6b70; background: #161618; border-right: 1px solid #2c2c2e;
+    overflow: hidden;
+  }
+  .fpp-editor {
+    margin: 0; padding: 14px 16px;
+    font-family: "SF Mono", Menlo, monospace; font-size: 12.5px; line-height: 1.6;
+    background: #161618; color: #e8e8ed;
+    border: none; outline: none; resize: none;
+    white-space: pre; tab-size: 2; overflow: auto;
+    min-height: 100%;
+  }
+
   /* Diff 视图（双列行号：旧行号 | 新行号） */
   .fpp-diff-wrap { overflow: auto; background: #161618; font-family: "SF Mono", Menlo, monospace; font-size: 12.5px; line-height: 1.6; }
   .diff-row { display: grid; grid-template-columns: 52px 52px 1fr; }

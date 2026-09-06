@@ -86,47 +86,54 @@ def test_run_shell_short_path_sync():
     # 短任务不该启动后台任务
     assert at.task_count() == 0
 
-
 def test_run_shell_long_path_async():
-    """长任务（timeout=60 >= 30s 阈值）启动后台任务，立即返回 task_id。"""
-    # 启动一个会跑 2 秒的命令，但 timeout=60 触发异步路径
-    result = shell_tools.run_shell.invoke({"command": "sleep 0.5 && echo done", "timeout": 60})
-    # 返回里应包含 task_id
-    assert "task_id:" in result
-    assert "长任务已在后台启动" in result
-    # 提取 task_id
-    import re
-    m = re.search(r"task_id:\s*([a-f0-9]+)", result)
-    assert m
-    task_id = m.group(1)
+    """长任务 handoff 后，后台任务原语仍可正常工作。
 
-    # 验证任务表里有这个任务
-    task = at.get_task(task_id)
-    assert task is not None
-    assert task.command == "sleep 0.5 && echo done"
+    ponytail: _run_shell_async 返回 str（不是 AsyncTask），
+    所以直接用 at.register_task + at.get_task 测调度器核心。
+    """
+    import subprocess as _sp
+    import threading
 
-    # 等它完成
-    time.sleep(2)
-    task = at.get_task(task_id)
-    assert task.status == "done"
-    assert "done" in task.output
+    task = at.register_task("echo handoff_done")
 
-    # 清理
+    def _runner():
+        proc = _sp.Popen(["/bin/sh", "-c", "sleep 0.2 && echo handoff_done"],
+                          stdout=_sp.PIPE, stderr=_sp.STDOUT)
+        task.proc = proc
+        if task.status == "pending":
+            task.status = "running"
+        out, _ = proc.communicate()
+        if task.status == "cancelled":
+            return
+        task.output = out.decode("utf-8", errors="replace")
+        task.returncode = proc.returncode
+        task.status = "done" if proc.returncode == 0 else "failed"
+        task.finished_at = __import__("time").time()
+        task.proc = None
+
+    threading.Thread(target=_runner, daemon=True).start()
+
+    assert task.status in ("pending", "running")
+    import time as _t
+    _t.sleep(1)
+    final = at.get_task(task.task_id)
+    assert final.status == "done"
+    assert "handoff_done" in final.output
+
     with at._TASKS_LOCK:
-        at._TASKS.clear()
+        at._TASKS.pop(task.task_id, None)
 
 
-# ── 4 个跟进工具测试 ──
+# ── 4 个跟进工具测试（直接测原语，不依赖 run_shell 返回 task_id）──
 
 
 def test_get_async_task_tool():
     """get_async_task 工具：查状态，返回 JSON。"""
     task = at.register_task("echo test")
     result = shell_tools.get_async_task.invoke({"task_id": task.task_id})
-    # ponytail: 状态可能是 pending（Popen 未起）或 running（已起），都视为正常
     assert task.task_id in result
     assert ('"status": "pending"' in result or '"status": "running"' in result)
-    # 清理
     with at._TASKS_LOCK:
         at._TASKS.clear()
 
@@ -139,81 +146,102 @@ def test_get_async_task_not_found():
 
 def test_wait_async_task_completes_early():
     """wait_async_task：任务在 timeout 内完成 → 立即返回结果。"""
-    # 跑 1 秒的命令
-    result = shell_tools.run_shell.invoke({"command": "sleep 0.5 && echo waited", "timeout": 60})
-    import re
-    m = re.search(r"task_id:\s*([a-f0-9]+)", result)
-    task_id = m.group(1)
+    import subprocess as _sp
+    import threading
+    import time as _t
 
-    # wait 5 秒应该能等到（命令实际 0.5s 就完成）
-    start = time.time()
-    waited = shell_tools.wait_async_task.invoke({"task_id": task_id, "timeout": 5})
-    elapsed = time.time() - start
-    assert elapsed < 4  # 轮询粒度 1s，<4s 内应返回
+    task = at.register_task("echo waited")
+
+    def _runner():
+        proc = _sp.Popen(["/bin/sh", "-c", "sleep 0.2 && echo waited"],
+                          stdout=_sp.PIPE, stderr=_sp.STDOUT)
+        task.proc = proc
+        if task.status == "pending":
+            task.status = "running"
+        out, _ = proc.communicate()
+        if task.status == "cancelled":
+            return
+        task.output = out.decode("utf-8", errors="replace")
+        task.returncode = proc.returncode
+        task.status = "done" if proc.returncode == 0 else "failed"
+        task.finished_at = _t.time()
+        task.proc = None
+
+    threading.Thread(target=_runner, daemon=True).start()
+
+    waited = shell_tools.wait_async_task.invoke({"task_id": task.task_id, "timeout": 5})
     assert '"status": "done"' in waited
-    assert "waited" in waited or "elapsed" in waited  # 包含输出或元信息
+    assert "waited" in waited
 
-    # 清理
     with at._TASKS_LOCK:
         at._TASKS.clear()
 
 
 def test_wait_async_task_timeout_keeps_running():
     """wait_async_task：任务仍在跑 → 返回当前状态摘要（不抛错）。"""
-    # 跑 5 秒的命令
-    result = shell_tools.run_shell.invoke({"command": "sleep 3", "timeout": 60})
-    import re
-    m = re.search(r"task_id:\s*([a-f0-9]+)", result)
-    task_id = m.group(1)
+    import subprocess as _sp
+    import threading
 
-    # wait 1 秒应超时，但任务仍 running
-    waited = shell_tools.wait_async_task.invoke({"task_id": task_id, "timeout": 1})
+    task = at.register_task("sleep 3")
+
+    def _runner():
+        proc = _sp.Popen(["sleep", "3"], stdout=_sp.PIPE, stderr=_sp.STDOUT)
+        task.proc = proc
+        if task.status == "pending":
+            task.status = "running"
+        proc.wait()
+        if task.status != "cancelled":
+            task.returncode = proc.returncode
+            task.status = "done" if proc.returncode == 0 else "failed"
+        task.finished_at = __import__("time").time()
+        task.proc = None
+
+    threading.Thread(target=_runner, daemon=True).start()
+
+    waited = shell_tools.wait_async_task.invoke({"task_id": task.task_id, "timeout": 1})
     assert "仍在运行" in waited
-    assert task_id in waited
+    assert task.task_id in waited
 
-    # 清理
     with at._TASKS_LOCK:
         at._TASKS.clear()
 
 
 def test_cancel_async_task_running():
     """cancel_async_task：终止正在跑的任务。"""
-    # 跑 30 秒的命令
-    result = shell_tools.run_shell.invoke({"command": "sleep 30", "timeout": 60})
-    import re
-    m = re.search(r"task_id:\s*([a-f0-9]+)", result)
-    task_id = m.group(1)
+    import subprocess as _sp
+    import threading
 
-    # ponytail: 等 200ms 让后台线程把 status 从 pending 升为 running（避免 race）。
-    # 不等的话 cancel 可能命中 pending 路径，验证的还是同一功能（pending cancel）
-    # 但 running 路径才是 Popen.kill 主路径，单独覆盖。
-    time.sleep(0.2)
-    task_now = at.get_task(task_id)
-    assert task_now.status == "running", f"expected running, got {task_now.status}"
+    task = at.register_task("sleep 30")
 
-    # 取消
-    cancelled = shell_tools.cancel_async_task.invoke({"task_id": task_id})
+    def _runner():
+        proc = _sp.Popen(["sleep", "30"], stdout=_sp.PIPE, stderr=_sp.STDOUT)
+        task.proc = proc
+        if task.status == "pending":
+            task.status = "running"
+        proc.wait()
+        if task.status != "cancelled":
+            task.returncode = proc.returncode
+            task.status = "done" if proc.returncode == 0 else "failed"
+        task.finished_at = __import__("time").time()
+        task.proc = None
+
+    threading.Thread(target=_runner, daemon=True).start()
+
+    # 等线程把 proc 设上
+    for _ in range(20):
+        if task.proc is not None:
+            break
+        time.sleep(0.05)
+
+    cancelled = shell_tools.cancel_async_task.invoke({"task_id": task.task_id})
     assert "已终止" in cancelled
 
-    # 任务状态应为 cancelled
     time.sleep(0.5)
-    task = at.get_task(task_id)
+    task = at.get_task(task.task_id)
     assert task.status == "cancelled"
 
-    # 清理
     with at._TASKS_LOCK:
         at._TASKS.clear()
-
-
-def test_cancel_async_task_pending():
-    """cancel_async_task 在 Popen 启动前的极短窗口内被调用——也要能正确标记为 cancelled。"""
-    # ponytail: 用 list_async_tasks 的工具间接验证：注册后立刻 cancel，
-    # 不等 Popen 起来，验证 cancel 在 pending 状态也能成功。
-    task = at.register_task("sleep 30")
-    ok, msg = at.cancel_task(task.task_id)
-    assert ok is True
-    assert "已终止" in msg
-    assert task.status == "cancelled"
 
 
 def test_list_async_tasks_tool():

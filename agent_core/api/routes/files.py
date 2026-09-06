@@ -153,13 +153,25 @@ async def browse_directory(
     }
 
 
+# 编辑器单次返回的最大字节数（>此值只能分页读，且不允许编辑）
+_MAX_EDITABLE_SIZE = 1 * 1024 * 1024  # 1MB
+# 分页读取默认每页行数
+_DEFAULT_PAGE_LINES = 100
+
+
 @router.get("/files/read")
 async def read_file(
     request: Request,
     path: str = Query(..., description="要读取的文件完整路径"),
     project_id: str = Query("", description="项目 ID"),
+    offset: int = Query(0, description="起始行号（从 0 开始）"),
+    limit: int = Query(0, description="本次读取的行数；0 表示不限制（兼容旧调用）"),
 ):
-    """读取单个文件的内容（文本文件返回内容，二进制返回错误）"""
+    """读取单个文件的内容（文本文件返回内容，二进制返回错误）。
+
+    ponytail: 大文件分页读——offset 起始行 + limit 限定行数，避免把几 MB 文件
+    一次性塞给前端 textarea。前端滚动到接近底部时再请求下一批。
+    """
     from services.workspace import _workspace_for_user
 
     target = Path(path).resolve()
@@ -186,8 +198,8 @@ async def read_file(
     if not _is_text_file(target):
         raise HTTPException(status_code=400, detail=f"不支持的文件类型: {target.suffix}")
 
+    # 解码（一次性解码后切片，避免分页时多次 IO/解码）
     try:
-        # 尝试 UTF-8 编码，失败则尝试其他常见编码
         content = target.read_text(encoding='utf-8')
     except UnicodeDecodeError:
         try:
@@ -198,12 +210,114 @@ async def read_file(
             except Exception:
                 raise HTTPException(status_code=400, detail="无法解码文件内容")
 
+    # 行级分页：拆出所有行（保留尾部空行语义：splitlines 不保留末尾空行，但实际不影响编辑）
+    all_lines = content.splitlines(keepends=False)
+    total_lines = len(all_lines)
+    # ponytail: 末尾 \n 产生的"看起来多一行"在 splitlines 后被吞掉，
+    # 但前端 textarea 渲染时若原文件以 \n 结尾会少一个换行——这里补一个统计字段让前端知道。
+    trailing_newline = content.endswith('\n')
+
+    if limit and limit > 0:
+        start = max(0, offset)
+        end = min(total_lines, start + limit)
+        # ponytail: offset 超过总行数时 end < start，clamp 到 0
+        page_lines = all_lines[start:end] if end > start else []
+        has_more = end < total_lines
+        page_content = "\n".join(page_lines)
+        return {
+            "path": str(target),
+            "name": target.name,
+            "content": page_content,
+            "size": size,
+            "lines": total_lines,
+            "trailing_newline": trailing_newline,
+            "offset": start,
+            "limit": max(0, end - start),
+            "has_more": has_more,
+            "next_offset": end if has_more else None,
+            "editable": size <= _MAX_EDITABLE_SIZE,
+        }
+
+    # 兼容旧调用：limit=0 时一次性返回全文
     return {
         "path": str(target),
         "name": target.name,
         "content": content,
         "size": size,
-        "lines": content.count('\n') + 1,
+        "lines": total_lines,
+        "trailing_newline": trailing_newline,
+        "editable": size <= _MAX_EDITABLE_SIZE,
+    }
+
+
+@router.post("/files/write")
+async def write_file(request: Request, payload: dict = Body(...)):
+    """写入文件内容（直接覆盖）。仅允许工作区内、< 1MB 的文本文件。
+
+    ponytail: 这是文件浏览器内联编辑的配套接口——
+    - 路径必须在用户 workspace 内（不允许越权写）
+    - 文件大小限制 1MB（前端 textarea 写大文件体验差）
+    - 仅允许 _BROWSABLE_EXTENSIONS 白名单内的可预览文本类型
+    - 不做 diff/备份——按你指定的"直接覆盖"语义
+    """
+    path = (payload or {}).get("path", "").strip()
+    content = (payload or {}).get("content", "")
+    if not path:
+        raise HTTPException(status_code=400, detail="path 不能为空")
+
+    target = Path(path).expanduser().resolve()
+
+    # 权限：必须在用户 workspace 内（或项目 directory_path 内）
+    uid = getattr(request.state, "user_id", "default")
+    project_id = (payload or {}).get("project_id", "").strip()
+    base = _resolve_base_path(request)
+    if project_id:
+        import session_store as _ss
+        project = _ss.get_project(uid, project_id)
+        if project and project.get("directory_path"):
+            base = Path(project["directory_path"]).resolve()
+    if base:
+        try:
+            target.relative_to(base)
+        except ValueError:
+            raise HTTPException(status_code=403, detail="禁止写入工作区外的文件")
+
+    if not target.exists():
+        raise HTTPException(status_code=404, detail=f"文件不存在: {path}")
+    if not target.is_file():
+        raise HTTPException(status_code=400, detail=f"不是文件: {path}")
+
+    if not _is_text_file(target):
+        raise HTTPException(status_code=400, detail=f"不支持的文件类型: {target.suffix}")
+
+    # 大小限制：与 _MAX_EDITABLE_SIZE 对齐
+    encoded = content.encode('utf-8')
+    if len(encoded) > _MAX_EDITABLE_SIZE:
+        raise HTTPException(
+            status_code=413,
+            detail=f"内容过大 ({len(encoded)} 字节)，编辑模式最大支持 {_MAX_EDITABLE_SIZE // 1024 // 1024}MB",
+        )
+
+    # 写文件：原子性靠 tmp + rename，避免半写状态
+    tmp_path = target.with_suffix(target.suffix + ".tmp")
+    try:
+        tmp_path.write_text(content, encoding='utf-8')
+        tmp_path.replace(target)
+    except Exception as e:
+        # 清理可能残留的 tmp
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except Exception:
+                pass
+        logger.exception("write_file 失败: %s", path)
+        raise HTTPException(status_code=500, detail=f"写入失败: {e}")
+
+    return {
+        "success": True,
+        "path": str(target),
+        "size": len(encoded),
+        "lines": content.count('\n') + (1 if content and not content.endswith('\n') else 0),
     }
 
 

@@ -635,7 +635,23 @@ async function readFile(path, projectId) {
       return;
     }
     const data = await res.json();
-    openFilePreview(data.name, data.content, (data.path || '') + '  ·  ' + (data.lines || 0) + ' 行  ·  ' + formatSize(data.size || 0));
+    // ponytail: 携带 editable + 分页信息到预览面板，供"编辑"按钮 / 分段加载使用
+    openFilePreview(
+      data.name,
+      data.content,
+      (data.path || '') + '  ·  ' + (data.lines || 0) + ' 行  ·  ' + formatSize(data.size || 0),
+      {
+        path: data.path,
+        projectId: projectId,
+        editable: !!data.editable,
+        lines: data.lines || 0,
+        size: data.size || 0,
+        hasMore: !!data.has_more,
+        nextOffset: data.next_offset,
+        loadedOffset: (data.offset || 0) + (data.limit || (data.content ? data.content.split('\n').length : 0)),
+        trailingNewline: !!data.trailing_newline,
+      }
+    );
   } catch (e) {
     alert(t('readFileFailed') || '读取文件失败');
   }

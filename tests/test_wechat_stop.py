@@ -48,6 +48,7 @@ def _make_bot() -> WeChatBot:
     bot.step_msg_batch_timeout = 8.0
     bot.step_msg_budget = 30
     bot._step_sent_count = 0
+    bot._step_pending_queue = []  # ponytail: _run_agent_body 引用，需补全 object.__new__ 漏配属性
     bot._send_timestamps = []
     bot.send_rate_window = 60.0
     bot.send_rate_max = 10

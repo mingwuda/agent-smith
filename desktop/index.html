@@ -121,10 +121,31 @@
     </div>
   </div>
   <div class="fpp-meta" id="fpp-meta"></div>
+  <div class="fpp-edit-toolbar" id="fpp-edit-toolbar" style="display:none;">
+    <span class="fpp-edit-hint" id="fpp-edit-hint" data-i18n="editModeHint">编辑模式 · 修改后点击保存</span>
+    <div class="fpp-edit-actions">
+      <button class="fpp-btn" id="fpp-load-more-btn" onclick="loadMoreFileLines()" style="display:none;" data-i18n-title="loadMoreLines" title="加载更多行">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+        <span data-i18n="loadMore">加载更多</span>
+      </button>
+      <button class="fpp-btn" id="fpp-cancel-btn" onclick="cancelEditFile()" data-i18n-title="cancelEdit" title="取消编辑">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        <span data-i18n="cancel">取消</span>
+      </button>
+      <button class="fpp-btn fpp-save-btn" id="fpp-save-btn" onclick="saveEditFile()" data-i18n-title="saveEdit" title="保存">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
+        <span data-i18n="save">保存</span>
+      </button>
+    </div>
+  </div>
   <div class="fpp-body" id="fpp-body">
     <div class="fpp-code-wrap" id="fpp-code-wrap">
       <div class="fpp-gutter" id="fpp-gutter"></div>
       <pre class="fpp-code"><code id="fpp-code"></code></pre>
+    </div>
+    <div class="fpp-editor-wrap" id="fpp-editor-wrap" style="display:none;">
+      <div class="fpp-editor-gutter" id="fpp-editor-gutter"></div>
+      <textarea class="fpp-editor" id="fpp-editor" spellcheck="false"></textarea>
     </div>
     <div id="fpp-diff-wrap" class="fpp-diff-wrap" style="display:none;"></div>
     <div id="fpp-md" class="fpp-md" style="display:none;"></div>

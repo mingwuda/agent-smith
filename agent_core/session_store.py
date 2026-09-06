@@ -550,27 +550,37 @@ def _migrate_default_projects(uid: str) -> int:
 
 
 def list_projects(user_id: str = "default") -> list[dict]:
-    """列出所有项目（含每个项目的会话数）"""
+    """列出所有项目（含每个项目的会话数）——按"最近活跃"排序。
+
+    ponytail: "最近活跃" = 该项目下所有会话中最大的 updated_at，而不是项目自身
+    的 updated_at（项目自身只在被改时才更新，不代表用户在用它）。
+    没有会话的项目退化为用项目自身的 updated_at。
+    """
     _migrate_default_projects(user_id)  # ponytail: 一次性自动迁移历史数据
     with _connect(user_id) as conn:
         rows = conn.execute(
             """
             SELECT p.id, p.name, p.directory_path, p.created_at, p.updated_at,
-                   COUNT(s.id) AS session_count
+                   COUNT(s.id) AS session_count,
+                   MAX(s.updated_at) AS last_session_at
             FROM projects p
             LEFT JOIN sessions s ON s.project_id = p.id
             GROUP BY p.id
-            ORDER BY p.updated_at DESC
+            ORDER BY COALESCE(MAX(s.updated_at), p.updated_at) DESC
             """
         ).fetchall()
         projects = []
         for r in rows:
+            # ponytail: last_active_at = 最近活跃时间。会话/项目都没有时用 created_at
+            # 保证前端排序键永远存在，不会出现 null。
+            last_active = r["last_session_at"] or r["updated_at"] or r["created_at"]
             projects.append({
                 "id": r["id"],
                 "name": r["name"],
                 "directory_path": r["directory_path"] or "",
                 "created_at": r["created_at"],
                 "updated_at": r["updated_at"],
+                "last_active_at": last_active,
                 "session_count": r["session_count"] or 0,
             })
         return projects
