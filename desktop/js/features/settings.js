@@ -339,10 +339,15 @@ function renderVisionModels(provider) {
     handle.textContent = '⠿';
     handle.title = currentLanguage === 'en' ? 'Drag to reorder' : '拖拽排序';
 
-    // 模型图标
+    // 模型图标（点击切换视觉模型状态）
     const icon = document.createElement('span');
     icon.className = 'vision-model-icon';
     icon.textContent = isVision ? '👁' : '🚫';
+    icon.style.cursor = 'pointer';
+    icon.title = currentLanguage === 'en'
+        ? (isVision ? 'Click to remove vision capability' : 'Click to mark as vision model')
+        : (isVision ? '点击取消视觉模型标记' : '点击标记为视觉模型');
+    icon.onclick = () => toggleVisionModel(m, isVision);
 
     // 模型名称
     const label = document.createElement('span');
@@ -823,3 +828,55 @@ function switchSettingsTab(tabId) {
     composerProvider = this.value || '';
   });
 })();
+
+// ── 视觉模型切换 + 持久化 ──
+// toggleVisionModel: 切换单个模型的"视觉"标记，乐观更新 + 调后端
+// persistOrder: 集中向 POST /settings/order 提交 provider_order / model_order / vision_models
+// （注意：persistOrder 此前在多处被调用但未定义，会抛 ReferenceError——本次一并补上）
+async function persistOrder() {
+  if (!isAdmin || !settingsData) return;
+  const payload = {
+    provider_order: settingsData.provider_order || [],
+    model_order: settingsData.model_order || {},
+    vision_models: {},
+  };
+  // 把每个厂商的 vision_models（按当前 settingsData）一并提交
+  for (const pid of Object.keys(settingsData.providers || {})) {
+    payload.vision_models[pid] = settingsData.providers[pid].vision_models || [];
+  }
+  try {
+    const res = await fetch('/settings/order', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (data.status !== 'ok') {
+      showToast('⚠️ ' + (data.message || '保存失败'), 'error');
+    }
+  } catch (e) {
+    showToast('⚠️ ' + (currentLanguage === 'en' ? 'Network error' : '网络错误') + ': ' + (e.message || e), 'error');
+  }
+}
+
+async function toggleVisionModel(modelName, currentlyVision) {
+  if (!isAdmin || !settingsData) return;
+  const select = document.getElementById('s-provider');
+  const providerId = select && select.value;
+  if (!providerId) return;
+  const provider = settingsData.providers[providerId];
+  if (!provider) return;
+  const list = Array.from(provider.vision_models || []);
+  if (currentlyVision) {
+    const i = list.indexOf(modelName);
+    if (i >= 0) list.splice(i, 1);
+  } else {
+    if (!list.includes(modelName)) list.push(modelName);
+  }
+  provider.vision_models = list;
+  renderVisionModels(provider);
+  await persistOrder();
+  showToast('✅ ' + (currentLanguage === 'en'
+    ? (currentlyVision ? 'Vision capability removed' : 'Marked as vision model')
+    : (currentlyVision ? '已取消视觉模型标记' : '已标记为视觉模型')), 'success');
+}
