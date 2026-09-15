@@ -75,6 +75,16 @@ def pop_todo_list(thread_id: str = "") -> Optional[dict]:
     return result
 
 
+def peek_todo_list(thread_id: str) -> Optional[dict]:
+    """只查进程内缓存、不触发磁盘恢复。
+
+    供运行/推送链路在"本轮刚执行完 manage_todo"后取清单用：本轮没规划 todo 时
+    返回 None，而不是把上一轮残留在磁盘的清单误贴到新消息上。磁盘恢复仅留给
+    manage_todo 工具自身（用户说"继续"时 update/add/complete）的正当场景。
+    """
+    return _TODO_CACHE.get(thread_id)
+
+
 @tool
 def manage_todo(
     action: str,

@@ -1057,8 +1057,11 @@ class AgentRunMixin:
 
                     # ── Todo 清单事件：manage_todo 工具调用结束后推送 ──
                     if tool_name == "manage_todo":
-                        from tools.todo_tools import get_todo_list
-                        todo_data = get_todo_list()
+                        from tools.todo_tools import peek_todo_list
+                        # 用 peek（只查内存不读盘）+ 完整 thread_key：本轮刚 create/update
+                        # 必然在缓存里；无参/读盘会取到其它会话或上一轮残留的清单
+                        # （见浏览器页面释放处的同款教训）。
+                        todo_data = peek_todo_list(thread_key)
                         if todo_data:
                             current_todo_list = todo_data
                             yield _sse({
@@ -1363,10 +1366,12 @@ class AgentRunMixin:
                 await self._strip_checkpoint_images(run_config, graph)
             except Exception:
                 pass
-            # 清理 todo 清单缓存（按 thread_id 清理，保留磁盘文件供恢复）
+            # 清理 todo 清单缓存（按完整 thread_key 清理，保留磁盘文件供恢复）。
+            # 必须用 thread_key 而非裸 tid：工具按 LangGraph config 的完整 key
+            # （"uid:sessionId"）写入，用 tid 会 key 不匹配导致旧清单永久残留。
             try:
                 from tools.todo_tools import pop_todo_list
-                pop_todo_list(tid)
+                pop_todo_list(thread_key)
             except Exception:
                 pass
             # 释放该会话的浏览器页面，避免跨会话页面状态串扰

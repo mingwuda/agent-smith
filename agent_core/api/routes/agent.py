@@ -152,11 +152,16 @@ async def run_agent(req: RunRequest, request: Request):
         thread_id=session_id,
         provider_override=provider_override,
     )
-    # 从 todo store 取出清单（非流式模式）
+    # 从 todo store 取出清单（非流式模式）。
+    # 用 peek（只查内存不读盘）+ 完整 key（"uid:session_id"）：工具按 LangGraph config
+    # 的完整 thread_id 写入，本轮 ainvoke 刚执行完 manage_todo 必在缓存中。无参/读盘会
+    # 取到其它会话或上一轮残留的清单。取出后立即清缓存防跨请求残留；磁盘文件保留供"继续"恢复。
     todo_list_r = None
     try:
-        from tools.todo_tools import get_todo_list
-        todo_list_r = get_todo_list()
+        from tools.todo_tools import peek_todo_list, pop_todo_list
+        _todo_key = f"{uid}:{session_id}"
+        todo_list_r = peek_todo_list(_todo_key)
+        pop_todo_list(_todo_key)
     except Exception:
         pass
     artifact_paths = [
