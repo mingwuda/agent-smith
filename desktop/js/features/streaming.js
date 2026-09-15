@@ -300,8 +300,9 @@ function beginRoundRender(rt) {
   _historyBodyEl = segTime.querySelector('.seg-history');  // 完整 step 历史进这里
 
   // ── 第二段：当前执行工具（默认展开）── 仅展示「最新的一个 step」，思考面板置顶
+  // pending-header：首个工具/思考事件到达前隐藏段标题（简单问答流式期间不显示空的「工具执行」栏）
   var segTool = document.createElement('div');
-  segTool.className = 'seg seg-tool';
+  segTool.className = 'seg seg-tool pending-header';
   segTool.innerHTML =
     '<div class="seg-header">' +
       '<span class="seg-arrow">▶</span>' +
@@ -1170,6 +1171,12 @@ function handleStreamEvent(data) {
       removeGeneratingBadge();
       hasToolCalls = true;
       ensureStepsContainer();
+      // 首个思考事件到达：露出第二段「工具执行」标题栏
+      var _cardThought = getResponseCard();
+      if (_cardThought) {
+        var _segToolThought = _cardThought.querySelector('.seg-tool');
+        if (_segToolThought) _segToolThought.classList.remove('pending-header');
+      }
       const thoughtText = data.thought || '';
       // 优先"挪用"答案气泡里已经渲染好的那段
       let thoughtHtml;
@@ -1230,6 +1237,12 @@ function handleStreamEvent(data) {
       removeThinkingHint();
       removeGeneratingBadge();
       hasToolCalls = true;
+      // 首个工具事件到达：露出第二段「工具执行」标题栏
+      var _cardTool = getResponseCard();
+      if (_cardTool) {
+        var _segToolStart = _cardTool.querySelector('.seg-tool');
+        if (_segToolStart) _segToolStart.classList.remove('pending-header');
+      }
       // 兜底：本轮乐观流出的临时答案实为推理
       if (currentBotMsgEl) { currentBotMsgEl.remove(); currentBotMsgEl = null; }
       currentFinalContent = '';
@@ -1807,11 +1820,13 @@ function handleStreamEvent(data) {
           currentBotMsgEl.className = 'thought-block streaming-final';
           currentStepsEl.appendChild(currentBotMsgEl);
         } else {
+          // 简单问答（尚无工具调用）：流式期间临时气泡挂在第二段 body，
+          // 不提前暴露第三段「最终回答」标题栏；done 时统一迁移进 _answerBodyEl。
           currentBotMsgEl.className = 'msg bot streaming-final';
-          if (_answerBodyEl) {
+          if (currentStepsEl) {
+            currentStepsEl.appendChild(currentBotMsgEl);
+          } else if (_answerBodyEl) {
             _answerBodyEl.appendChild(currentBotMsgEl);
-          } else if (currentStepsEl) {
-            currentStepsEl.after(currentBotMsgEl);
           } else {
             container.appendChild(currentBotMsgEl);
           }
@@ -1838,11 +1853,15 @@ function handleStreamEvent(data) {
       _lastToolImageHtml = null;
       addMessage('❌ ' + data.content, 'system');
 
-      // SSE 输出完成后，隐藏整个「工具执行」段
-      var responseCardForError = getResponseCard();
-      if (responseCardForError) {
-        const segToolForError = responseCardForError.querySelector('.seg-tool');
-        if (segToolForError) segToolForError.style.display = 'none';
+      // SSE 输出完成后，隐藏整个「工具执行」段。
+      // 但简单问答（无工具调用）出错时，已流出的临时答案气泡挂在第二段 body，
+      // 隐藏会让用户已看到的部分内容消失，故仅在确有工具调用时隐藏。
+      if (hasToolCalls) {
+        var responseCardForError = getResponseCard();
+        if (responseCardForError) {
+          const segToolForError = responseCardForError.querySelector('.seg-tool');
+          if (segToolForError) segToolForError.style.display = 'none';
+        }
       }
       break;
 
@@ -1852,6 +1871,12 @@ function handleStreamEvent(data) {
       removeThinkingHint();
       removeGeneratingBadge();
       hasToolCalls = true;
+      // todo 规划也算工作开始：露出第二段标题栏
+      var _cardTodo = getResponseCard();
+      if (_cardTodo) {
+        var _segToolTodo = _cardTodo.querySelector('.seg-tool');
+        if (_segToolTodo) _segToolTodo.classList.remove('pending-header');
+      }
       if (data.todo_list) {
         renderTodoPanel(data.todo_list, true);
       }

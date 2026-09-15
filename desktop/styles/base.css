@@ -326,6 +326,10 @@
   /* 三段式：每段独立折叠（第一段 工作耗时 / 第二段 工具执行 / 第三段 最终回答） */
   .seg { border-bottom: 1px solid #f0f0f0; }
   .agent-response > .seg:last-child { border-bottom: none; }
+  /* 第三段「最终回答」：done 前整段隐藏（含标题栏），最终答案最后才出现 */
+  .agent-response:not(.finished) .seg-answer { display: none; }
+  /* 第二段「工具执行」：尚未出现任何工具/思考事件前隐藏标题栏（简单问答流式期间只显示答案气泡） */
+  .seg-tool.pending-header > .seg-header { display: none; }
   .seg-header {
     display: flex; align-items: center; gap: 8px;
     padding: 10px 14px; cursor: pointer; user-select: none;
