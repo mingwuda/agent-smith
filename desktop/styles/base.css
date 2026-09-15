@@ -185,6 +185,24 @@
     .msg-copy-btn { opacity:1; background:rgba(0,0,0,0.08); }
     .msg.user .msg-copy-btn { background:rgba(255,255,255,0.3); }
   }
+  /* ponytail: 消息反馈条 👍/👎 + 纠错（padding-right 给右下角复制按钮留位） */
+  .msg-feedback { margin-top:8px; padding-top:6px; padding-right:30px; display:flex; align-items:center; gap:4px; flex-wrap:wrap; }
+  .msg.bot .msg-feedback { border-top:1px solid rgba(0,0,0,0.08); }
+  .agent-final-output .msg-feedback { border-top:1px solid #f0f0f0; }
+  .fb-btn { border:none; background:transparent; cursor:pointer; font-size:14px; line-height:1; padding:4px 6px; border-radius:6px; opacity:.5; transition:opacity .15s ease, background .15s ease; }
+  .fb-btn:hover { opacity:1; background:rgba(0,0,0,.06); }
+  .fb-btn.active { opacity:1; background:rgba(0,122,255,.12); }
+  .fb-btn:disabled { opacity:.3; cursor:default; background:transparent; }
+  .fb-correct { flex-basis:100%; width:100%; margin-top:2px; }
+  .fb-correct-input { width:100%; resize:vertical; border:1px solid #c8c8cf; border-radius:8px; padding:6px 8px; font-size:13px; font-family:inherit; box-sizing:border-box; background:#fff; color:#1d1d1f; }
+  .fb-correct-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:4px; }
+  .fb-cancel, .fb-submit { border:1px solid #c8c8cf; background:#fff; color:#1d1d1f; border-radius:6px; padding:3px 14px; font-size:12px; cursor:pointer; }
+  .fb-submit { background:#007aff; border-color:#007aff; color:#fff; }
+  .fb-submit:disabled { opacity:.5; cursor:default; }
+  .fb-thanks { font-size:12px; color:#16a34a; }
+  @media (hover: none) {
+    .fb-btn { opacity:.7; }
+  }
   .msg.bot.streaming-final { display:block; margin-left:0; clear:both; }
   .msg.bot h1, .msg.bot h2, .msg.bot h3 { margin:8px 0 4px; font-size:inherit; font-weight:600; }
   .msg.bot h1 { font-size:18px; }

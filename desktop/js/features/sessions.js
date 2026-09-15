@@ -212,6 +212,7 @@ function addBotMessagePlaceholder(content, contentPreview, elapsedMs, sessionId,
     ans.className = 'agent-final-output';
     ans.innerHTML = renderMarkdown(content || contentPreview || '');
     attachCopyButton(ans);
+    attachFeedbackBar(ans);
     responseCard.appendChild(ans);
     currentBotMsgEl = ans;
   }
@@ -318,6 +319,7 @@ async function expandBotMessagePlaceholder(responseCard, sessionId, messageIndex
     ans.className = 'agent-final-output';
     ans.innerHTML = renderMarkdown(content);
     attachCopyButton(ans);
+    attachFeedbackBar(ans);
     currentBotMsgEl = ans;
     responseCard.appendChild(ans);
 

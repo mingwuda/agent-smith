@@ -29,6 +29,8 @@ function addMessage(text, role, index) {
   }
   // ponytail: 右下角一键复制按钮（用户消息与最终输出都挂）
   attachCopyButton(div);
+  // bot 历史消息挂 👍/👎 反馈条（流式最终输出在 streaming.js done 分支挂）
+  if (role === 'bot') attachFeedbackBar(div);
   messages.appendChild(div);
   smartScroll(messages);
   return div;
@@ -60,6 +62,81 @@ function attachCopyButton(el) {
     }
   });
   el.appendChild(copyBtn);
+}
+
+// ---------- 消息反馈（👍/👎 + 纠错），对接 POST /sessions/{id}/feedback ----------
+// ponytail: 每个气泡最多挂一次、最多提交一次；无当前会话（系统消息/空态）不挂。
+function attachFeedbackBar(el) {
+  if (!el || el.querySelector('.msg-feedback')) return;
+  if (!currentSessionId) return;
+  const bar = document.createElement('div');
+  bar.className = 'msg-feedback';
+  bar.innerHTML =
+    '<button type="button" class="fb-btn" data-rating="1" aria-label="' + (currentLanguage === 'en' ? 'Good' : '赞') + '">👍</button>' +
+    '<button type="button" class="fb-btn" data-rating="-1" aria-label="' + (currentLanguage === 'en' ? 'Bad' : '踩') + '">👎</button>' +
+    '<div class="fb-correct" hidden>' +
+      '<textarea class="fb-correct-input" rows="2" placeholder="' + (currentLanguage === 'en' ? 'What went wrong? How to improve (optional)' : '哪里做得不好？应如何改进（可选，可直接提交）') + '"></textarea>' +
+      '<div class="fb-correct-actions">' +
+        '<button type="button" class="fb-cancel">' + (currentLanguage === 'en' ? 'Cancel' : '取消') + '</button>' +
+        '<button type="button" class="fb-submit">' + (currentLanguage === 'en' ? 'Submit' : '提交') + '</button>' +
+      '</div>' +
+    '</div>' +
+    '<span class="fb-thanks" hidden>' + (currentLanguage === 'en' ? 'Thanks for your feedback' : '已提交，感谢反馈') + '</span>';
+  el.appendChild(bar);
+
+  const btns = bar.querySelectorAll('.fb-btn');
+  const correctBox = bar.querySelector('.fb-correct');
+  const input = bar.querySelector('.fb-correct-input');
+  const submitBtn = bar.querySelector('.fb-submit');
+  const cancelBtn = bar.querySelector('.fb-cancel');
+  const thanks = bar.querySelector('.fb-thanks');
+  let submitted = false;
+
+  function setDone() {
+    submitted = true;
+    correctBox.hidden = true;
+    btns.forEach(b => { b.disabled = true; b.classList.remove('active'); });
+    thanks.hidden = false;
+  }
+
+  async function postFeedback(rating, correction) {
+    submitBtn.disabled = true;
+    try {
+      const res = await fetch('/sessions/' + encodeURIComponent(currentSessionId) + '/feedback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rating: rating, correction: correction || '' }),
+      });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      setDone();
+    } catch (e) {
+      submitBtn.disabled = false;
+      alert((currentLanguage === 'en' ? 'Failed to submit feedback: ' : '反馈提交失败：') + e.message);
+    }
+  }
+
+  btns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      if (submitted) return;
+      const rating = Number(btn.dataset.rating);
+      btns.forEach(b => b.classList.toggle('active', b === btn));
+      if (rating === 1) {
+        correctBox.hidden = true;
+        postFeedback(1, '');
+      } else {
+        correctBox.hidden = false;
+        input.focus();
+      }
+    });
+  });
+  cancelBtn.addEventListener('click', () => {
+    correctBox.hidden = true;
+    btns.forEach(b => b.classList.remove('active'));
+  });
+  submitBtn.addEventListener('click', () => {
+    if (submitted) return;
+    postFeedback(-1, input.value.trim());
+  });
 }
 
 // ponytail: clipboard API 不可用时（非 https / 旧浏览器）的兜底复制

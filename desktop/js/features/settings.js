@@ -513,6 +513,9 @@ async function saveSettings() {
         base_url: document.getElementById('s-base-url').value,
         recursion_limit: Number(document.getElementById('s-recursion-limit').value || 60),
         enable_loop_guard: document.getElementById('s-enable-loop-guard').checked,
+        enable_self_evolution: document.getElementById('s-enable-self-evolution').checked,
+        enable_self_healing: document.getElementById('s-enable-self-healing').checked,
+        self_healing_interval_seconds: Number(document.getElementById('s-self-healing-interval').value || 600),
         api_max_retries: settingsData?.api_max_retries ?? 3,
         api_host_ips: settingsData?.api_host_ips || '',
         context_window_tokens: settingsData?.context_window_tokens || 0,
@@ -624,6 +627,9 @@ async function quickSwitchProvider(providerId) {
         base_url: provider.base_url || '',
         recursion_limit: settingsData.recursion_limit || 60,
         enable_loop_guard: settingsData.enable_loop_guard !== false,
+        enable_self_evolution: settingsData.enable_self_evolution === true,
+        enable_self_healing: settingsData.enable_self_healing === true,
+        self_healing_interval_seconds: settingsData.self_healing_interval_seconds || 600,
         api_max_retries: settingsData.api_max_retries ?? 3,
         api_timeout_seconds: settingsData.api_timeout_seconds ?? 120,
         api_host_ips: settingsData.api_host_ips || '',
@@ -783,6 +789,12 @@ function renderParamsFields(data) {
   const loopGuard = document.getElementById('s-enable-loop-guard');
   if (recursion) recursion.value = data.recursion_limit || 60;
   if (loopGuard) loopGuard.checked = data.enable_loop_guard !== false;
+  const selfEvolution = document.getElementById('s-enable-self-evolution');
+  const selfHealing = document.getElementById('s-enable-self-healing');
+  const healingInterval = document.getElementById('s-self-healing-interval');
+  if (selfEvolution) selfEvolution.checked = data.enable_self_evolution === true;
+  if (selfHealing) selfHealing.checked = data.enable_self_healing === true;
+  if (healingInterval) healingInterval.value = data.self_healing_interval_seconds || 600;
 
   // ── 搜索 ──
   const tavilyEnabled = document.getElementById('s-tavily-enabled');

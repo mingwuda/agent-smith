@@ -1908,12 +1908,14 @@ function handleStreamEvent(data) {
         currentBotMsgEl.classList.remove('streaming-final');
         // ponytail: 流式最终输出附上复制按钮（仅在还没有时挂一次）
         if (!currentBotMsgEl.querySelector('.msg-copy-btn')) attachCopyButton(currentBotMsgEl);
+        attachFeedbackBar(currentBotMsgEl);
         finalOutputEl = currentBotMsgEl;
       } else if (!_isReplaying) {
         finalOutputEl = document.createElement('div');
         finalOutputEl.className = 'agent-final-output';
         finalOutputEl.innerHTML = finalHtml;
         attachCopyButton(finalOutputEl);
+        attachFeedbackBar(finalOutputEl);
         if (_answerBodyEl) {
           _answerBodyEl.appendChild(finalOutputEl);
         } else if (responseCard) {
