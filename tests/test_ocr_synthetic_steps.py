@@ -48,8 +48,10 @@ def test_human_content_ocr_sink_collects_records():
 
     # 返回纯文本（OCR 降级），绝不包含 image_url
     assert isinstance(text, str)
-    assert "[图片 1 OCR 识别结果]" in text
-    assert "[图片 2 OCR 识别结果]" in text
+    # ponytail: 2026-09 视觉路由重构后文案统一为「图片 N 描述（OCR|视觉模型）」，
+    # 测试环境无视觉模型标记，必然走 OCR 兜底（via == "ocr"）。
+    assert "[图片 1 描述（OCR）]" in text
+    assert "[图片 2 描述（OCR）]" in text
     assert "OCR文本" in text
 
     # sink 按图片逐条记录
@@ -57,8 +59,9 @@ def test_human_content_ocr_sink_collects_records():
     for idx, rec in enumerate(sink, 1):
         assert rec["tool"] == "ocr_image"
         assert rec["args"]["index"] == idx
+        assert rec["args"]["via"] == "ocr"
         assert "OCR文本" in rec["result"]
-        assert "不支持图片输入" in rec["args"]["reason"]
+        assert "不支持视觉" in rec["args"]["reason"]
 
 
 def test_human_content_ocr_sink_default_none_unchanged():
