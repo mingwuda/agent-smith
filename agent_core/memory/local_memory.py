@@ -24,6 +24,11 @@ _K_CREATED = "__created_at__"
 _K_UPDATED = "__updated_at__"
 _K_EXPIRES = "__expires_at__"
 
+# Phase 2：自进化经验按类封顶，超出淘汰最旧条目（注入 prompt 仍另有 3 条/100 字截断）。
+# 相同内容的 md5 key 天然覆盖去重，这里只兜底磁盘总量，防止长期运行无限增长。
+_EVOLUTION_PREFIXES = ("_learned_", "_avoid_")
+MAX_EVOLUTION_ENTRIES_PER_KIND = 50
+
 
 class LocalMemory:
     """基于文件的键值记忆存储"""
@@ -118,11 +123,29 @@ class LocalMemory:
         if not same:
             self._fts_dirty = True
         self._save(key)
+        for _prefix in _EVOLUTION_PREFIXES:
+            if key.startswith(_prefix):
+                self._cap_evolution_entries(_prefix)
+                break
         if same:
             return f"ℹ️ '{key}' 已存在且内容未变化"
         if existed:
             return f"🔄 已覆盖更新记忆 '{key}'"
         return f"✅ 已记忆 '{key}'"
+
+    def _cap_evolution_entries(self, prefix: str) -> None:
+        """同一进化前缀（_learned_ / _avoid_）超过上限时淘汰最久未更新的条目。"""
+        keys = [k for k in self._cache if k.startswith(prefix)]
+        excess = len(keys) - MAX_EVOLUTION_ENTRIES_PER_KIND
+        if excess <= 0:
+            return
+        # 以 updated_at 升序（缺失视为 0），最旧的先淘汰
+        keys.sort(key=lambda k: self._meta.get(k, {}).get("updated_at") or 0)
+        for old_key in keys[:excess]:
+            try:
+                self.delete(old_key)
+            except Exception:
+                pass
 
     def delete(self, key: str) -> str:
         """删除记忆"""

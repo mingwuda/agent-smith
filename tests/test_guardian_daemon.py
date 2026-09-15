@@ -119,3 +119,39 @@ def test_run_patrol_observe_only_when_disabled(tmp_path, monkeypatch):
     assert bad.exists(), "观察模式不应改动任何文件"
     assert len(restarted) == 0
     assert len(json.loads(paths["manifest_path"].read_text())["entries"]) == 1
+
+
+def test_unhealthy_observe_writes_guardian_audit(tmp_path, monkeypatch):
+    """观察模式不健康：不改文件，但写一条 guardian escalation 审计。"""
+    from agent_core.evolution.audit_store import get_audit_store
+
+    cfg = _make_cfg(False)
+    paths, bad = _patrol_paths(tmp_path, ["bad"])
+    monkeypatch.setattr(gd, "check_health",
+                        lambda url, timeout=5: {"agent_ready": False, "boot_ok": False})
+    monkeypatch.setattr(gd, "scan_log_for_errors", lambda log_file, tail_lines=300: [])
+
+    gd.run_patrol(cfg, paths, "http://x/health", None)
+
+    rows = get_audit_store().list_audit(source="guardian", limit=10)
+    assert rows and rows[0]["category"] == "escalation"
+    assert rows[0]["outcome"] == "escalated"
+    assert bad.exists()  # 观察模式不动产物
+
+
+def test_log_errors_flow_through_patrol_to_audit(tmp_path, monkeypatch):
+    """日志重复异常 → patrol 分析链路 → pitfall 审计（观察模式只记录不修复）。"""
+    from agent_core.evolution.audit_store import get_audit_store
+
+    cfg = _make_cfg(False)
+    paths, _ = _patrol_paths(tmp_path, [])
+    monkeypatch.setattr(gd, "check_health",
+                        lambda url, timeout=5: {"agent_ready": True, "boot_ok": True})
+    trace = ["ValueError: boom"] * 4
+    monkeypatch.setattr(gd, "scan_log_for_errors", lambda log_file, tail_lines=300: trace)
+
+    summary = gd.run_patrol(cfg, paths, "http://x/health", None)
+
+    assert summary["acted"] is False
+    rows = get_audit_store().list_audit(category="pitfall", limit=10)
+    assert len(rows) == 1 and "ValueError" in rows[0]["summary"]

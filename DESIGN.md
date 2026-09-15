@@ -41,7 +41,7 @@
 |---|---|---|
 | **第 0 层 系统守护** | 启动自愈 + **运行时巡检自愈** + Apply 闸门，防止 Agent 起不来 / 跑着跑着坏掉 | **P1 即做实（自愈常开）**，闸门 P3 接 |
 | **Phase 1 加固闭环** | 反馈捕获 + 失败/反馈反思 + 负向注入 + 结构化记忆 | **待实现（本设计范围）** |
-| Phase 2 记忆结构化与去重 | 三类经验(technique/preference/pitfall)排序截断、总量上限 | 后续 |
+| Phase 2 记忆结构化与去重 | 三类经验(technique/preference/pitfall)排序截断、总量上限 | **已落地（2026-09-15）**：注入侧 3 条/100 字截断 + 10 天 TTL 既有；新增磁盘侧每类 50 条惰性封顶淘汰最旧（`local_memory.py`） |
 | Phase 3 行为改写 | 高价值 `technique` → 起草 `SKILL.md` → `reload_skills` 热加载（人工在环/全自主） | 后续 |
 | Phase 4 安全应用 | 沙箱 dry-run + 审批闸 + 版本回滚 | 后续 |
 | Phase 5 元度量 | 某条经验被注入后对应任务成败关联；反模式降权/过期 | 后续 |
@@ -292,9 +292,17 @@ systemd (物理存活: 进程死→拉起)
 - 新增 `packaging/linux/desktop-agent-guardian.service`：systemd 监管守护进程自身（`Restart=always`），并注入 `SELF_HEAL_HEALTH_URL`/`SELF_HEAL_RESTART_CMD`。
 - `tests/test_guardian_daemon.py` **6 passed**（LIFO 回退 / 空 manifest / 探针不可达 / 探针解析 / 开启自愈恢复 / 观察模式不动文件）。全量回归 27 passed（含 boot 自愈 6、自进化 4、loop_guard 11）。
 
-**未做（后续轮次）**：
-- 完整巡检分析器（§4.6.3 两阶段 LLM）、healers 注册表（§4.6.4）、审计写入（§4.7）、升级人工 UI。当前 `run_patrol` 仅做"健康探测 + 轻量日志扫描 +（开启时）boot 恢复编排"，是骨架而非完整巡逻。
-- 守护进程与主 app 的实际联调（需重启服务加载新代码，并配置 systemd unit + 重启命令）。
+**P1 补全（2026-09-15 已落地）**：
+- `agent_core/patrol.py`：Stage 1 启发式（Traceback 异常类型正则聚类、重复≥3、错误量≥10 尖刺、`.generated/<name>` 技能线索）；Stage 2 review LLM 根因分析（未配置/失败自吞，稳态零成本）；healers 注册表 `quarantine_bad_skill`（低风险自动，复用 guardian 隔离原语）/ `revert_config_patch`（高风险恒升级人工）/ `escalate_to_human`；pitfall 去重防刷屏。
+- `agent_core/evolution/audit_store.py`：进程级 SQLite 审计库（§4.7.2 全字段），patrol/guardian 所有动作单一写入点。
+- `api/routes/admin_evolution.py`：`GET /admin/evolution/audit|audit/{id}|health|artifacts` + `POST /audit/{id}/action`，全程 admin 鉴权（§4.7.3；管理页 UI 仍待后续）。
+- `guardian_daemon.run_patrol` 日志分支已从"仅记录"改为走 `patrol.run_analysis` 完整链路；健康分支恢复/观察均写审计。
+- Phase 2 记忆磁盘侧封顶（每类 50 条淘汰最旧）。
+- 测试：`test_patrol.py` 14 例、`test_evolution_audit.py` 7 例、`test_admin_evolution_api.py` 7 例、`test_memory_evolution_cap.py` 4 例，守护进程测试补至 8 例；全量 320 passed。
+
+**仍未做（后续轮次）**：
+- 审计管理页前端（§4.7.5）、Phase 3 自动起草 SKILL、Phase 4 沙箱 dry-run 与 revert 实际产物恢复、UsageTracker 扩 error 字段做遥测错误率（当前 Stage 1 以日志聚类为主信号）。
+- 守护进程与主 app 的生产联调（需配置 systemd unit + SELF_HEAL_RESTART_CMD；`--once` 直跑已验证）。
 
 ### 4.7 进化审计视图（管理员可观测，跨层）
 

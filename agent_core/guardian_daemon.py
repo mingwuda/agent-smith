@@ -141,6 +141,32 @@ def orchestrate_boot_recovery(paths: dict, restart_cmd: Optional[str]) -> bool:
     return moved is not None or restart_cmd is not None
 
 
+# ---------- 审计（惰性加载，失败自吞；守护层不能因审计挂掉） ----------
+
+def _audit_log(**kwargs) -> None:
+    try:
+        try:
+            from evolution.audit_store import get_audit_store  # daemon 直跑
+        except ImportError:
+            from agent_core.evolution.audit_store import get_audit_store
+        get_audit_store().log(**kwargs)
+    except Exception:
+        logger.debug("[守护] 审计写入失败（已忽略）", exc_info=True)
+
+
+def _has_open_audit(category: str, summary_text: str) -> bool:
+    try:
+        try:
+            from evolution.audit_store import get_audit_store
+        except ImportError:
+            from agent_core.evolution.audit_store import get_audit_store
+        rows = get_audit_store().list_audit(category=category, limit=20)
+        return any(r["summary"] == summary_text and r["outcome"] in ("pending", "escalated")
+                   for r in rows)
+    except Exception:
+        return False
+
+
 # ---------- 单轮巡检 ----------
 
 def run_patrol(
@@ -153,34 +179,59 @@ def run_patrol(
 ) -> dict:
     """执行一轮巡检。观察永远执行；动作仅在 `enable_self_healing` 开启时执行。
 
+    健康分支：探测 + boot 恢复编排（本模块）；
+    日志分支：委托 patrol.run_analysis 做两阶段分析 + healers + 审计（DESIGN §4.6）。
     返回本轮摘要（便于测试与观测）。
     """
     summary = {"ts": int(time.time()), "acted": False, "findings": []}
+    enabled = bool(getattr(cfg, "enable_self_healing", False))
 
     # 1) 健康探测
     health = check_health(health_url)
     unhealthy = (health is None) or (not health.get("boot_ok") and not health.get("agent_ready"))
     if unhealthy:
         summary["findings"].append("app_unhealthy")
-        if getattr(cfg, "enable_self_healing", False):
+        health_summary = "[守护] 主 app 健康探针异常或未就绪"
+        if enabled:
             logger.warning("[守护] 探测到主 app 不健康: %s", health)
-            orchestrate_boot_recovery(paths, restart_cmd)
+            recovered = orchestrate_boot_recovery(paths, restart_cmd)
             summary["acted"] = True
+            _audit_log(
+                source="guardian",
+                category="fix" if recovered else "escalation",
+                severity="fatal",
+                summary=("已编排 boot 恢复（LIFO 回退进化产物 + 触发重启）"
+                         if recovered else "主 app 不健康：无进化产物可回退，已尝试重启/待人工"),
+                detail={"health": health, "restart_cmd_configured": bool(restart_cmd)},
+                outcome="auto_reverted" if recovered else "escalated",
+            )
         else:
             logger.info("[守护] 主 app 不健康（观察模式，未开启自愈，仅记录）: %s", health)
+            if not _has_open_audit("escalation", health_summary):
+                _audit_log(
+                    source="guardian", category="escalation", severity="fatal",
+                    summary=health_summary, detail={"health": health}, outcome="escalated",
+                )
     else:
         logger.info("[守护] 健康巡检通过: %s", health)
 
-    # 2) 日志扫描（轻量启发式；完整分析/自愈器在 §4.6 后续阶段）
+    # 2) 日志扫描 → patrol 两阶段分析 + healers + 审计
     errors = scan_log_for_errors(Path(paths["log_file"]), tail_lines=log_tail)
     if errors:
         summary["findings"].append(f"log_errors:{len(errors)}")
-        if getattr(cfg, "enable_self_healing", False):
-            # ponytail: 当前仅记录；未来接 §4.6.4 healers（如 quarantine_bad_skill / write_pitfall_memory）
-            logger.warning("[守护] 日志发现 %d 处错误标记（观察记录，自愈逻辑待 §4.6 扩展）", len(errors))
-            summary["acted"] = True
-        else:
-            logger.info("[守护] 日志发现 %d 处错误标记（观察模式，仅记录）", len(errors))
+        try:
+            import patrol  # daemon 直跑（sys.path 已 bootstrap）
+        except ImportError:
+            from agent_core import patrol
+        analysis = patrol.run_analysis(
+            errors, cfg, paths, health=health, enabled=enabled, include_health=False)
+        if analysis.get("actions"):
+            summary["findings"].extend(a.get("healer", a.get("mode", ""))
+                                       for a in analysis["actions"])
+            if enabled and any(a.get("mode") == "auto" for a in analysis["actions"]):
+                summary["acted"] = True
+        if analysis.get("error"):
+            logger.warning("[守护] 巡检分析本轮异常: %s", analysis["error"])
 
     return summary
 
