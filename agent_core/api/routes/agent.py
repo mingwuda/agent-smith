@@ -30,6 +30,7 @@ from logger import set_log_context, get_logger
 from config import AgentConfig
 from agent import DesktopAgent
 import session_store
+import stream_log
 from memory.local_memory import get_memory
 
 logger = get_logger(__name__)
@@ -80,6 +81,63 @@ def init_agent(caller: str = "route.agent", force: bool = False):
     if _main_init is not None:
         _main_init(caller=caller, force=force)
     agent = get_agent()
+
+
+
+# ---------- SSE 后台驱动（刷新可恢复） ----------
+# agent 流不挂在 HTTP 连接上：连接断开/刷新只退订，driver 继续后台跑完并实时落盘
+# stream_log（事件 jsonl + running 登记），终态统一「落历史 + clear_running + 反思」。
+# 客户端通过 hub 订阅实时事件；刷新后通过 /sessions/{id}/stream/active 拿落盘事件回放。
+
+_END_SENTINEL = object()   # driver 结束标志，广播给所有订阅者
+_live_hubs: dict = {}      # message_id -> _StreamHub（活跃 run 的事件广播器）
+
+class _StreamHub:
+    """单个 run 的事件广播器：driver 产出 SSE 文本 -> 写 buffer + 推给所有订阅队列。
+
+    订阅者（每个 SSE 连接一个队列）先回放 buffer 再实时续接，保证晚到的新连接不丢事件。
+    buffer 保留全量事件（单 run 事件数有限），run 结束且无订阅者后由 _cleanup 回收。
+    """
+    def __init__(self):
+        self.buffer: list = []
+        self.subs: set = set()
+        self.finished = False
+        self.created_at = time.time()
+
+    def publish(self, sse_text: str) -> None:
+        self.buffer.append(sse_text)
+        for q in list(self.subs):
+            try:
+                q.put_nowait(sse_text)
+            except Exception:
+                pass
+
+    def finish(self) -> None:
+        if self.finished:
+            return
+        self.finished = True
+        for q in list(self.subs):
+            try:
+                q.put_nowait(_END_SENTINEL)
+            except Exception:
+                pass
+
+    def subscribe(self):
+        q = asyncio.Queue()
+        self.subs.add(q)
+        return q
+
+    def unsubscribe(self, q) -> None:
+        self.subs.discard(q)
+
+
+def _cleanup_finished_hubs() -> None:
+    """回收已结束且无订阅者的 hub（宽限 300s 让刚结束的 run 仍可被 active 接口短暂回放）。"""
+    now = time.time()
+    for mid in list(_live_hubs.keys()):
+        hub = _live_hubs[mid]
+        if hub.finished and not hub.subs and (now - hub.created_at) > 300:
+            _live_hubs.pop(mid, None)
 
 
 # ---------- 路由 ----------
@@ -201,9 +259,7 @@ async def run_agent_stream(req: RunRequest, request: Request):
     display_text = _display_user_message(uid, req.message, attachments)
     session_store.add_message(uid, session_id, "user", display_text)
     model_override = _image_model_override(attachments)
-    # 解析可选的 provider 覆盖：仅当该 provider 在配置中存在时才生效（否则回退到全局 active_provider）
     provider_override = req.provider if (req.provider and agent and req.provider in (getattr(agent.config, "providers", {}) or {})) else ""
-    # ── 解析文本文件内容，直接嵌入 agent 消息 ──
     agent_message = req.message
     if attachments:
         try:
@@ -214,7 +270,6 @@ async def run_agent_stream(req: RunRequest, request: Request):
                     agent_message = text_content
         except (json.JSONDecodeError, TypeError):
             pass
-    # ── 解析 ZIP 清单，追加到 LLM 消息中 ──
     if attachments and any(a.get("mime_type") == "application/zip" for a in attachments):
         try:
             parsed = json.loads(display_text)
@@ -223,7 +278,6 @@ async def run_agent_stream(req: RunRequest, request: Request):
                 agent_message = req.message + "\n\n" + manifest
         except (json.JSONDecodeError, TypeError):
             pass
-    # ── 解析图片下载地址，追加到 LLM 消息中供图生图模型使用 ──
     if attachments and any(a.get("mime_type", "").startswith("image/") for a in attachments):
         try:
             parsed = json.loads(display_text)
@@ -249,171 +303,80 @@ async def run_agent_stream(req: RunRequest, request: Request):
         )
 
     artifact_paths: list[str] = []
-    collected_steps: list[dict] = []  # 收集步骤卡片数据，将存入历史
-    collected_todo_list = None  # 收集 todo 清单数据
-    
-    async def event_stream():
-        final_content = ""
-        error_content = ""
-        forwarded_terminal_event = False
-        yielded_count = 0
-        if model_override:
-            yield f"data: {json.dumps({'type': 'model_switch', 'model': model_override, 'reason': '图片输入'}, ensure_ascii=False)}\n\n"
-        stream = agent._stream_done_wrapper(
-            agent_message,
-            history=history_messages,
-            attachments=attachments,
-            model_override=model_override,
-            thread_id=session_id,
-            provider_override=provider_override,
-        )
-        try:
-            async for sse_event in stream:
-                if await request.is_disconnected():
-                    logger.info("[run/stream] 客户端断开，停止事件流")
-                    await stream.aclose()
-                    return
-                if sse_event.strip() == "data: [DONE]":
-                    continue
-                yielded_count += 1
-                logger.debug("[run/stream] yield event: %s", sse_event[:80])
-                if '"type": "tool_start"' in sse_event:
-                    try:
-                        m = re.search(r'data: ({.*})', sse_event)
-                        if m:
-                            data = json.loads(m.group(1))
-                            args = data.get("args") or {}
-                            if data.get("tool") in {"write_file", "append_to_file", "edit_file"} and args.get("path"):
-                                artifact_paths.append(str(args["path"]))
-                            collected_steps.append(data)  # 收集步骤
-                    except Exception:
-                        pass
-                elif '"type": "tool_result"' in sse_event:
-                    try:
-                        m = re.search(r'data: ({.*})', sse_event)
-                        if m:
-                            collected_steps.append(json.loads(m.group(1)))
-                    except Exception:
-                        pass
-                elif '"type": "thought"' in sse_event:
-                    try:
-                        m = re.search(r'data: ({.*})', sse_event)
-                        if m:
-                            collected_steps.append(json.loads(m.group(1)))
-                    except Exception:
-                        pass
-                elif '"type": "subagent_start"' in sse_event or '"type": "subagent_end"' in sse_event:
-                    try:
-                        m = re.search(r'data: ({.*})', sse_event)
-                        if m:
-                            collected_steps.append(json.loads(m.group(1)))
-                    except Exception:
-                        pass
-                elif '"type": "context_compacted"' in sse_event:
-                    try:
-                        m = re.search(r'data: ({.*})', sse_event)
-                        if m:
-                            collected_steps.append(json.loads(m.group(1)))
-                    except Exception:
-                        pass
-                elif '"type": "todo"' in sse_event:
-                    try:
-                        m = re.search(r'data: ({.*})', sse_event)
-                        if m:
-                            todo_data = json.loads(m.group(1)).get("todo_list")
-                            if todo_data:
-                                nonlocal collected_todo_list
-                                collected_todo_list = todo_data
-                    except Exception:
-                        pass
-                if '"type": "done"' in sse_event:
-                    m = re.search(r'data: ({.*})', sse_event)
-                    if m:
-                        final_content = json.loads(m.group(1)).get("content", "")
-                    forwarded_terminal_event = True  # ponytail: 只要后端显式结束流，就不算异常终止
-                    continue
-                if '"type": "error"' in sse_event:
-                    m = re.search(r'data: ({.*})', sse_event)
-                    if m:
-                        error_content = json.loads(m.group(1)).get("content", "")
-                    forwarded_terminal_event = True
-                yield sse_event
-        except asyncio.CancelledError:
-            await stream.aclose()
-            return
-        except Exception as e:
-            logger.exception("SSE 流异常: async for 循环内未捕获的异常")
-            await stream.aclose()
-            yield f"data: {json.dumps({'type': 'error', 'content': f'服务内部错误: {e}'}, ensure_ascii=False)}\n\n"
-            return
+    collected_steps: list[dict] = []
+    collected_todo_list = None
 
-        logger.info(
-            "[run/stream] stream_run 返回: yielded_count=%d, final_content_len=%d, error_content_len=%d, forwarded_terminal=%s",
-            yielded_count,
-            len(final_content),
-            len(error_content),
-            forwarded_terminal_event,
-        )
-        # ponytail: 诊断“本轮已结束，但未生成正文”的根因，不改变业务逻辑
-        logger.info(
-            "[run/stream] 终判前: final_content=%r, error_content=%r, forwarded_terminal=%s, artifact_paths=%d, steps=%d",
-            bool(final_content),
-            bool(error_content),
-            forwarded_terminal_event,
-            len(artifact_paths),
-            len(collected_steps or []),
-        )
+    # ── 刷新可恢复：agent 流由后台 driver 持有，HTTP 连接只是订阅者 ──
+    hub = _StreamHub()
+    _live_hubs[message_id] = hub
+    asyncio.create_task(_drive_agent_stream(
+        uid=uid, session_id=session_id, message_id=message_id,
+        agent_message=agent_message, history=history_messages,
+        attachments=attachments, model_override=model_override,
+        provider_override=provider_override,
+        req=req, artifact_paths=artifact_paths,
+        collected_steps=collected_steps,
+        collected_todo_list=collected_todo_list,
+        hub=hub,
+    ))
+
+    async def event_stream():
+        q = hub.subscribe()
         try:
-            final_content = final_content or ""
-            if final_content:
-                # ponytail: 真正剥离历史/复读的截图引用，而非仅告警 —— 旧 token 已被清理，留着只会渲染破图
-                final_content = _strip_screenshot_urls(final_content)
-                final_content = _append_artifact_links(final_content, uid, artifact_paths)
-                logger.info("[run/stream] 发送 done: content_len=%d", len(final_content))
-                yield f"data: {json.dumps({'type': 'done', 'content': final_content}, ensure_ascii=False)}\n\n"
-                _save_assistant_result(uid, session_id, req.message, final_content, collected_steps, collected_todo_list)
-            elif error_content:
-                logger.info("[run/stream] 保存 error 结果: error_len=%d", len(error_content))
-                _save_assistant_result(uid, session_id, req.message, "❌ " + error_content, collected_steps, collected_todo_list)
-            elif artifact_paths:
-                summary = _append_artifact_links("任务已完成，文件已保存。", uid, artifact_paths)
-                logger.info("[run/stream] 发送 artifact 总结: %s", summary)
-                yield f"data: {json.dumps({'type': 'done', 'content': summary}, ensure_ascii=False)}\n\n"
-                _save_assistant_result(uid, session_id, req.message, summary, collected_steps, collected_todo_list)
-            elif not forwarded_terminal_event:
-                fallback = (
-                    "任务已结束，但模型没有生成最终回答"
-                    "（本轮只输出了推理内容、未给出正文，或已接近最大推理步数）。"
-                    f"当前最大推理步数为 {agent.config.recursion_limit}。可直接重试；"
-                    "若任务较复杂，可提高该值或把任务拆小后再试。"
-                )
-                logger.info("[run/stream] 发送 fallback: %s", fallback)
-                yield f"data: {json.dumps({'type': 'done', 'content': fallback}, ensure_ascii=False)}\n\n"
-                _save_assistant_result(uid, session_id, req.message, fallback, collected_steps, collected_todo_list)
-            else:
-                # ponytail: 已转发 terminal 事件但正文为空（如到达最大推理步数、模型未产出可见正文），
-                # 原逻辑会直接跳过保存，导致这一轮历史完全丢失（历史里只剩用户提问）。
-                # 用已收集的步骤合成占位正文后照常保存，保证历史完整、可回放。
-                logger.warning(
-                    "[run/stream] terminal 事件正文为空，用收集到的步骤合成占位历史（steps=%d）",
-                    len(collected_steps or []),
-                )
-                note = "（本轮已结束，但未生成正文；已记录以下工作步骤。）"
-                yield f"data: {json.dumps({'type': 'done', 'content': note}, ensure_ascii=False)}\n\n"
-                _save_assistant_result(uid, session_id, req.message, note, collected_steps, collected_todo_list)
-        except Exception as e:
-            logger.exception("SSE 流处理异常")
-            err_msg = f"服务内部错误: {e}"
-            yield f"data: {json.dumps({'type': 'done', 'content': err_msg}, ensure_ascii=False)}\n\n"
-        yield "data: [DONE]\n\n"
-        # 后台反思
-        asyncio.create_task(_async_reflect(uid, req.message, collected_steps, final_content or "", outcome="error" if error_content else "success"))
-    
+            start = len(hub.buffer)
+            for s in hub.buffer[:start]:
+                yield s
+            while True:
+                item = await q.get()
+                if item == _END_SENTINEL:
+                    break
+                yield item
+                if await request.is_disconnected():
+                    break
+        except asyncio.CancelledError:
+            pass
+        finally:
+            hub.unsubscribe(q)
+
     return StreamingResponse(
         event_stream(), media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
     )
 
+
+@router.get("/sessions/{session_id}/stream/active")
+async def session_stream_active(session_id: str, request: Request):
+    """刷新浏览器后恢复：返回该会话最近一个 run 的落盘事件 + 状态。"""
+    uid = _resolve_user(request)
+    run = stream_log.last_active_run(uid, session_id)
+    if run is None:
+        return {"active": False}
+    return {
+        "active": True,
+        "message_id": run["message_id"],
+        "running": run["running"],
+        "finished": run["finished"],
+        "events": _trim_events_for_replay(run["events"]),
+    }
+
+
+def _trim_events_for_replay(events: list) -> list:
+    """回放端只保留前端渲染所需的事件，裁掉高频 token 碎片。"""
+    out = []
+    pending_tokens = []
+    def _flush_tokens():
+        if pending_tokens:
+            out.append({"type": "token_delta", "content": "".join(pending_tokens)})
+            pending_tokens.clear()
+    for ev in events:
+        t = ev.get("type")
+        if t == "token":
+            pending_tokens.append(ev.get("content", ""))
+        else:
+            _flush_tokens()
+            out.append(ev)
+    _flush_tokens()
+    return out
 
 class FeedbackRequest(BaseModel):
     rating: int = 0  # -1 | 0 | 1
@@ -435,3 +398,131 @@ async def submit_session_feedback(session_id: str, req: FeedbackRequest, request
     if correction:
         asyncio.create_task(_reflect_from_feedback(uid, session_id, rating, correction))
     return {"ok": True}
+
+
+async def _drive_agent_stream(
+    uid: str,
+    session_id: str,
+    message_id: str,
+    agent_message: str,
+    history: list,
+    attachments: list,
+    model_override: str,
+    provider_override: str,
+    req: RunRequest,
+    artifact_paths: list,
+    collected_steps: list,
+    collected_todo_list: Optional[dict],
+    hub: "_StreamHub",
+) -> None:
+    """后台驱动：消费 agent 流并实时落盘 + 广播给所有 SSE 订阅者。
+
+    与 HTTP 连接解耦：客户端断开/刷新只影响订阅侧，driver 继续后台跑完。
+    终态由本函数统一处理（落历史 + clear_running + 反思），保证只发生一次。
+    """
+    stream_log.mark_running(uid, session_id, message_id)
+    final_content = ""
+    error_content = ""
+    forwarded_terminal_event = False
+
+    def _persist(parsed: Optional[dict]) -> None:
+        if parsed:
+            stream_log.append_event(uid, session_id, message_id, parsed)
+
+    try:
+        stream = agent._stream_done_wrapper(
+            agent_message,
+            history=history,
+            attachments=attachments,
+            model_override=model_override,
+            thread_id=session_id,
+            provider_override=provider_override,
+        )
+        if model_override:
+            hub.publish(f"data: {json.dumps({'type': 'model_switch', 'model': model_override, 'reason': '图片输入'}, ensure_ascii=False)}\n\n")
+        async for sse_event in stream:
+            if sse_event.strip() == "data: [DONE]":
+                continue
+            # 解析并持久化
+            data = None
+            try:
+                m = re.search(r"data: ({.*})", sse_event)
+                if m:
+                    data = json.loads(m.group(1))
+            except Exception:
+                pass
+            _persist(data)
+            # 收集 steps/todo（复用原 event_stream 逻辑）
+            if data:
+                try:
+                    if data.get("type") == "tool_start":
+                        args = data.get("args") or {}
+                        if data.get("tool") in {"write_file", "append_to_file", "edit_file"} and args.get("path"):
+                            artifact_paths.append(str(args["path"]))
+                        collected_steps.append(data)
+                    elif data.get("type") == "tool_result":
+                        collected_steps.append(data)
+                    elif data.get("type") == "thought":
+                        collected_steps.append(data)
+                    elif data.get("type") in ("subagent_start", "subagent_end"):
+                        collected_steps.append(data)
+                    elif data.get("type") == "context_compacted":
+                        collected_steps.append(data)
+                    elif data.get("type") == "todo":
+                        todo_data = data.get("todo_list")
+                        if todo_data:
+                            collected_todo_list = todo_data
+                    elif data.get("type") == "done":
+                        # 拦截原始 done（仅记录 content），终态段统一构造并下发最终 done，避免双发
+                        final_content = data.get("content", "")
+                        forwarded_terminal_event = True
+                        continue
+                    # ponytail: 其余事件（tool/result/thought/...）统一 publish 到下方
+                    elif data.get("type") == "error":
+                        error_content = data.get("content", "")
+                        forwarded_terminal_event = True
+                except Exception:
+                    pass
+            hub.publish(sse_event)
+    except asyncio.CancelledError:
+        logger.info("[driver] stream cancelled: uid=%s session=%s message=%s", uid, session_id, message_id)
+    except Exception as e:
+        logger.exception("[driver] stream error")
+        err_sse = f"data: {json.dumps({'type': 'error', 'content': f'service internal error: {e}'}, ensure_ascii=False)}\n\n"
+        hub.publish(err_sse)
+        stream_log.append_event(uid, session_id, message_id, {"type": "error", "content": str(e)})
+    finally:
+        # 终态处理：落历史 + 清 running + 反思（只执行一次）
+        try:
+            final_content = final_content or ""
+            if final_content:
+                final_content = _strip_screenshot_urls(final_content)
+                final_content = _append_artifact_links(final_content, uid, artifact_paths)
+                _save_assistant_result(uid, session_id, req.message, final_content, collected_steps, collected_todo_list)
+                hub.publish(f"data: {json.dumps({'type': 'done', 'content': final_content}, ensure_ascii=False)}\n\n")
+            elif error_content:
+                _save_assistant_result(uid, session_id, req.message, "❌ " + error_content, collected_steps, collected_todo_list)
+            elif artifact_paths:
+                summary = _append_artifact_links("任务已完成，文件已保存。", uid, artifact_paths)
+                _save_assistant_result(uid, session_id, req.message, summary, collected_steps, collected_todo_list)
+                hub.publish(f"data: {json.dumps({'type': 'done', 'content': summary}, ensure_ascii=False)}\n\n")
+            elif not forwarded_terminal_event:
+                fallback = (
+                    "任务已结束，但模型没有生成最终回答"
+                    f"（本轮只输出了推理内容、未给出正文，或已接近最大推理步数）。"
+                    f"当前最大推理步数为 {agent.config.recursion_limit}。可直接重试；"
+                    "若任务较复杂，可提高该值或把任务拆小后再试。"
+                )
+                _save_assistant_result(uid, session_id, req.message, fallback, collected_steps, collected_todo_list)
+                hub.publish(f"data: {json.dumps({'type': 'done', 'content': fallback}, ensure_ascii=False)}\n\n")
+            else:
+                note = "（本轮已结束，但未生成正文；已记录以下工作步骤。）"
+                _save_assistant_result(uid, session_id, req.message, note, collected_steps, collected_todo_list)
+                hub.publish(f"data: {json.dumps({'type': 'done', 'content': note}, ensure_ascii=False)}\n\n")
+        except Exception as e:
+            logger.exception("[driver] finalize error")
+            hub.publish(f"data: {json.dumps({'type': 'done', 'content': '服务内部错误: ' + str(e)}, ensure_ascii=False)}\n\n")
+        hub.publish("data: [DONE]\n\n")
+        hub.finish()
+        stream_log.clear_running(uid, session_id, message_id, finished=True)
+        asyncio.create_task(_async_reflect(uid, req.message, collected_steps, final_content or "", outcome="error" if error_content else "success"))

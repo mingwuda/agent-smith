@@ -91,11 +91,31 @@ def clear_running(user_id: str, session_id: str, message_id: str, finished: bool
         if p.exists():
             data = json.loads(p.read_text(encoding="utf-8"))
         if message_id in data:
-            data[message_id]["finished"] = finished
             del data[message_id]
         p.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
     except Exception:
         pass
+
+
+def clear_all_running_on_startup() -> int:
+    """服务启动时清空所有会话遗留的 running.json 登记，返回清理的会话数。
+
+    跨进程的 run 必然已死（driver 随旧进程一起消失）。不清的话这些残留登记会让
+    last_active_run 一直回报 running=True，前端据此无限轮询、UI 卡在"运行中"。
+    任何异常自吞：启动清理失败不应阻断服务。
+    """
+    removed = 0
+    try:
+        # 路径与 _streams_dir/_session_dir 一致：USERS_DIR/<uid>/sessions/streams/<session>/running.json
+        for rf in user_manager.USERS_DIR.glob(f"*/sessions/{_STREAMS_SUBDIR}/*/{_RUNNING_FILE}"):
+            try:
+                rf.unlink()
+                removed += 1
+            except OSError:
+                continue
+    except Exception:
+        pass
+    return removed
 
 
 def get_active_runs(user_id: str, session_id: str) -> dict:
@@ -140,9 +160,14 @@ def last_active_run(user_id: str, session_id: str) -> Optional[dict]:
     前端刷新后调用：有 running 就实时续看，只有 finished 就回放定稿画面。
     """
     active = get_active_runs(user_id, session_id)
+    # ponytail: stale 判定 —— 服务重启后 driver 没机会 clear_running，running.json 残留条目
+    # 会永远误判为「还在跑」。started_at 超过 2 小时的视为进程已死，改判非 running（仅回放）。
+    stale_cutoff = time.time() - 2 * 3600
     cand = []
-    for mid in active:
-        cand.append((time.time(), mid, True))
+    for mid, meta in active.items():
+        started = meta.get("started_at", 0) if isinstance(meta, dict) else 0
+        is_running = started > stale_cutoff
+        cand.append((time.time() if is_running else 0, mid, is_running))
     sd = _session_dir(user_id, session_id)
     for f in sd.glob("*.jsonl"):
         try:
@@ -153,12 +178,17 @@ def last_active_run(user_id: str, session_id: str) -> Optional[dict]:
         return None
     running_c = [c for c in cand if c[2]]
     if running_c:
-        mid = running_c[0][1]
+        winner = running_c[0]
     else:
-        mid = max(cand, key=lambda x: x[0])[1]
+        winner = max(cand, key=lambda x: x[0])
+    mid = winner[1]
     evs = read_events(user_id, session_id, mid)
     finished = bool(evs) and evs[-1].get("finished") is True
-    return {"message_id": mid, "events": evs, "finished": finished, "running": mid in active}
+    # 该 run 是否真在跑：既要在 running 登记里，且选中候选的 is_running 标志为真。
+    # 注意：stale 判定已在构造 cand 时用 started_at 完成；此处绝不能再拿新的 time.time()
+    # 去和 cand 里的时间戳比较——两次 time.time() 永不相等，会让 running 恒为 False。
+    is_running = (mid in active) and bool(winner[2])
+    return {"message_id": mid, "events": evs, "finished": finished, "running": is_running}
 
 
 # ---------- 清理 ----------

@@ -502,6 +502,13 @@ async function switchSession(sessionId, source, forceLoad = false) {
       refreshStats();
       // 加载该会话的工作目录
       loadWorkspaceDisplay();
+      // 刷新恢复：若该会话在后台仍有正在跑的 run（agent 流不随连接断开而终止），
+      // 回放已落盘的 SSE 事件并轮询增量续看实时画面。
+      if (typeof resumeActiveStream === 'function') {
+        resumeActiveStream(sessionId, source).catch(function(e) {
+          console.warn('[resume] 恢复后台运行流失败:', e);
+        });
+      }
     }
   } finally {
     // 无论成功失败都移除 loading 状态
@@ -559,6 +566,119 @@ async function reconstructStreamingSession(rt) {
   container.scrollTop = container.scrollHeight;
   smartScroll(container);
   // 之后的实时事件会在 send() 循环中因 rt.live===true 直接渲染进可见区
+}
+
+// ---------- 刷新后恢复后台仍在跑的 run（SSE 流已实时落盘，从文件恢复） ----------
+// 轮询间隔（ms）：agent 后台跑时前端没有 live 连接，用短轮询增量续看。
+var _resumePollTimers = {};  // key(sessionId_source) -> 轮询 timer
+
+// 回放一批事件（带 _isReconstructing 标记，使 token 得以渲染），跳过已回放前 n 条
+function _replayEvents(rt, events, fromIndex) {
+  _isReconstructing = true;
+  try {
+    for (var i = fromIndex; i < events.length; i++) {
+      try {
+        _restoreRoundState(rt);
+        handleStreamEvent(events[i]);
+        _saveRoundState(rt);
+      } catch (e) {
+        console.warn('[resume] 跳过事件', events[i] && events[i].type, e.message);
+      }
+    }
+  } finally {
+    _isReconstructing = false;
+  }
+  var c = document.getElementById('messages');
+  if (c) { c.scrollTop = c.scrollHeight; }
+}
+
+// 刷新浏览器后：查该会话是否有在后台跑的 run，有则回放已落盘事件并轮询增量续看
+async function resumeActiveStream(sessionId, source) {
+  source = source || 'web';
+  var key = sessionId + '_' + source;
+  // 已有该会话的 live 运行（用户切回时 send 仍在跑）则不重复接管
+  var rt0 = sessionRuntimes.get(key);
+  if (rt0 && rt0.status === 'streaming') return;
+  // 防止同会话并发接管（例如 30s 轮询 loadSessions 再次触发）
+  if (_resumePollTimers[key]) return;
+
+  var res = await fetch('/sessions/' + encodeURIComponent(sessionId) + '/stream/active');
+  if (!res.ok) return;
+  var data = await res.json();
+  if (!data.active || !data.message_id) return;
+
+  // running=false：本轮已结束（历史可能刚由后台落库），刷新历史列表即可，无需重建画面
+  if (!data.running) {
+    if (typeof loadSessions === 'function') loadSessions();
+    return;
+  }
+
+  // running=true：后台 agent 仍在跑，接管实时画面
+  rt0 = getOrCreateRuntime(sessionId, source);
+  rt0.status = 'streaming';
+  rt0.events = [];
+  rt0.live = true;
+  setVisibleSessionKey(key);
+  _resumePollTimers[key] = true;  // 占位，防并发
+  startStreamIdleWatch && startStreamIdleWatch();
+  // 建三段式骨架（同时初始化本轮全局状态）
+  beginRoundRender(rt0);
+  updateRunIndicators && updateRunIndicators();
+  syncStreamingActive && syncStreamingActive();
+
+  var replayed = 0;
+  // 回放已落盘事件
+  _replayEvents(rt0, data.events || [], 0);
+  replayed = (data.events || []).length;
+
+  var stopped = false;
+  function stop() {
+    if (stopped) return;
+    stopped = true;
+    delete _resumePollTimers[key];
+    // 收尾：本轮 done/error 已由回放触发，清理可见区 UI 状态并还原发送按钮
+    if (typeof _finalizeReasoning === 'function') _finalizeReasoning();
+    if (typeof _finalizeThinking === 'function') _finalizeThinking();
+    hideTyping && hideTyping();
+    removeGeneratingBadge && removeGeneratingBadge();
+    document.querySelectorAll('.tool-status-dot.running').forEach(function(d) { d.className = 'tool-status-dot done'; });
+    if (_currentActiveLine) _currentActiveLine.style.display = 'none';
+    rt0.status = 'done';
+    rt0.live = false;
+    syncStreamingActive && syncStreamingActive();
+    updateRunIndicators && updateRunIndicators();
+    if (typeof loadSessions === 'function') loadSessions();
+  }
+
+  var poll = function() {
+    if (stopped) return;
+    fetch('/sessions/' + encodeURIComponent(sessionId) + '/stream/active')
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        if (stopped) return;
+        // 会话已切走（不再是可见渲染目标）：不再回放，但保持后台运行，切回时重新接管
+        if (visibleSessionKey !== key) {
+          setTimeout(poll, 2000);
+          return;
+        }
+        var evs = (d && d.events) || [];
+        if (evs.length > replayed) {
+          _replayEvents(rt0, evs, replayed);
+          replayed = evs.length;
+        }
+        if (d && d.finished) {
+          stop();
+        } else {
+          setTimeout(poll, 2000);
+        }
+      })
+      .catch(function() {
+        // 网络抖动：短暂重试
+        if (!stopped) setTimeout(poll, 3000);
+      });
+  };
+  // 首拍延迟 1.5s，给后台 agent 一点时间产生新事件
+  setTimeout(poll, 1500);
 }
 
 async function newSession() {

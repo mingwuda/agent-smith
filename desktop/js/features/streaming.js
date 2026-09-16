@@ -1802,6 +1802,7 @@ function handleStreamEvent(data) {
       break;
     
     case 'token':
+    case 'token_delta':  // 回放端合并的批量 token（刷新恢复用，与逐字 token 同逻辑）
       // 重放历史时跳过；但「切回后台会话」的重建回放需要渲染 token（_isReconstructing 放开）
       if (_isReplaying && !_isReconstructing) break;
       _finalizeReasoning();  // 答案开始输出 → 推理模型思考阶段结束

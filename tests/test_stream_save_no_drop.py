@@ -54,7 +54,12 @@ _ROUTE_MODULES = ("api.routes.agent", "agent_core.api.routes.agent")
 
 
 def _patch_module(monkeypatch, mod, fake):
-    monkeypatch.setattr(mod, "init_agent", lambda: None, raising=False)
+    # ponytail: 用兼容签名的 no-op 替换 init_agent，避免 guardian/调用方传入
+    # caller/force 等参数时触发 TypeError，进而让 fake agent 没有真正接管流程。
+    def _no_init_agent(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(mod, "init_agent", _no_init_agent, raising=False)
     monkeypatch.setattr(mod, "agent", fake, raising=False)
 
 

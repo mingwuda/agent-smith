@@ -162,7 +162,36 @@ async def lifespan(app):
     except Exception:
         logger.exception("启动 MCP 后台加载任务失败")
 
+    # 启动清理：上个进程遗留的 running.json 登记（跨进程的 run 必然已死）。
+    # 不清的话会被 last_active_run 误判"还在跑"，前端无限轮询并卡在运行中。
+    try:
+        import stream_log as _stream_log
+        _removed = _stream_log.clear_all_running_on_startup()
+        if _removed:
+            logger.info("[stream_log] 启动清理遗留 running.json: %d 个会话", _removed)
+    except Exception:
+        logger.exception("启动清理 running.json 失败")
+
+    # 定期回收：已结束且无订阅者的 SSE hub（api.routes.agent 的 _live_hubs），防长跑内存增长。
+    # ponytail: 每 5 分钟扫一次；_cleanup_finished_hubs 内部已做 300s 宽限判断，失败不影响服务。
+    async def _hub_cleanup_loop():
+        from api.routes.agent import _cleanup_finished_hubs
+        while True:
+            try:
+                await asyncio.sleep(300)
+                _cleanup_finished_hubs()
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                pass
+    _hub_cleanup_task = asyncio.create_task(_hub_cleanup_loop())
+
     yield
+    # 关闭前取消清理任务，避免关停时报 "Task was destroyed" 告警
+    try:
+        _hub_cleanup_task.cancel()
+    except Exception:
+        pass
 
 app = FastAPI(
     title="Moss Agent",
