@@ -248,7 +248,10 @@ class AgentConfig:
                 current.setdefault("api_key", "")
                 current.setdefault("model", "")
                 current.setdefault("base_url", "")
-                current.setdefault("is_custom", provider_id not in DEFAULT_PROVIDERS or provider_id == "custom")
+                # DEFAULT_PROVIDERS 已清空，不再有真正的内置厂商。历史配置里残留
+                # is_custom=false 的旧内置（openai/deepseek/qwen/ollama/anthropic…）
+                # 必须统一解锁为可删除，否则前端不显示删除按钮、僵尸厂商永久挂在下拉里。
+                current["is_custom"] = provider_id not in DEFAULT_PROVIDERS
                 current.setdefault("vision_models", [])
         self.providers = providers
 

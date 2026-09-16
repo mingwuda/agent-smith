@@ -321,11 +321,18 @@ async def run_agent_stream(req: RunRequest, request: Request):
     ))
 
     async def event_stream():
+        # subscribe 与 len(buffer) 之间没有 await，因此这一对是原子的：
+        # 不会重复推送、也不会漏掉此间 publish 的事件。
         q = hub.subscribe()
         try:
             start = len(hub.buffer)
             for s in hub.buffer[:start]:
                 yield s
+            # 竞态兜底：driver 可能在本次订阅之前就已结束（finish 时 subs 为空，
+            # sentinel 未入队）。此时 buffer 已含全部事件，重放完直接收尾，
+            # 否则会永远卡在下面的 q.get()。
+            if hub.finished:
+                return
             while True:
                 item = await q.get()
                 if item == _END_SENTINEL:

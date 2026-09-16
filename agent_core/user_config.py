@@ -52,6 +52,12 @@ def get_user_effective_config(user_id: str) -> dict[str, Any]:
         "api_key": user_overrides.get("api_key", global_cfg.api_key),
         "base_url": user_overrides.get("base_url", global_cfg.base_url),
         "providers": enriched_providers,
+        # 展示顺序是全局偏好（非用户级覆盖），必须一并透传：否则前端拿不到
+        # provider_order，排序退化为字典序，与设置页（/settings）顺序不一致。
+        "provider_order": [
+            pid for pid in (global_cfg.providers.get("__provider_order__") or [])
+            if isinstance(pid, str) and pid in providers
+        ],
         "review_provider_id": user_overrides.get("review_provider_id", global_cfg.review_provider_id),
         "review_model": user_overrides.get("review_model", global_cfg.review_model),
         # 透传超时配置，供前端联动前端 fetch 超时

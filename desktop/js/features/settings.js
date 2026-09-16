@@ -80,16 +80,23 @@ function populateProviderSelect(data) {
 
 function refreshProviderSelects(data) {
   settingsData = data;
-  // 底部发送区默认选中当前激活 provider（除非用户已另行选择）
-  composerProvider = data.active_provider || '';
   const select = document.getElementById('composer-provider-select');
   if (!select) return;
   select.innerHTML = '';
   const active = data.active_provider || '';
-  const entries = Object.entries(data.providers || {});
+  const providers = data.providers || {};
+  const entries = Object.entries(providers);
 
-  // 只显示已配置 API Key 的 provider（当前选中项始终显示，避免空列表）
-  const filtered = entries.filter(([id, p]) => id === active || (p.model && p.api_key_configured));
+  // 首次加载跟随激活项；本函数会被重复调用（打开设置页、调整顺序后同步），
+  // 此时必须保留用户当前选择，否则会把选择重置回 active_provider。
+  if (!composerProvider || !(composerProvider in providers)) {
+    composerProvider = active;
+  }
+  const current = composerProvider;
+
+  // 只显示已配置 API Key 的 provider（激活项与当前选中项始终显示，避免空列表/丢选择）
+  const filtered = entries.filter(([id, p]) =>
+    id === active || id === current || (p.model && p.api_key_configured));
 
   // 按 provider_order 排序（与设置页一致）
   const order = data.provider_order || [];
@@ -106,10 +113,10 @@ function refreshProviderSelects(data) {
     const option = document.createElement('option');
     option.value = id;
     option.textContent = providerLabel(provider, id) +
-      (id === active && !provider.api_key_configured
+      (id === current && !provider.api_key_configured
         ? ' ' + (currentLanguage === 'en' ? '(no key)' : '(未配置 Key)')
         : '');
-    if (id === active) option.selected = true;
+    if (id === current) option.selected = true;
     select.appendChild(option);
   });
 
@@ -865,6 +872,9 @@ async function persistOrder() {
     const data = await res.json();
     if (data.status !== 'ok') {
       showToast('⚠️ ' + (data.message || '保存失败'), 'error');
+    } else {
+      // 顺序已变更，立即同步底部发送区选择器，避免两处顺序不一致
+      refreshProviderSelects(settingsData);
     }
   } catch (e) {
     showToast('⚠️ ' + (currentLanguage === 'en' ? 'Network error' : '网络错误') + ': ' + (e.message || e), 'error');
