@@ -681,6 +681,86 @@ async function resumeActiveStream(sessionId, source) {
   setTimeout(poll, 1500);
 }
 
+// ---------- 同页 SSE 断连自动接管（锁屏 / 切后台 / 网络抖动）----------
+// 后端 agent 跑在与 HTTP 连接解耦的后台 driver 里，断的只是浏览器这条订阅连接，
+// 任务仍在服务器继续并实时落盘。这里复用 switchSession 非流式分支同款两步：
+//   1) loadSessionMessages 清空重建历史（顺带移除断连的半成品卡片）
+//   2) resumeActiveStream 接管后台 run（running=true 重建实时卡片并轮询；
+//      running=false 时历史已含完整结果，只需刷新列表，不重复建卡）
+// 返回 true=后端确认本轮 run 存在（画面已重建/刷新）；false=无 run（真断网/服务重启），调用方可提示中断。
+var _recoverInflight = {};  // key -> Promise，同步去重，避免 reader 报错与 visibilitychange 并发双接管
+function recoverInterruptedStream(sessionId, source) {
+  source = source || 'web';
+  var key = sessionId + '_' + source;
+  if (_recoverInflight[key]) return _recoverInflight[key];
+
+  var p = (async function() {
+    // 先探测后端是否还有本轮 run（落盘）。探测失败（真断网）→ false，让调用方提示中断。
+    var data;
+    try {
+      var res = await fetch('/sessions/' + encodeURIComponent(sessionId) + '/stream/active');
+      if (!res.ok) return false;
+      data = await res.json();
+    } catch (e) {
+      return false;
+    }
+    if (!data || !data.active || !data.message_id) return false;
+    // 断连期间用户已切走会话：不抢画面（切回时 switchSession 会自行接管）
+    if (visibleSessionKey !== key) return true;
+
+    // 第一步：重载历史（内部清空容器，移除断连的半成品卡片）
+    await loadSessionMessages(sessionId, source, { limit: 20, offset: -20 });
+    if (visibleSessionKey !== key) return true;
+    // 第二步：仍在跑则重建实时卡片并轮询续看；已跑完则历史已含完整结果，仅刷新列表
+    if (data.running && typeof resumeActiveStream === 'function') {
+      await resumeActiveStream(sessionId, source);
+    } else if (typeof loadSessions === 'function') {
+      loadSessions();
+    }
+    if (typeof refreshStats === 'function') refreshStats();
+    return true;
+  })();
+
+  _recoverInflight[key] = p;
+  p.then(function() { delete _recoverInflight[key]; }, function() { delete _recoverInflight[key]; });
+  return p;
+}
+
+// 锁屏/切后台后回到页面、或网络从离线恢复：若当前可见会话没有健康的 live 连接，
+// 自动探测并接管后台仍在跑的 run，无需用户手动刷新。
+// 后端约每 2s 一个 ping/progress 心跳；回到页面后若超过该阈值仍无任何事件，
+// 视为连接被系统/运营商静默掐断（reader 可能还没来得及 reject），主动 abort 后接管。
+var _RESUME_STALE_MS = 15000;
+function _autoResumeVisibleSession() {
+  if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+  var sid = (typeof currentSessionId !== 'undefined' && currentSessionId) ||
+            (typeof threadId !== 'undefined' ? threadId : null);
+  if (!sid) return;
+  var src = (typeof currentSessionSource !== 'undefined' && currentSessionSource) || 'web';
+  var key = sid + '_' + src;
+  if (visibleSessionKey !== key) return;
+  var rt = sessionRuntimes.get(key);
+  if (!rt || rt.status !== 'streaming') return;
+
+  var controllerDead = !rt.controller || (rt.controller.signal && rt.controller.signal.aborted);
+  // ponytail: 僵死判定天花板——依赖后端 2s 心跳刷新 lastStreamEventAt；
+  // 若未来心跳间隔调整，这里的 15s 阈值需同步放宽（升级路径：改由后端在 SSE 里带时间戳）。
+  var stale = (typeof lastStreamEventAt === 'number') &&
+              Date.now() - lastStreamEventAt > _RESUME_STALE_MS;
+  if (!controllerDead && !stale) return;  // 连接健康，无需恢复
+
+  // 先掐掉旧订阅连接：使其 reader 走 AbortError 静默分支（不弹"连接中断"、不重复接管），
+  // 再由本函数主动接管后台 run。
+  if (rt.controller && !(rt.controller.signal && rt.controller.signal.aborted)) {
+    try { rt.controller.abort(); } catch (e) {}
+  }
+  recoverInterruptedStream(sid, src).catch(function() {});
+}
+document.addEventListener('visibilitychange', function() {
+  if (document.visibilityState === 'visible') _autoResumeVisibleSession();
+});
+window.addEventListener('online', _autoResumeVisibleSession);
+
 async function newSession() {
   try {
     const res = await fetch('/sessions', {

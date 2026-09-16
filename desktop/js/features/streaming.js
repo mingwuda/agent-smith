@@ -543,11 +543,21 @@ async function send(queuedText) {
         currentBotMsgEl.classList.remove('streaming-final');
       }
     } else if (streamingActive && !gotTerminalEvent) {
-      // 连接中断：只在未收到终端事件时才提示，避免 done 已到达后的假报警
+      // 连接中断：只在未收到终端事件时才处理，避免 done 已到达后的假报警。
+      // 后端 agent 跑在与 HTTP 连接解耦的后台 driver 里（见 agent.py _drive_agent_stream），
+      // 锁屏/切后台/网络抖动掐断的只是浏览器这条 SSE 订阅连接，任务仍在服务器继续并实时落盘。
+      // 因此先尝试自动接管后台 run；只有后端也找不到本轮 run（真断网/服务重启）才提示中断。
       document.querySelectorAll('.tool-status-dot.running').forEach(d => {
         d.className = 'tool-status-dot error';
       });
-      addMessage(t('connectionInterrupted'), 'system');
+      const _intKey = targetKey;
+      recoverInterruptedStream(targetSessionId, targetSource).then(function(ok) {
+        if (!ok && visibleSessionKey === _intKey) {
+          addMessage(t('connectionInterrupted'), 'system');
+        }
+      }).catch(function() {
+        if (visibleSessionKey === _intKey) addMessage(t('connectionInterrupted'), 'system');
+      });
     } else {
       // 已收到完整回复但连接异常关闭：只清理残留工具状态，不弹中断提示
       document.querySelectorAll('.tool-status-dot.running').forEach(d => {
