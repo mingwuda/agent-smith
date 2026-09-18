@@ -1026,6 +1026,8 @@ let _msgDeleteMenu = null;
 let _msgDeleteTarget = null;
 let _msgDeletePressTimer = null;
 let _msgDeletePressStart = null;
+let _msgDeleteFromTouch = false;  // 当前菜单是否由触摸长按弹出（用于抬手时屏蔽合成 click）
+let _msgDeleteSuppressUntil = 0;  // 该时间戳前的 click 为长按抬手合成事件，需忽略（不删、不关菜单）
 
 function hideMessageDeleteMenu() {
   if (_msgDeleteMenu && _msgDeleteMenu.parentNode) {
@@ -1033,9 +1035,10 @@ function hideMessageDeleteMenu() {
   }
   _msgDeleteMenu = null;
   _msgDeleteTarget = null;
+  _msgDeleteFromTouch = false;
 }
 
-function showMessageDeleteMenuFor(el, x, y) {
+function showMessageDeleteMenuFor(el, x, y, fromTouch = false) {
   hideMessageDeleteMenu();
   const index = el.dataset.index;
   if (index === undefined || index === null || index === '') return;
@@ -1045,11 +1048,17 @@ function showMessageDeleteMenuFor(el, x, y) {
   menu.className = 'msg-delete-menu show';
   menu.innerHTML = '<div class="msg-delete-item">🗑 删除消息</div>';
   menu.querySelector('.msg-delete-item').addEventListener('click', () => {
+    // 长按抬手瞬间菜单处于 pointer-events:none，合成 click 点不到这里；
+    // 只有用户在菜单出现后「再点一次」才会真正进入删除确认，杜绝抬手误删。
     hideMessageDeleteMenu();
     deleteMessageByIndex(index);
   });
   document.body.appendChild(menu);
   _msgDeleteMenu = menu;
+
+  // 标记来源为触摸；真正的「抬手屏蔽合成 click」在 touchend 里精确执行
+  // （无论手指按住多久，抬手那一下都要盖住）。右键菜单无此合成 click。
+  _msgDeleteFromTouch = !!fromTouch;
 
   const rect = menu.getBoundingClientRect();
   const vw = window.innerWidth;
@@ -1094,10 +1103,12 @@ messages.addEventListener('touchstart', (e) => {
   if (msgEl.dataset.index === undefined || msgEl.dataset.index === null || msgEl.dataset.index === '') return;
   _msgDeletePressStart = { x: e.touches[0].clientX, y: e.touches[0].clientY, el: msgEl, time: Date.now() };
   _msgDeletePressTimer = setTimeout(() => {
+    // 触觉反馈：明确告知「长按已触发」，避免菜单突然弹出造成误操作
+    if (navigator.vibrate) { try { navigator.vibrate(15); } catch (_) {} }
     const rect = msgEl.getBoundingClientRect();
-    showMessageDeleteMenuFor(msgEl, rect.left, rect.top);
+    showMessageDeleteMenuFor(msgEl, rect.left, rect.top, true);
     _msgDeletePressStart = null;
-  }, 600);
+  }, 3000);  // 700→3000ms：长按 3 秒才算触发，彻底避免阅读时搭住误触
 }, { passive: true });
 
 messages.addEventListener('touchmove', (e) => {
@@ -1117,6 +1128,17 @@ messages.addEventListener('touchend', () => {
     _msgDeletePressTimer = null;
   }
   _msgDeletePressStart = null;
+  // 长按菜单已弹出后的抬手：屏蔽这一下抬手产生的合成 click——
+  // 既避免「抬手即点中删除项」，也避免它穿透到下层触发「点外部关闭菜单」。
+  // 菜单短暂 pointer-events:none，用户需在菜单出现后「再点一次」才会删除。
+  if (_msgDeleteMenu && _msgDeleteFromTouch) {
+    const menu = _msgDeleteMenu;
+    menu.style.pointerEvents = 'none';
+    _msgDeleteSuppressUntil = Date.now() + 380;
+    setTimeout(() => {
+      if (menu === _msgDeleteMenu) menu.style.pointerEvents = '';
+    }, 380);
+  }
 });
 
 messages.addEventListener('contextmenu', (e) => {
@@ -1128,6 +1150,8 @@ messages.addEventListener('contextmenu', (e) => {
 });
 
 document.addEventListener('click', (e) => {
+  // 长按抬手产生的合成 click：忽略，既不删除也不关闭菜单（等用户在菜单出现后再点一次）
+  if (Date.now() < _msgDeleteSuppressUntil) return;
   if (_msgDeleteMenu && !_msgDeleteMenu.contains(e.target)) {
     hideMessageDeleteMenu();
   }
