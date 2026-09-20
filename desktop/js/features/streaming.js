@@ -1798,14 +1798,22 @@ function handleStreamEvent(data) {
       _finalizeThinking();   // LLM 响应开始，结束 thought 顶部面板
       break;
 
-    case 'llm_retry':
-      // 模型响应超时，已自动重试（仅重发 LLM 调用，不重跑工具）
+    case 'llm_retry': {
+      // 模型重试（空闲超时 / 限流 429），已自动重试（仅重发 LLM 调用，不重跑工具）
       markStreamActivity();
       // ponytail: 重试是临时状态，用 toast 提示，不污染消息区
       if (typeof showToast === 'function') {
-        showToast(t('modelRetryingNote', { attempt: data.attempt, max: (data.max || 1) }), '');
+        if (data.reason === 'rate_limit') {
+          // 429 限流：明确告知「等待 N 秒后自动重试」，让用户知道是在排队等待而非卡死
+          showToast(t('rateLimitRetryingNote', {
+            attempt: data.attempt, max: (data.max || 1), wait: (data.wait || 30),
+          }), 'warn', 8000);
+        } else {
+          showToast(t('modelRetryingNote', { attempt: data.attempt, max: (data.max || 1) }), '');
+        }
       }
       break;
+    }
 
     case 'model_switch':
       addMessage(t('modelSwitched', { reason: data.reason || (currentLanguage === 'en' ? 'request' : '请求'), model: data.model }), 'system');

@@ -71,6 +71,10 @@ class AgentConfig:
     # 单次 LLM 调用的硬墙钟上限（秒）：即便是有效进展也会刷新，作为兜底，
     # 必须明显大于 idle 重试总预算（idle × (retries+1) + 退避），否则会抢在重试序列结束前杀掉调用。
     llm_hard_timeout_seconds: float = 600.0
+    # 限流(429)重试：上游回 rate limit 时不立即抛异常，固定等待该秒数后就地重试本次 LLM 调用
+    llm_rate_limit_wait_seconds: float = 30.0
+    # 限流重试的最大次数（0 表示不重试、直接抛）
+    llm_rate_limit_max_retries: int = 3
     api_host_ips: str = ""
     context_window_tokens: int = 0
     tavily_search_enabled: bool = False
@@ -187,6 +191,8 @@ class AgentConfig:
             "AGENT_LLM_IDLE_TIMEOUT_SECONDS": ("llm_idle_timeout_seconds", float),
             "AGENT_LLM_IDLE_MAX_RETRIES": ("llm_idle_max_retries", int),
             "AGENT_LLM_HARD_TIMEOUT_SECONDS": ("llm_hard_timeout_seconds", float),
+            "AGENT_LLM_RATE_LIMIT_WAIT_SECONDS": ("llm_rate_limit_wait_seconds", float),
+            "AGENT_LLM_RATE_LIMIT_MAX_RETRIES": ("llm_rate_limit_max_retries", int),
             "AGENT_API_HOST_IPS": ("api_host_ips", str),
             "AGENT_CONTEXT_WINDOW_TOKENS": ("context_window_tokens", int),
             "TAVILY_SEARCH_ENABLED": ("tavily_search_enabled", _env_bool),
@@ -375,6 +381,8 @@ class AgentConfig:
             "llm_idle_timeout_seconds": self.llm_idle_timeout_seconds,
             "llm_idle_max_retries": self.llm_idle_max_retries,
             "llm_hard_timeout_seconds": self.llm_hard_timeout_seconds,
+            "llm_rate_limit_wait_seconds": self.llm_rate_limit_wait_seconds,
+            "llm_rate_limit_max_retries": self.llm_rate_limit_max_retries,
             "api_host_ips": self.api_host_ips,
             "context_window_tokens": self.context_window_tokens,
             "tavily_search_enabled": self.tavily_search_enabled,
@@ -436,6 +444,8 @@ class AgentConfig:
             "llm_idle_timeout_seconds": self.llm_idle_timeout_seconds,
             "llm_idle_max_retries": self.llm_idle_max_retries,
             "llm_hard_timeout_seconds": self.llm_hard_timeout_seconds,
+            "llm_rate_limit_wait_seconds": self.llm_rate_limit_wait_seconds,
+            "llm_rate_limit_max_retries": self.llm_rate_limit_max_retries,
             "api_host_ips": self.api_host_ips,
             "context_window_tokens": self.context_window_tokens,
             "tavily_search_enabled": bool(self.tavily_search_enabled),

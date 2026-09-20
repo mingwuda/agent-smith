@@ -33,7 +33,7 @@ from memory.local_memory import set_current_user
 from monitoring.usage_tracker import get_tracker, UsageTracker
 from network_resolver import configure_host_resolution
 from skills.registry import get_registry, SkillRegistry
-__all__ = ['logger', '_extract_tool_name', '_extract_tool_args', '_truncate', '_sse', '_tool_signature', '_tool_call_label', '_loop_guard_message', '_SCENE_PROMPTS', '_detect_scene', '_get_nested', '_extract_usage_tokens', '_message_text', '_normalize_messages', '_dump_context_profile', '_is_recursion_limit_error', '_recursion_limit_message', '_synthesize_guard_summary', '_connection_diagnostic', '_human_content', '_synthetic_ocr_sse_steps', '_SCREENSHOT_URL_RE', '_strip_screenshot_urls_from_text', '_strip_image_content_from_message', '_strip_image_content_from_messages', '_tool_call_ids', '_tool_message_id', '_drop_dangling_tool_call_messages', '_split_inflight_tail', '_recent_round_user_indexes', 'session_messages_to_langchain', 'compact_history_messages', '_extract_steps_from_messages', '_truncate_args', '_on_llm_idle_retry', '_astream_with_idle_timeout', 'RetryableLLM']
+__all__ = ['logger', '_extract_tool_name', '_extract_tool_args', '_truncate', '_sse', '_tool_signature', '_tool_call_label', '_loop_guard_message', '_SCENE_PROMPTS', '_detect_scene', '_get_nested', '_extract_usage_tokens', '_message_text', '_normalize_messages', '_dump_context_profile', '_is_recursion_limit_error', '_recursion_limit_message', '_synthesize_guard_summary', '_connection_diagnostic', '_human_content', '_synthetic_ocr_sse_steps', '_SCREENSHOT_URL_RE', '_strip_screenshot_urls_from_text', '_strip_image_content_from_message', '_strip_image_content_from_messages', '_tool_call_ids', '_tool_message_id', '_drop_dangling_tool_call_messages', '_split_inflight_tail', '_recent_round_user_indexes', 'session_messages_to_langchain', 'compact_history_messages', '_extract_steps_from_messages', '_truncate_args', '_on_llm_idle_retry', '_astream_with_idle_timeout', 'RetryableLLM', 'is_rate_limit_error', 'llm_waiting', '_mark_llm_wait', '_llm_wait_ctx']
 
 
 """桌面 AI 智能体核心"""
@@ -697,6 +697,38 @@ def is_image_input_error(exc: BaseException) -> bool:
     return any(n.lower() in normalized for n in needles)
 
 
+def is_rate_limit_error(exc) -> bool:
+    """判断异常/错误消息是否为「限流」类（HTTP 429 / rate limit）。
+
+    兼容两种输入：异常对象，或已经是字符串的错误消息（流式错误常被转成文本再判断，
+    与 is_image_input_error 的调用约定一致）。
+    多源匹配，避免厂商/网关措辞差异导致漏判：
+      - 类型名 RateLimitError（openai SDK 对 429 的映射）
+      - 状态码属性 429（含 exc.response.status_code）
+      - 常见文案：rate limit / rate_limited / too many requests / 频率限制 / 限流
+    """
+    if exc is None:
+        return False
+    if type(exc).__name__ == "RateLimitError":
+        return True
+    code = getattr(exc, "status_code", None)
+    if code is None:
+        code = getattr(getattr(exc, "response", None), "status_code", None)
+    if code == 429:
+        return True
+    msg = (str(exc) or "").lower()
+    if not msg:
+        return False
+    return any(
+        n in msg
+        for n in (
+            "rate limit", "rate_limit", "rate_limited", "ratelimit",
+            "too many requests", "429",
+            "频率限制", "限流", "请求过于频繁", "请求太频繁",
+        )
+    )
+
+
 def get_unsupported_image_models() -> set[str]:
     """返回当前自适应的"不支持视觉"模型集合（仅供调试/前端展示）。"""
     return set(_model_image_unsupported)
@@ -1044,12 +1076,43 @@ def _truncate_args(args: object, max_len: int = 80) -> str:
 
 
 _retry_notifications_ctx: contextvars.ContextVar[list] = contextvars.ContextVar("retry_notifications", default=list)
+# 限流等待窗口：ContextVar 持有「每请求可变容器」（与 _retry_notifications_ctx 同理，
+# set 是 context 局部的，但容器本身跨 context 共享，故子任务里的写入对父任务可见）。
+# RetryableLLM 在等待 429 冷却前置上截止时间，外层空闲看门狗据此豁免——
+# 等待期间 LangGraph 不产生任何事件，否则会被误判为「模型卡死」而强杀整轮。
+_llm_wait_ctx: contextvars.ContextVar[list] = contextvars.ContextVar("llm_wait_until", default=None)
 
 
-def _on_llm_idle_retry(attempt: int, reason: str):
-    """把 LLM 空闲超时重试事件记录到当前请求的队列，供 stream_run 转成 SSE 告知前端。"""
+def _mark_llm_wait(seconds: float) -> None:
+    """标记「接下来 seconds 秒内 LLM 在限流等待」，让外层空闲看门狗跳过超时判定。
+
+    仅当本请求已 set 过容器（stream_run 会做）才生效；未设置时为 no-op——
+    避免写进跨请求共享的默认容器而串到别的会话。
+    """
     try:
-        _retry_notifications_ctx.get().append({"attempt": attempt, "reason": reason})
+        box = _llm_wait_ctx.get()
+        if box is not None:
+            box[0] = time.time() + max(0.0, float(seconds))
+    except Exception:
+        pass
+
+
+def llm_waiting() -> bool:
+    """当前是否处于 LLM 限流等待窗口内（供 is_busy 跳过空闲超时检查）。"""
+    try:
+        box = _llm_wait_ctx.get()
+        return box is not None and time.time() < float(box[0])
+    except Exception:
+        return False
+
+
+def _on_llm_idle_retry(attempt: int, reason: str, wait: float = 0.0):
+    """把 LLM 重试事件（空闲超时 / 限流）记录到当前请求队列，供 stream_run 转成 SSE 告知前端。
+
+    wait: 本次重试前的等待秒数（限流固定 30s；空闲超时为 0），前端据此提示「等 N 秒再重试」。
+    """
+    try:
+        _retry_notifications_ctx.get().append({"attempt": attempt, "reason": reason, "wait": wait})
     except Exception:
         pass
 
@@ -1106,20 +1169,38 @@ async def _astream_with_idle_timeout(agen, idle_timeout: float):
         yield chunk
 
 
-class RetryableLLM(Runnable):
-    """包裹 chat model：当一次 LLM 调用在 idle_timeout 内未产出首个 token（或块间停顿过久）时，
-    快速失败并**就地**重试该次模型调用——不重启整个 LangGraph 节点，已执行的工具结果会被保留。
+# 限流等待豁免窗口的额外余量（秒）：覆盖一次 429 后「SDK 自带重试 + 建连」的耗时，
+# 保证连续多次限流重试的豁免窗口能与下一次无缝衔接（见 _mark_llm_wait 调用处）。
+_RL_WAIT_MARGIN_SECONDS = 20.0
 
-    - 重试次数由 max_idle_retries 控制（默认 1）。
-    - 每次重试通过 on_retry 回调上报，供上层转成 SSE 事件告知前端。
-    - 非超时的其它异常直接上抛（连接级错误交给 LangChain 自带的 max_retries 处理）。
+
+class RetryableLLM(Runnable):
+    """包裹 chat model，做两类「就地重试」——不重启整个 LangGraph 节点，已执行的工具结果会被保留：
+
+    1. 空闲超时：一次调用在 idle_timeout 内未产出首个 token（或块间停顿过久）→ 退避重试。
+    2. 限流(429)：上游回 rate limit 时**不立即抛异常**，固定等待 rate_limit_wait 秒后重试
+       （默认 30s），并通过 on_retry 上报，供上层转成 SSE 提示用户「限流，等待 N 秒后重试」。
+
+    - 重试次数分别由 max_idle_retries / max_rate_limit_retries 控制。
+    - 限流重试仅在「本次调用尚未产出任何 chunk」时进行——否则重发会重复已流出的内容。
+    - 其它异常直接上抛（连接级错误交给 LangChain 自带的 max_retries 处理）。
     """
 
-    def __init__(self, llm, idle_timeout: float = 90.0, max_idle_retries: int = 1, on_retry=None):
+    def __init__(
+        self,
+        llm,
+        idle_timeout: float = 90.0,
+        max_idle_retries: int = 1,
+        on_retry=None,
+        rate_limit_wait: float = 30.0,
+        max_rate_limit_retries: int = 3,
+    ):
         self.llm = llm
         self.idle_timeout = idle_timeout
         self.max_idle_retries = max_idle_retries
         self.on_retry = on_retry
+        self.rate_limit_wait = rate_limit_wait
+        self.max_rate_limit_retries = max_rate_limit_retries
 
     def bind_tools(self, tools, **kwargs):
         return RetryableLLM(
@@ -1127,39 +1208,62 @@ class RetryableLLM(Runnable):
             idle_timeout=self.idle_timeout,
             max_idle_retries=self.max_idle_retries,
             on_retry=self.on_retry,
+            rate_limit_wait=self.rate_limit_wait,
+            max_rate_limit_retries=self.max_rate_limit_retries,
         )
 
     async def astream(self, input, config=None, **kwargs):
-        for attempt in range(self.max_idle_retries + 1):
+        idle_attempt = 0
+        rl_attempt = 0
+        while True:
             agen = None
+            yielded = False
             try:
                 agen = self.llm.astream(input, config=config, **kwargs)
                 async for chunk in _astream_with_idle_timeout(agen, self.idle_timeout):
+                    yielded = True
                     yield chunk
                 return
-            except asyncio.TimeoutError:
-                # 空闲超时：上报 + 清理挂起的连接 + 退避后重试（若还有次数）
-                if self.on_retry and attempt < self.max_idle_retries:
-                    try:
-                        self.on_retry(attempt + 1, "idle_timeout")
-                    except Exception:
-                        pass
+            except Exception as e:
+                # 先清理挂起的连接，避免重试时泄漏
                 if agen is not None:
                     try:
                         await agen.aclose()
                     except Exception:
                         pass
-                if attempt < self.max_idle_retries:
-                    await asyncio.sleep(min(2 ** attempt, 5))
+                # ── 限流(429)：不立即抛异常，固定等待后就地重试本次 LLM 调用 ──
+                # 仅当本次尚未产出任何 chunk 时才可安全重试（否则会重复已流出的内容）。
+                if (
+                    not yielded
+                    and is_rate_limit_error(e)
+                    and rl_attempt < self.max_rate_limit_retries
+                ):
+                    rl_attempt += 1
+                    if self.on_retry:
+                        try:
+                            self.on_retry(rl_attempt, "rate_limit", self.rate_limit_wait)
+                        except Exception:
+                            pass
+                    # 等待期间无任何图事件 → 标记豁免窗口，避免被外层空闲看门狗(≈90s)误杀。
+                    # 余量必须盖住「本次 429 后 SDK 自带重试」的耗时，使连续多次限流重试的
+                    # 豁免窗口首尾相接；否则中间出现空档时 now-last_event_at 已超阈值会被强杀。
+                    _mark_llm_wait(self.rate_limit_wait + _RL_WAIT_MARGIN_SECONDS)
+                    logger.warning(
+                        "[RetryableLLM] 限流(429)，等待 %.0fs 后重试本次调用（第 %d/%d 次）",
+                        self.rate_limit_wait, rl_attempt, self.max_rate_limit_retries,
+                    )
+                    await asyncio.sleep(self.rate_limit_wait)
                     continue
-                raise
-            except Exception:
-                # 非超时异常：清理后上抛（连接错误由 LangChain 自带的 max_retries 兜底）
-                if agen is not None:
-                    try:
-                        await agen.aclose()
-                    except Exception:
-                        pass
+                # ── 空闲超时：退避后重试 ──
+                if isinstance(e, asyncio.TimeoutError) and idle_attempt < self.max_idle_retries:
+                    idle_attempt += 1
+                    if self.on_retry:
+                        try:
+                            self.on_retry(idle_attempt, "idle_timeout")
+                        except Exception:
+                            pass
+                    await asyncio.sleep(min(2 ** (idle_attempt - 1), 5))
+                    continue
                 raise
 
     async def ainvoke(self, input, config=None, **kwargs):

@@ -792,6 +792,7 @@
   .toast.show { opacity: 1; transform: translateY(0); }
   .toast.success { background: #30d158; color: #fff; }
   .toast.error { background: #ff453a; color: #fff; }
+  .toast.warn { background: #ff9f0a; color: #1c1c1e; }
 
   /* ===== 工作区 / 项目 / 会话 ===== */
   .workspace-header {

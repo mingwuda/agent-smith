@@ -758,7 +758,7 @@ async function installUpdate() {
 
 // ── Toast 通知 ──
 
-function showToast(message, type) {
+function showToast(message, type, durationMs) {
   // 复用或创建 toast 容器
   var container = document.getElementById('toast-container');
   if (!container) {
@@ -772,11 +772,11 @@ function showToast(message, type) {
   container.appendChild(el);
   // 触发入场动画
   requestAnimationFrame(function() { el.classList.add('show'); });
-  // 自动消失
+  // 自动消失（durationMs 可覆盖默认 2.5s，供限流等待等需要更久展示的提示）
   setTimeout(function() {
     el.classList.remove('show');
     setTimeout(function() { if (el.parentNode) el.parentNode.removeChild(el); }, 300);
-  }, 2500);
+  }, durationMs || 2500);
 }
 
 // 把与模型无关的运行/搜索参数回填到「参数设置」tab 的输入框

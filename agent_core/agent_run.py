@@ -44,6 +44,7 @@ from agent_helpers import (
     _synthetic_ocr_sse_steps, _split_inflight_tail,
     _tool_signature, _truncate, _ensure_no_image_for_non_vision,
     is_image_input_error, record_model_image_unsupported,
+    llm_waiting, _llm_wait_ctx,
 )
 from loop_guard import _detect_tool_loop  # 原版 agent.py:169 的文件中间导入,拆分时需显式补回
 from tools.shell_tools import drain_shell_output  # run_shell 实时输出（心跳循环 drain 队列）
@@ -263,6 +264,8 @@ class AgentRunMixin:
         graph = self._get_graph(model_override, provider_override)
         # 为本请求建立独立的 LLM 重试通知队列（非流式调用也会走 RetryableLLM）
         _retry_notif_token = _retry_notifications_ctx.set([])
+        # 限流等待窗口同样按请求隔离：可变容器跨 context 共享，RetryableLLM 写、is_busy 读
+        _llm_wait_ctx.set([0.0])
         input_messages = []
         thread_key = self._thread_key(tid)
         await self._repair_checkpoint_tool_history(config, graph)
@@ -512,6 +515,8 @@ class AgentRunMixin:
         # 为本请求建立独立的 LLM 重试通知队列（并发安全：每个会话各自隔离）
         _retry_notif_list: list = []
         _retry_notif_token = _retry_notifications_ctx.set(_retry_notif_list)
+        # 限流等待窗口同理按请求隔离：RetryableLLM 写、is_busy 读（可变容器跨 context 共享）
+        _llm_wait_ctx.set([0.0])
         input_messages = []
         thread_key = self._thread_key(tid)
         await self._repair_checkpoint_tool_history(run_config, graph)
@@ -615,7 +620,8 @@ class AgentRunMixin:
                 # ponytail: 工具执行期间（on_tool_start→on_tool_end）LangGraph 不产生事件，
                 # 空闲超时会误杀长跑工具（如 600s 的 run_shell）。有工具在跑时跳过空闲超时，
                 # 工具时长由其自身 timeout 控制；无工具时仍按 llm_timeout 兜底防 LLM 挂起。
-                is_busy=lambda: bool(running_tools),
+                # 限流等待期间 LLM 在休眠（同样无图事件），一并豁免，避免被误判卡死强杀。
+                is_busy=lambda: bool(running_tools) or llm_waiting(),
             ):
                 # ── 超时事件：LLM/工具长时间无响应 ──
                 if event.get("_timeout"):
@@ -629,14 +635,17 @@ class AgentRunMixin:
                     })
                     _done_yielded = True
                     return
-                # 把 RetryableLLM 上报的「空闲超时重试」事件转成 SSE，提示前端正在重试
+                # 把 RetryableLLM 上报的重试事件（空闲超时 / 限流 429）转成 SSE，提示前端正在重试
                 if _retry_notif_list:
                     for _note in _retry_notif_list:
+                        _is_rl = _note.get("reason") == "rate_limit"
                         yield _sse({
                             "type": "llm_retry",
                             "attempt": _note["attempt"],
                             "reason": _note["reason"],
-                            "max": self.config.llm_idle_max_retries,
+                            "wait": _note.get("wait", 0),
+                            "max": (getattr(self.config, "llm_rate_limit_max_retries", 3)
+                                    if _is_rl else self.config.llm_idle_max_retries),
                         })
                     _retry_notif_list.clear()
                 if event.get("_stream_event_error"):
