@@ -52,9 +52,7 @@ async function renderWorkspace() {
     html += '      <div class="proj-path">' + escapeHtml(p.directory_path || (t('noDirSet') || '未设置目录')) + '</div>';
     html += '    </div>';
     html += '    <div class="proj-actions">';
-    html += '      <button class="pa-btn" title="' + escapeHtml(t('viewFiles') || '查看文件') + '" onclick="event.stopPropagation(); openFileBrowser(\'' + p.id + '\')">📂</button>';
-    html += '      <button class="pa-btn" title="' + escapeHtml(t('editProject') || '编辑') + '" onclick="event.stopPropagation(); editProject(\'' + p.id + '\')">✎</button>';
-    html += '      <button class="pa-btn" title="' + escapeHtml(t('deleteProject') || '删除') + '" onclick="event.stopPropagation(); deleteProject(\'' + p.id + '\')">🗑</button>';
+    html += '      <button class="pa-btn pa-more" title="' + escapeHtml(t('moreActions') || '更多操作') + '" onclick="event.stopPropagation(); toggleProjectMenu(this, \'' + p.id + '\')">⋯</button>';
     html += '    </div>';
     html += '  </div>';
 
@@ -398,6 +396,48 @@ function exitFileBrowser() {
 function refreshFileBrowser() {
   browseDirectory(currentBrowsePath, currentProjectId);
   checkUnpushedCommits();
+}
+
+function toggleProjectMenu(btn, projectId) {
+  // 返回当前绑定的菜单（若已存在且绑定到同一项目），否则创建新的
+  const existing = document.getElementById('pa-more-menu');
+  if (existing) {
+    existing.remove();
+    if (existing.dataset.pid === String(projectId)) return; // 再次点击同一个 → 关闭
+  }
+  const project = (projectsCache || []).find(x => String(x.id) === String(projectId));
+  if (!project) return;
+
+  const menu = document.createElement('div');
+  menu.id = 'pa-more-menu';
+  menu.dataset.pid = String(projectId);
+  menu.className = 'proj-more-menu';
+  const items = [
+    { icon: '📂', label: t('viewFiles') || '查看文件', fn: () => openFileBrowser(projectId) },
+    { icon: '✎', label: t('editProject') || '编辑', fn: () => editProject(projectId) },
+    { icon: '🗑', label: t('deleteProject') || '删除', danger: true, fn: () => deleteProject(projectId) },
+  ];
+  items.forEach(it => {
+    const b = document.createElement('button');
+    b.className = 'pa-menu-item' + (it.danger ? ' danger' : '');
+    b.innerHTML = '<span class="pa-menu-icon">' + it.icon + '</span>' + escapeHtml(it.label);
+    b.onclick = (e) => { e.stopPropagation(); menu.remove(); it.fn(); };
+    menu.appendChild(b);
+  });
+  // 定位到按钮下方
+  const container = btn.closest('.proj-actions') || btn.parentElement;
+  container.appendChild(menu);
+  menu.style.top = '100%';
+  menu.style.right = '0';
+
+  // 关闭：点击菜单外任意处
+  setTimeout(() => {
+    document.addEventListener('click', function closeMenu(e) {
+      if (menu.contains(e.target)) return;
+      menu.remove();
+      document.removeEventListener('click', closeMenu);
+    });
+  }, 0);
 }
 
 function toggleFbMoreMenu() {

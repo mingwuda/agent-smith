@@ -823,13 +823,47 @@
   .project-row .proj-main { flex: 1; min-width: 0; }
   .project-row .proj-name { font-size: 13px; color: #f5f5f7; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .project-row .proj-path { font-size: 10px; color: #8e8e93; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: "SF Mono", Menlo, monospace; }
-  .project-row .proj-actions { display: flex; align-items: center; gap: 2px; opacity: 0; transition: opacity .12s; flex: 0 0 auto; }
+  .project-row .proj-actions { display: flex; align-items: center; gap: 2px; opacity: 0; transition: opacity .12s; flex: 0 0 auto; position: relative; }
   .project-row:hover .proj-actions { opacity: 1; }
   .proj-actions .pa-btn {
     width: 22px; height: 22px; border: none; background: transparent; color: #8e8e93; cursor: pointer;
     border-radius: 5px; font-size: 12px; display: flex; align-items: center; justify-content: center; padding: 0;
   }
   .proj-actions .pa-btn:hover { background: #3a3a3d; color: #f5f5f7; }
+  .proj-actions .pa-more { font-size: 14px; letter-spacing: -1px; }
+
+  /* 项目「⋯」下拉菜单 */
+  .proj-more-menu {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    margin-top: 4px;
+    background: #1c1c1e;
+    border: 1px solid #2c2c2e;
+    border-radius: 10px;
+    padding: 6px;
+    min-width: 150px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+    z-index: 1200;
+  }
+  .pa-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 8px 10px;
+    border: none;
+    background: transparent;
+    color: #f5f5f7;
+    font-size: 13px;
+    cursor: pointer;
+    border-radius: 6px;
+    text-align: left;
+  }
+  .pa-menu-item:hover { background: #2c2c2e; }
+  .pa-menu-item.danger { color: #ff453a; }
+  .pa-menu-item.danger:hover { background: #ff453a22; }
+  .pa-menu-item .pa-menu-icon { width: 18px; text-align: center; }
 
   .project-sessions { padding: 2px 0 4px 22px; }
   .psession-item { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 6px; cursor: pointer; font-size: 12px; color: #c7c7cc; }
