@@ -310,6 +310,33 @@ class WeChatCommandMixin:
                     await self._flush_push_queue(from_user, context_token)
             return True
 
+        # ── /steer 命令：实时干预——把内容注入正在执行的任务的下一步（不排队）──
+        if stripped == "/steer" or stripped.startswith("/steer "):
+            steer = stripped[len("/steer"):].strip()
+            if not steer:
+                await self.send_message(from_user, context_token,
+                    "⚡ 用法：/steer <内容> — 把指令立即注入正在执行的任务的下一步；空闲时等同普通发送")
+                return True
+            task = self._active_run_task
+            uid = f"wechat_{self.user_id}"
+            session_id = self._wechat_sessions.get(from_user, "")
+            if task is not None and not task.done() and session_id:
+                from inbox import get_inbox_manager
+                get_inbox_manager().get(uid, session_id).append("step", steer)
+                get_inbox_manager().mark_run_active(uid, session_id, True)
+                logger.info("[微信Bot:%s] 用户 %s /steer 注入: %s (session=%s)",
+                            self.user_id, from_user[:16], steer[:80], session_id)
+                await self.send_message(from_user, context_token,
+                    "⚡ 打断指令已注入，正在执行的任务将在下一步生效")
+            else:
+                # 空闲：走与 /push 空闲一致的路——进 push 队列后统一 flush（复用既测试路径）
+                logger.info("[微信Bot:%s] 用户 %s /steer 空闲转普通消息: %s",
+                            self.user_id, from_user[:16], steer[:80])
+                self._push_queues.setdefault(from_user, []).append(steer)
+                async with self._msg_lock:
+                    await self._flush_push_queue(from_user, context_token)
+            return True
+
         # ── /stop 命令：中断当前正在执行的 agent 请求 ──
         if text.strip() == "/stop":
             if self._cancel_active_run():
@@ -335,6 +362,7 @@ class WeChatCommandMixin:
                 "/modals — 列出可用模型\n"
                 "/modal <序号|模型名> — 切换模型\n"
                 "/push <内容> — 消息入队，当前任务结束后自动发送\n"
+                "/steer <内容> — 打断注入，立即作用于正在执行的任务的下一步\n"
                 "/stop — 中断当前正在执行的任务\n"
                 "/help — 显示本帮助"
             )

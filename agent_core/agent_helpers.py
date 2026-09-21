@@ -1149,6 +1149,46 @@ def llm_waiting() -> bool:
         return False
 
 
+def _make_inbox_pre_hook(user_id: str):
+    """构造 create_react_agent 的 pre_model_hook：在每次 LLM 调用边界把 next_step 待办注入。
+
+    仅在 LLM 调用边界注入、不打断正在执行的工具（与用户确认的「注入时机」一致）。
+
+    pre_model_hook 是 LangGraph 的节点函数，签名 (state, runtime, config)。
+    - state["messages"]: 当前图的对话状态（list[BaseMessage]）
+    - config["configurable"]["thread_id"]: run 写入的 thread_key = "{user_id}:{session_id}"
+
+    返回值：{"messages": [...]} —— 把注入消息追加进 graph state 的 messages（持久化到历史），
+    同时作为 agent 节点（LLM）的输入。无待注入消息时返回 None，图行为零变化。
+    """
+    from inbox import get_inbox_manager
+
+    def _hook(state, runtime=None, config=None) -> Optional[dict]:
+        try:
+            # LangGraph 会按节点参数名注入可运行配置；这里保持参数名为 config 但不加
+            # Pydantic/RunnableConfig 类型注解，避免其被参数改写为严格类型，保证原样透传。
+            thread_key = (config or {}).get("configurable", {}).get("thread_id", "")
+            if not thread_key or ":" not in thread_key:
+                return None
+            _uid, _sid = thread_key.split(":", 1)
+            if _uid != user_id:
+                return None
+            inbox = get_inbox_manager().get(_uid, _sid)
+            claims = inbox.claim_next_step()
+            if not claims:
+                return None
+            msgs = list(state.get("messages", []) or [])
+            for _c in claims:
+                msgs.append(HumanMessage(content=_c["content"]))
+                get_inbox_manager().record_injected(_uid, _sid, _c["content"])
+            return {"messages": msgs}
+        except Exception:
+            # 注入失败绝不影响主流程：无配置/无会话/异常都原样放行
+            return None
+
+    return _hook
+
+
 def _on_llm_idle_retry(attempt: int, reason: str, wait: float = 0.0):
     """把 LLM 重试事件（空闲超时 / 限流）记录到当前请求队列，供 stream_run 转成 SSE 告知前端。
 

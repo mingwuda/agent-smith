@@ -91,6 +91,9 @@ def init_agent(caller: str = "route.agent", force: bool = False):
 
 _END_SENTINEL = object()   # driver 结束标志，广播给所有订阅者
 _live_hubs: dict = {}      # message_id -> _StreamHub（活跃 run 的事件广播器）
+# uid:session_id -> asyncio.Task：活跃 run 的后台 driver 任务，供「彻底终止」端点取消。
+# 前端 abort 只断开 SSE 订阅，driver 与 HTTP 解耦仍会跑完；必须能拿到并 cancel 该 task 才能真正停止。
+_live_run_tasks: dict = {}   # "<uid>:<session_id>" -> asyncio.Task
 
 class _StreamHub:
     """单个 run 的事件广播器：driver 产出 SSE 文本 -> 写 buffer + 推给所有订阅队列。
@@ -407,6 +410,89 @@ async def submit_session_feedback(session_id: str, req: FeedbackRequest, request
     return {"ok": True}
 
 
+class InjectRequest(BaseModel):
+    content: str = Field(..., min_length=1)
+    mode: str = "step"  # "step"=注入当前回合下一步(实时干预) | "turn"=排队到当前回合结束后
+
+
+@router.post("/sessions/{session_id}/inject")
+async def inject_session_message(session_id: str, req: InjectRequest, request: Request):
+    """执行期间实时注入一条用户干预消息。
+
+    - mode="step": 写入 next_step 桶，由运行中 agent 在下一个 LLM 调用边界消费（实时 steering）。
+    - mode="turn": 写入 next_turn 桶，当前回合结束后由前端/下轮消费。
+    返回待命状态；实际生效时机由 agent 循环的 pre_model_hook 决定。
+    """
+    uid = _resolve_user(request)
+    session = session_store.get_session(uid, session_id)
+    if session is None:
+        raise HTTPException(404, "会话不存在或无权访问")
+    mode = req.mode if req.mode in ("step", "turn") else "step"
+    target = "step" if mode == "step" else "turn"
+    content = (req.content or "").strip()
+    if not content:
+        raise HTTPException(400, "intervention content cannot be empty")
+    from inbox import get_inbox_manager
+    m = get_inbox_manager()
+    m.get(uid, session_id).append(target, content)
+    m.persist(uid, session_id)
+    inbox = m.get(uid, session_id)
+    logger.info("[inject] uid=%s session=%s mode=%s content=%.80s active=%s",
+                uid, session_id, mode, content, inbox.active)
+    return {"ok": True, "queued": target, "active": inbox.active}
+
+
+@router.get("/sessions/{session_id}/inbox")
+async def session_inbox_state(session_id: str, request: Request):
+    """查询某会话的 inbox 状态（待注入 / 待下轮 消息数）。供前端轮询/恢复。"""
+    uid = _resolve_user(request)
+    session = session_store.get_session(uid, session_id)
+    if session is None:
+        raise HTTPException(404, "会话不存在或无权访问")
+    from inbox import get_inbox_manager
+    inbox = get_inbox_manager().get(uid, session_id)
+    counts = inbox.turn_counts()
+    return {"ok": True, "active": inbox.active,
+            "next_step": counts["step"], "next_turn": counts["turn"]}
+
+
+@router.post("/sessions/{session_id}/cancel")
+async def cancel_session_run(session_id: str, request: Request):
+    """彻底终止某会话当前正在运行的后台 driver。
+
+    前端「停止」按钮不再只 abort SSE 连接（那只会断开订阅、后台 driver 照跑），
+    而是调用本端点取消 driver 的 asyncio task，让真正的 stream 停止。
+    driver 的 except asyncio.CancelledError + finally 会完成清理
+    （落历史 + clear_running + hard 掉 inbox active 标记）。
+    """
+    uid = _resolve_user(request)
+    session = session_store.get_session(uid, session_id)
+    if session is None:
+        raise HTTPException(404, "会话不存在或无权访问")
+    key = f"{uid}:{session_id}"
+    task = _live_run_tasks.get(key)
+    if task is None or task.done():
+        # 可能此刻 driver 刚结束（竞态），或该会话本来就没有后台 run。
+        # 若 inbox 仍标记 active（如前端 abort 但 driver 仍跑），尝试置 inactive 避免残留。
+        from inbox import get_inbox_manager
+        get_inbox_manager().mark_run_active(uid, session_id, False)
+        return {"ok": False, "running": False,
+                "detail": "没有正在运行的后台任务（可能已完成或本会话无运行中请求）"}
+    task.cancel()
+    # 协作取消后等待 driver 走完清理（driver 内部会处理 CancelledError；不会真的 stuck）
+    try:
+        await asyncio.wait_for(task, timeout=5.0)
+    except asyncio.TimeoutError:
+        logger.warning("[cancel] 等待 driver 取消超时，session=%s（driver 仍在收尾，稍后前台会收到 done）", session_id)
+    except (asyncio.CancelledError, Exception):
+        pass
+    from inbox import get_inbox_manager
+    get_inbox_manager().mark_run_active(uid, session_id, False)
+    _live_run_tasks.pop(key, None)
+    logger.info("[cancel] 已取消后台 driver: uid=%s session=%s", uid, session_id)
+    return {"ok": True, "running": False}
+
+
 async def _drive_agent_stream(
     uid: str,
     session_id: str,
@@ -428,9 +514,19 @@ async def _drive_agent_stream(
     终态由本函数统一处理（落历史 + clear_running + 反思），保证只发生一次。
     """
     stream_log.mark_running(uid, session_id, message_id)
+    # 把本 driver 任务注册到 _live_run_tasks，供「彻底终止」端点取消。
+    # 前端 abort 只断 SSE；只有 cancel 该 task，才真正停止后台 driver 继续跑。
+    _run_task_key = f"{uid}:{session_id}"
+    _run_task_self = asyncio.current_task()
+    if _run_task_self is not None:
+        _live_run_tasks[_run_task_key] = _run_task_self
+    from inbox import get_inbox_manager
+    get_inbox_manager().mark_run_active(uid, session_id, True)
+    get_inbox_manager().restore(uid, session_id)  # 刷新/重启后恢复未消费的干预消息
     final_content = ""
     error_content = ""
     forwarded_terminal_event = False
+    _turn_flushed = False   # next_turn 桶是否已在本轮结束后落历史（防重复）
 
     def _persist(parsed: Optional[dict]) -> None:
         if parsed:
@@ -529,7 +625,23 @@ async def _drive_agent_stream(
         except Exception as e:
             logger.exception("[driver] finalize error")
             hub.publish(f"data: {json.dumps({'type': 'done', 'content': '服务内部错误: ' + str(e)}, ensure_ascii=False)}\n\n")
+        # ── 实时干预收尾：本轮结束，标记 inactive；把 next_turn 桶（排队到下轮）归还给前端 ──
+        # next_turn 消息不在本轮 LLM 边界注入（本轮已结束），交由前端在 done 后按序发起新一轮，
+        # 与 send() 的 interventionQueue 行为一致（一次一条）。
+        try:
+            _mgr = get_inbox_manager()
+            _mgr.mark_run_active(uid, session_id, False)
+            if not _turn_flushed:
+                _turn_flushed = True
+                _pending_turn = _mgr.get(uid, session_id).claim_next_turn()
+                if _pending_turn:
+                    hub.publish(f"data: {json.dumps({'type': 'inbox_next_turn', 'messages': [p['content'] for p in _pending_turn]}, ensure_ascii=False)}\n\n")
+        except Exception:
+            pass
         hub.publish("data: [DONE]\n\n")
         hub.finish()
         stream_log.clear_running(uid, session_id, message_id, finished=True)
+        # 移除本 driver 的任务注册（run 已结束）
+        if _run_task_self is not None:
+            _live_run_tasks.pop(_run_task_key, None)
         asyncio.create_task(_async_reflect(uid, req.message, collected_steps, final_content or "", outcome="error" if error_content else "success"))

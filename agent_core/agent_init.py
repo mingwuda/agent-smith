@@ -34,6 +34,7 @@ from network_resolver import configure_host_resolution
 from skills.registry import get_registry, SkillRegistry
 from agent_helpers import *  # noqa: F401,F403
 from agent_helpers import _on_llm_idle_retry  # import * 不导入下划线名
+from agent_helpers import _make_inbox_pre_hook  # import * 不导入下划线名
 
 logger = get_logger(__name__)
 
@@ -194,11 +195,17 @@ class AgentInitMixin:
             # 上下文超长(context-overflow)：运行层注入压缩 handler 后，压缩 checkpoint 再重试
             max_overflow_retries=getattr(self.config, "llm_context_overflow_retries", 1),
         )
+        # —— 实时干预（next_step 桶）注入钩子：每次进 LLM 节点前取走待办消息 ——
+        # create_react_agent 原生 pre_model_hook 在每个「LLM 调用边界」前触发，正好满足
+        # 「只在 LLM 调用边界注入、不打断正在执行的工具」的语义。返回 messages 追加进 agent 输入，
+        # 仅当本轮有待注入消息时才活动（claim 后为空即原样返回，无额外内容、零行为变化）。
+        pre_hook = _make_inbox_pre_hook(self._user_id)
         return create_react_agent(
             llm,
             self.tools,
             prompt=self._build_system_prompt(),
             checkpointer=self.memory,
+            pre_model_hook=pre_hook,
         )
 
 

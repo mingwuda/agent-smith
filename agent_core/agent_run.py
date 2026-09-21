@@ -922,6 +922,15 @@ class AgentRunMixin:
                 
                 # ── LLM 调用开始（日志 + 前端状态提示）──
                 if kind == "on_chat_model_start" and node == "agent":
+                    # ── 实时干预：pre_model_hook 刚在此 LLM 边界注入了 next_step 消息，转发给前端 ──
+                    # pre_model_hook 节点在 agent 节点之前运行，注入完成后记录事件；此处正是该消息
+                    # 进入 LLM 上下文的时刻，drain 并作为 SSE 告知用户「打断已生效」。
+                    try:
+                        from inbox import get_inbox_manager
+                        for _inj in get_inbox_manager().drain_injected(self._user_id, tid):
+                            yield _sse(_inj)
+                    except Exception:
+                        pass
                     graph_steps += 1
                     # fix #1: 标记 LLM 调用在飞；仅在「此前无调用在飞」时启动硬超时计时钟，
                     # 这样 RetryableLLM 的重试（新 run_id 的 start）不会把计时钟清零，避免无限挂起。
