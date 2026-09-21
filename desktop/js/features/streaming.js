@@ -179,7 +179,14 @@ function closePythonProgress() {
 function stopCurrentRun() {
   // 只停止「当前可见会话」的运行（多会话并发时，其它后台会话不受影响）
   const rt = sessionRuntimes.get(visibleSessionKey);
-  if (!rt || rt.status !== 'streaming' || !rt.controller) return;
+  if (!rt || rt.status !== 'streaming') return;
+  // resume 接管场景：agent 跑在后端，前端没有真实 fetch 可 abort，只有轮询。
+  // 通过 _resumeStop 停轮询、还原按钮并把该前台 run 置为 done（后台任务仍会跑完）。
+  if (typeof rt._resumeStop === 'function') {
+    rt._resumeStop();
+    return;
+  }
+  if (!rt.controller) return;
   userStoppedCurrentRun = true;
   rt.controller.abort();
   addMessage(t('runStopRequested'), 'system');

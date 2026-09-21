@@ -616,6 +616,7 @@ async function resumeActiveStream(sessionId, source) {
   // running=true：后台 agent 仍在跑，接管实时画面
   rt0 = getOrCreateRuntime(sessionId, source);
   rt0.status = 'streaming';
+  rt0.controller = new AbortController();  // resume 无真实 fetch，但保留 controller 供语义一致；真实收尾在 _resumeStop
   rt0.events = [];
   rt0.live = true;
   setVisibleSessionKey(key);
@@ -649,6 +650,10 @@ async function resumeActiveStream(sessionId, source) {
     updateRunIndicators && updateRunIndicators();
     if (typeof loadSessions === 'function') loadSessions();
   }
+
+  // 供 stopCurrentRun（发送按钮→停止）调用：resume 接管场景没有真实 fetch 可 abort，
+  // 只能通过这里停轮询 + 还原按钮 + 结束该前台 run。后台 agent 任务仍会跑完（与 HTTP 解耦）。
+  rt0._resumeStop = stop;
 
   var poll = function() {
     if (stopped) return;
