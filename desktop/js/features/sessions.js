@@ -1110,10 +1110,14 @@ messages.addEventListener('touchstart', (e) => {
   _msgDeletePressTimer = setTimeout(() => {
     // 触觉反馈：明确告知「长按已触发」，避免菜单突然弹出造成误操作
     if (navigator.vibrate) { try { navigator.vibrate(15); } catch (_) {} }
-    const rect = msgEl.getBoundingClientRect();
-    showMessageDeleteMenuFor(msgEl, rect.left, rect.top, true);
+    // 菜单锚定在「手指按住的点位」而非消息元素左上角：长消息按在中段时，
+    // 用 rect.left/top 会让菜单弹到消息顶部，与用户操作点隔很远（易误点）。
+    const press = _msgDeletePressStart;
+    const x = press ? press.x : msgEl.getBoundingClientRect().left;
+    const y = press ? press.y : msgEl.getBoundingClientRect().top;
+    showMessageDeleteMenuFor(msgEl, x, y, true);
     _msgDeletePressStart = null;
-  }, 3000);  // 700→3000ms：长按 3 秒才算触发，彻底避免阅读时搭住误触
+  }, 1000);  // 3000→1000ms：长按 1 秒即触发删除菜单（原 3s 偏久，1s 更顺手且仍区别于普通点击/滚动）
 }, { passive: true });
 
 messages.addEventListener('touchmove', (e) => {
@@ -1155,8 +1159,10 @@ messages.addEventListener('contextmenu', (e) => {
 });
 
 document.addEventListener('click', (e) => {
-  // 长按抬手产生的合成 click：忽略，既不删除也不关闭菜单（等用户在菜单出现后再点一次）
-  if (Date.now() < _msgDeleteSuppressUntil) return;
+  // 点击菜单外部：始终立即关闭，不受长按抬手抑制窗口影响。
+  // 抑制窗口（_msgDeleteSuppressUntil + pointerEvents:none）只负责防「抬手合成 click
+  // 误触发删除」，作用域在菜单项本身；若它也屏蔽「点外部关闭」，会让用户点空白处
+  // 菜单卡滞 380ms 才消失（a2dcec8 引入，实测复现），体验极差。
   if (_msgDeleteMenu && !_msgDeleteMenu.contains(e.target)) {
     hideMessageDeleteMenu();
   }

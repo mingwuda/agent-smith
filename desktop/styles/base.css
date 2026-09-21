@@ -232,7 +232,10 @@
 
   /* 消息长按/右键删除菜单 */
   .msg-delete-menu {
-    position: absolute;
+    /* fixed 而非 absolute：菜单坐标用视口坐标（clientX/clientY），且 #messages 是滚动
+       容器。absolute 相对文档根定位，滚动后用 clientY 会差一个 scrollTop 偏到顶部；
+       fixed 相对视口定位，坐标天然对齐，容器/页面如何滚动都不偏移。 */
+    position: fixed;
     background: #fff;
     border: 1px solid #e0e0e3;
     border-radius: 10px;
