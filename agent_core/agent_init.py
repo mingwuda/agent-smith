@@ -191,6 +191,8 @@ class AgentInitMixin:
             # 限流(429)：不立即抛，固定等待后重试本次 LLM 调用（通过 on_retry → SSE 告知前端）
             rate_limit_wait=getattr(self.config, "llm_rate_limit_wait_seconds", 30.0),
             max_rate_limit_retries=getattr(self.config, "llm_rate_limit_max_retries", 3),
+            # 上下文超长(context-overflow)：运行层注入压缩 handler 后，压缩 checkpoint 再重试
+            max_overflow_retries=getattr(self.config, "llm_context_overflow_retries", 1),
         )
         return create_react_agent(
             llm,

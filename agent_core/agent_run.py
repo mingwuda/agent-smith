@@ -42,6 +42,7 @@ from agent_helpers import (
     _model_supports_vision, _normalize_messages, _recursion_limit_message, _retry_notifications_ctx,
     _sse, _strip_image_content_from_messages, _strip_think_tags, _synthesize_guard_summary,
     _synthetic_ocr_sse_steps, _split_inflight_tail,
+    set_overflow_compact_handler,
     _tool_signature, _truncate, _ensure_no_image_for_non_vision,
     is_image_input_error, record_model_image_unsupported,
     llm_waiting, _llm_wait_ctx,
@@ -52,8 +53,146 @@ from tools.shell_tools import drain_shell_output  # run_shell 实时输出（心
 logger = get_logger(__name__)
 
 
+# ── LLM 摘要增强：把「规则摘要」改写为结构化 checkpoint（参考 dsh-compaction 的
+#    COMPACTION_INSTRUCTION）。复用用户本次请求所选模型；写入压缩出的 checkpoint，
+#    供后续轮次作为已建立背景继续推理。输出须为 Markdown、保留关键事实/路径/标识符。
+_COMPACTION_LLM_TEMPLATE = (
+    "现在你正在为这个 AI 编程助手扮演上下文压缩引擎。请把下面「规则摘要」中压缩的对话历史，"
+    "改写为一份结构化 checkpoint，让另一个模型无需丢失关键信息即可继续这份工作。\n\n"
+    "请严格按下面的 Markdown 结构输出（保留每一节、按顺序，用简洁要点而非大段描述，"
+    "空节写 (none)，不要省略任何一节）：\n\n"
+    "## 主要请求与意图\n"
+    "- [用户的原始与演化目标；关键措辞尽量原文引用]\n\n"
+    "## 关键技术概念\n"
+    "- [涉及的框架、模式、约定]\n\n"
+    "## 文件与代码\n"
+    "- [确切路径：为什么重要、关键改动或片段]\n\n"
+    "## 错误与修复\n"
+    "- [错误：如何解决，以及相关用户反馈]\n\n"
+    "## 当前工作\n"
+    "- [本次 checkpoint 时正在进行的确切内容]\n\n"
+    "## 下一步\n"
+    "- [紧接最近一次请求的下一步动作，或写 (none)]\n\n"
+    "## 关键上下文\n"
+    "- [决策与理由、约束、用户偏好、待解决的问题、继续所需的数据]\n\n"
+    "规则：\n"
+    "- 用简洁的中文工程表述。保留确切的文件路径、命令、错误字符串、标识符、数字、函数签名与语法片段。\n"
+    "- 忠实捕获用户反馈与明确指令，尤其是指正。\n"
+    "- 不要提及本次压缩请求或上下文被压缩这件事。\n"
+    "- 只输出 checkpoint 文本，不要调用工具或做其它动作。\n\n"
+    "待改写的规则摘要如下：\n"
+    "----------\n{summary}\n----------"
+)
+
+
 class AgentRunMixin:
-    async def _compact_checkpoint_if_needed(self, run_config: dict, trigger: str = "auto", reason: str = "") -> Optional[dict]:
+    async def _llm_enhance_summary(self, rules_summary: str, model_override: str = "",
+                                   provider_override: str = "") -> str:
+        """用 LLM 把规则摘要改写为结构化 checkpoint（复用用户本次所选模型）。
+
+        成功返回增强后的文本；任何失败（异常 / 空输出 / 构建失败）返回空串，
+        由调用方回退「规则摘要」，绝不阻断压缩主流程。
+        """
+        text = (rules_summary or "").strip()
+        if not text:
+            return ""
+        try:
+            llm = self._build_llm(model_override, provider_override)
+            resp = await llm.ainvoke([HumanMessage(content=_COMPACTION_LLM_TEMPLATE.format(summary=text))])
+            content = getattr(resp, "content", "")
+            if isinstance(content, list):
+                content = "".join(
+                    (part.get("text") or "") for part in content if isinstance(part, dict)
+                )
+            content = (content or "").strip()
+            return content
+        except Exception:
+            logger.warning("[压缩] LLM 摘要增强调用失败，回退规则摘要", exc_info=True)
+            return ""
+
+    async def _maybe_llm_enhance(self, compacted, report, model_override, provider_override):
+        """若压缩产出了规则摘要且可用，则用 LLM 改写成结构化 checkpoint。
+
+        增强成功：把 compacted 中那条摘要 AIMessage 换成 LLM 输出，并同步 report.summary。
+        失败 / 无摘要：原样返回，绝不阻断压缩。
+        返回 (compacted, report)。
+        """
+        if report is None or not getattr(report, "summary", ""):
+            return compacted, report
+        enhanced = await self._llm_enhance_summary(
+            report.summary, model_override, provider_override,
+        )
+        if not enhanced:
+            return compacted, report
+        # 替换 compacted 中唯一的那条「摘要 AIMessage」（压缩结构: system... + 摘要AIMessage + recent...）
+        replaced = False
+        out = []
+        for m in compacted:
+            if (not replaced and isinstance(m, AIMessage)
+                    and not getattr(m, "tool_calls", None) and report.summary
+                    and report.summary == (m.content if isinstance(m.content, str) else "")):
+                out.append(AIMessage(content=enhanced))
+                replaced = True
+            else:
+                out.append(m)
+        if not replaced:
+            # 未精确匹配到摘要消息（如内容被截断）：不强行插入，避免结构错乱
+            return compacted, report
+        report.summary = enhanced
+        return out, report
+
+    async def _force_compact_checkpoint(self, run_config: dict, model_override: str = "",
+                                        provider_override: str = "") -> bool:
+        """上下文溢出时的强制压缩：无论是否达到常规阈值都压缩一次 checkpoint。
+
+        供 _inject_overflow_handler 用作 RetryableLLM 的 overflow handler。
+        返回 True 表示确有压缩发生（重试 LLM 调用有希望）；False 表示放弃。
+        """
+        if not self._graph:
+            return False
+        try:
+            snapshot = await self._graph.aget_state(run_config)
+        except Exception:
+            return False
+        messages = list((getattr(snapshot, "values", {}) or {}).get("messages") or [])
+        if not messages:
+            return False
+        compacted, report = compact_messages_report(
+            messages, self.config.model, self.config.context_window_tokens,
+            memory=get_memory(self._user_id), trigger="context-overflow",
+            reason="模型报上下文超长，强制压缩后重试",
+        )
+        # 未触发压缩（低于阈值）→ 无实际缩减，重试无益
+        if report is None:
+            return False
+        # 与调用前压缩一致：自净 + 无对话兜底
+        compacted, _ = _drop_dangling_tool_call_messages(compacted)
+        if not compacted or not any(not isinstance(m, SystemMessage) for m in compacted):
+            logger.warning("[压缩] 溢出强制压缩结果为空，放弃")
+            return False
+        # LLM 摘要增强（可选，复用本次模型；失败回退规则摘要）
+        compacted, report = await self._maybe_llm_enhance(
+            compacted, report, model_override, provider_override,
+        )
+        await self._graph.aupdate_state(run_config, {"messages": checkpoint_replacement(compacted)})
+        logger.info(
+            "🧹 上下文溢出强制压缩: %d -> %d messages, ~%d -> ~%d tokens",
+            len(messages), len(compacted),
+            report.before_tokens, estimate_messages_tokens(compacted),
+        )
+        return True
+
+    def _bind_overflow_handler(self, run_config: dict, model_override: str,
+                               provider_override: str) -> None:
+        """把「overflow → 强制压缩 checkpoint」的 async 回调注入当前请求上下文。"""
+        async def _handler() -> bool:
+            return await self._force_compact_checkpoint(
+                run_config, model_override, provider_override,
+            )
+        set_overflow_compact_handler(_handler)
+
+    async def _compact_checkpoint_if_needed(self, run_config: dict, trigger: str = "auto", reason: str = "",
+                                            model_override: str = "", provider_override: str = "") -> Optional[dict]:
         """LLM 调用前按需压缩 checkpoint。
 
         返回本次压缩的报告 dict（`context_compacted` SSE 事件载荷）；
@@ -91,6 +230,10 @@ class AgentRunMixin:
                 len(compacted), len(messages),
             )
             return None
+        # LLM 摘要增强：把规则摘要改写成结构化 checkpoint（复用用户本次所选模型；失败回退）
+        compacted, report = await self._maybe_llm_enhance(
+            compacted, report, model_override, provider_override,
+        )
         await self._graph.aupdate_state(run_config, {"messages": checkpoint_replacement(compacted)})
         after = estimate_messages_tokens(compacted)
         _before_tok = report.before_tokens if report else estimate_messages_tokens(messages)
@@ -106,7 +249,8 @@ class AgentRunMixin:
         report.after_tokens = after
         return report.to_dict()
 
-    async def _compact_checkpoint_before_tool(self, run_config: dict, trigger: str = "before_tool", reason: str = "") -> Optional[dict]:
+    async def _compact_checkpoint_before_tool(self, run_config: dict, trigger: str = "before_tool", reason: str = "",
+                                              model_override: str = "", provider_override: str = "") -> Optional[dict]:
         """工具执行前按需压缩（用户需求：工具链中达到阈值即压缩，不等下次 LLM 调用）。
 
         与 `_compact_checkpoint_if_needed`（LLM 调用前压缩）的区别：
@@ -150,6 +294,10 @@ class AgentRunMixin:
                 "[压缩] 工具前压缩结果无任何对话历史，放弃压缩，保留原历史",
             )
             return None
+        # LLM 摘要增强：把规则摘要改写成结构化 checkpoint（复用用户本次所选模型；失败回退）
+        compacted, report = await self._maybe_llm_enhance(
+            compacted, report, model_override, provider_override,
+        )
         await self._graph.aupdate_state(run_config, {"messages": checkpoint_replacement([*compacted, *tail])})
         after = estimate_messages_tokens(compacted)
         _before_tok = report.before_tokens if report else estimate_messages_tokens(head)
@@ -303,9 +451,11 @@ class AgentRunMixin:
         _run_started_at = time.time()
 
         try:
+            # 上下文溢出时自动压缩 checkpoint 并重试（RetryableLLM 内通过 ContextVar 取到该 handler）
+            self._bind_overflow_handler(config, model_override, provider_override)
             # 在 LLM 调用前按需压缩 checkpoint，记录压缩报告以便历史回放时展示
             compaction_step = None
-            _compact_report = await self._compact_checkpoint_if_needed(config)
+            _compact_report = await self._compact_checkpoint_if_needed(config, model_override=model_override, provider_override=provider_override)
             if _compact_report:
                 compaction_step = {"type": "context_compacted", **_compact_report}
             result = await graph.ainvoke(
@@ -601,7 +751,8 @@ class AgentRunMixin:
                 self.config.api_timeout_seconds,
                 len(message),
             )
-            _compact_report = await self._compact_checkpoint_if_needed(run_config)
+            self._bind_overflow_handler(run_config, model_override, provider_override)
+            _compact_report = await self._compact_checkpoint_if_needed(run_config, model_override=model_override, provider_override=provider_override)
             if _compact_report:
                 yield _sse({"type": "context_compacted", **_compact_report})
             # 方案A：OCR 降级动作以 synthetic 工具卡片先行发出。纯文本模型收到图片时，
@@ -790,7 +941,7 @@ class AgentRunMixin:
                         except Exception as exc:
                             logger.warning("[修复] 单轮内 tool 历史修复失败（已忽略，不影响主流程）: %s", exc)
                         try:
-                            _report = await self._compact_checkpoint_if_needed(run_config)
+                            _report = await self._compact_checkpoint_if_needed(run_config, model_override=model_override, provider_override=provider_override)
                             if _report:
                                 yield _sse({"type": "context_compacted", **_report})
                         except Exception as exc:
@@ -909,7 +1060,7 @@ class AgentRunMixin:
                     # （结果文本即压缩报告），此处跳过避免同一轮压缩两次。
                     try:
                         if tool_name != "compress_context":
-                            _report = await self._compact_checkpoint_before_tool(run_config)
+                            _report = await self._compact_checkpoint_before_tool(run_config, model_override=model_override, provider_override=provider_override)
                             if _report:
                                 yield _sse({"type": "context_compacted", **_report})
                     except Exception as exc:

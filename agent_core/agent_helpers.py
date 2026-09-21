@@ -9,7 +9,7 @@ import socket
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, AsyncGenerator, Optional
+from typing import Any, AsyncGenerator, Callable, Optional
 from urllib.parse import urlparse
 
 from langchain_anthropic import ChatAnthropic
@@ -729,6 +729,49 @@ def is_rate_limit_error(exc) -> bool:
     )
 
 
+def is_context_overflow(exc) -> bool:
+    """判断异常/错误消息是否为「上下文超长」(context window exceeded)。
+
+    兼容异常对象或字符串错误消息。多源匹配通用措辞：
+      - 类型名（openai/其它 SDK 对 context length 的映射）
+      - 常见文案：context length / context window / maximum context /
+        input too long / token limit / 上下文超长 / 超过上下文
+    """
+    if exc is None:
+        return False
+    msg = (str(exc) or "").lower()
+    if not msg:
+        return False
+    return any(
+        n in msg
+        for n in (
+            "context length", "context window", "context_length",
+            "maximum context", "max context", "context is too long",
+            "input is too long", "input too long", "too many tokens",
+            "token limit", "maximum token", "this model's maximum",
+            "请减少输入", "上下文过长", "上下文超长", "上下文长度",
+            "超过模型的上下文", "超出上下文长度", "输入内容过长",
+        )
+    )
+
+
+# 上下文溢出时的「压缩 handler」注入：per-request 由运行层（run/stream_run）设置一个
+# async 回调，RetryableLLM 在捕获到 context-overflow 时调用它压缩 checkpoint。
+# ContextVar 保证并发请求隔离。handler 返回 True 表示已压缩、可安全重试本次 LLM 调用。
+_overflow_compact_ctx: contextvars.ContextVar[Optional[Callable[..., Any]]] = (
+    contextvars.ContextVar("overflow_compact_handler", default=None)
+)
+
+
+def set_overflow_compact_handler(handler) -> None:
+    """为当前请求绑定「上下文超长时压缩 checkpoint」的回调。"""
+    _overflow_compact_ctx.set(handler)
+
+
+def get_overflow_compact_handler():
+    return _overflow_compact_ctx.get()
+
+
 def get_unsupported_image_models() -> set[str]:
     """返回当前自适应的"不支持视觉"模型集合（仅供调试/前端展示）。"""
     return set(_model_image_unsupported)
@@ -1194,6 +1237,7 @@ class RetryableLLM(Runnable):
         on_retry=None,
         rate_limit_wait: float = 30.0,
         max_rate_limit_retries: int = 3,
+        max_overflow_retries: int = 1,
     ):
         self.llm = llm
         self.idle_timeout = idle_timeout
@@ -1201,6 +1245,7 @@ class RetryableLLM(Runnable):
         self.on_retry = on_retry
         self.rate_limit_wait = rate_limit_wait
         self.max_rate_limit_retries = max_rate_limit_retries
+        self.max_overflow_retries = max_overflow_retries
 
     def bind_tools(self, tools, **kwargs):
         return RetryableLLM(
@@ -1210,11 +1255,13 @@ class RetryableLLM(Runnable):
             on_retry=self.on_retry,
             rate_limit_wait=self.rate_limit_wait,
             max_rate_limit_retries=self.max_rate_limit_retries,
+            max_overflow_retries=self.max_overflow_retries,
         )
 
     async def astream(self, input, config=None, **kwargs):
         idle_attempt = 0
         rl_attempt = 0
+        ovf_attempt = 0
         while True:
             agen = None
             yielded = False
@@ -1253,6 +1300,35 @@ class RetryableLLM(Runnable):
                         self.rate_limit_wait, rl_attempt, self.max_rate_limit_retries,
                     )
                     await asyncio.sleep(self.rate_limit_wait)
+                    continue
+                # ── 上下文超长(context-overflow)：先压缩 checkpoint，再重试本次 LLM 调用 ──
+                # 仅当尚未产出 chunk、且运行层已注入压缩 handler（set_overflow_compact_handler）
+                # 时才可能安全重试。压缩成功(handler 返回 True) → 重试；压缩失败/无 handler → 上抛。
+                if (
+                    not yielded
+                    and is_context_overflow(e)
+                    and ovf_attempt < self.max_overflow_retries
+                ):
+                    handler = get_overflow_compact_handler()
+                    if handler is None:
+                        raise
+                    ok = False
+                    try:
+                        ok = bool(await handler())
+                    except Exception:
+                        ok = False
+                    if not ok:
+                        raise
+                    ovf_attempt += 1
+                    if self.on_retry:
+                        try:
+                            self.on_retry(ovf_attempt, "context_overflow")
+                        except Exception:
+                            pass
+                    logger.warning(
+                        "[RetryableLLM] 上下文超长，已压缩 checkpoint，重试本次调用（第 %d/%d 次）",
+                        ovf_attempt, self.max_overflow_retries,
+                    )
                     continue
                 # ── 空闲超时：退避后重试 ──
                 if isinstance(e, asyncio.TimeoutError) and idle_attempt < self.max_idle_retries:
