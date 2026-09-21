@@ -7,7 +7,6 @@
 """
 import difflib
 import json
-import linecache
 import mmap
 import os
 import re
@@ -64,19 +63,18 @@ PERMISSION_PREFIX = "__PERMISSION_NEEDED__"  # 前端据此识别"需要授权"
 
 
 def _invalidate_line_cache(path: str):
+    # 保留为空实现、兼容旧调用方；read_file 已改为每次真实读盘，无需清缓存
     _line_cache.pop(str(path), None)
-    # 不调用 linecache.clearcache()，让 linecache 基于 mtime 自动处理
 
 
 def _get_lines_cached(path: Path) -> list[str]:
-    """从 linecache（Python 内置行缓存）读取所有行。"""
-    p = str(path)
-    raw = linecache.getlines(p)
-    if not raw:
-        # linecache 没命中，手动读一遍
-        raw = path.read_text(encoding="utf-8").splitlines(keepends=True)
-        linecache.updatecache(p)
-    return raw
+    """直接读磁盘获取所有行（不缓存）。
+
+    ponytail: 取消 linecache 缓存。原实现用 linecache.getlines 会因 mtime 粒度
+    不足或写操作只清私有 _line_cache 而返回陈旧内容，误导 LLM；改为每次真正读盘，
+    保证与磁盘一致。文件不大时直接 read_text 性能足够。
+    """
+    return path.read_text(encoding="utf-8").splitlines(keepends=True)
 
 
 def set_workspace(path: Path):
@@ -251,7 +249,7 @@ def read_file(path: str, start_line: int = 0, max_lines: int = 500) -> str:
       - start_line: 从第几行开始读（默认 0）
       - max_lines: 一次最多读多少行（默认 200）
 
-    性能：使用 linecache 缓存，重复读取同一文件不会产生磁盘 I/O。
+    一致性：每次都从磁盘真实读取，不与外部修改（git pull、编辑器等）产生缓存不一致。
 
     示例:
       - read_file("agent.py")          → 读前 200 行
