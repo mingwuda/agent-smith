@@ -129,6 +129,27 @@ def _init_db(conn: sqlite3.Connection):
         """
     )
 
+    # ── 定时任务表（项目级）──
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS cron_tasks (
+            id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            cron TEXT NOT NULL,
+            content TEXT NOT NULL DEFAULT '',
+            enabled INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            last_run_at TEXT,
+            last_status TEXT
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_cron_tasks_project ON cron_tasks(project_id)"
+    )
+
     # ── 消息表 ──
     conn.execute(
         """
@@ -683,3 +704,113 @@ def list_sessions_unassigned(user_id: str = "default") -> list[dict]:
             """
         ).fetchall()
         return [_row_to_session(r) for r in rows]
+# ═══════════════════════════════════════════════
+#  定时任务（项目级）
+# ═══════════════════════════════════════════════
+
+def _row_to_cron(row, extra: Optional[dict] = None) -> dict:
+    task = {
+        "id": row["id"],
+        "project_id": row["project_id"],
+        "name": row["name"],
+        "cron": row["cron"],
+        "content": row["content"],
+        "enabled": bool(row["enabled"]),
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+        "last_run_at": row["last_run_at"],
+        "last_status": row["last_status"],
+    }
+    if extra:
+        task.update(extra)
+    return task
+
+
+def create_cron_task(user_id: str, project_id: str, name: str, cron: str,
+                     content: str = "") -> dict:
+    """创建一条定时任务"""
+    task_id = "cron_" + str(uuid.uuid4())[:8]
+    now = _timestamp()
+    with _connect(user_id) as conn:
+        conn.execute(
+            """
+            INSERT INTO cron_tasks (id, project_id, name, cron, content, enabled,
+                                    created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+            """,
+            (task_id, project_id, name, cron, content, now, now),
+        )
+    return get_cron_task(user_id, task_id) or {
+        "id": task_id, "project_id": project_id, "name": name, "cron": cron,
+        "content": content, "enabled": True, "created_at": now, "updated_at": now,
+        "last_run_at": None, "last_status": None,
+    }
+
+
+def get_cron_task(user_id: str, task_id: str) -> Optional[dict]:
+    with _connect(user_id) as conn:
+        row = conn.execute(
+            "SELECT * FROM cron_tasks WHERE id = ?", (task_id,)
+        ).fetchone()
+        return _row_to_cron(row) if row else None
+
+
+def list_cron_tasks(user_id: str, project_id: str = "") -> list[dict]:
+    """列出定时任务。project_id 为空则列出该用户全部任务。"""
+    if project_id:
+        rows = _p("SELECT * FROM cron_tasks WHERE project_id = ? ORDER BY created_at DESC",
+                  (project_id,), user_id)
+    else:
+        rows = _p("SELECT * FROM cron_tasks ORDER BY created_at DESC", (), user_id)
+    return [_row_to_cron(r) for r in rows]
+
+
+def _p(sql, params, user_id):
+    with _connect(user_id) as conn:
+        return conn.execute(sql, params).fetchall()
+
+
+def update_cron_task(user_id: str, task_id: str, name: Optional[str] = None,
+                     cron: Optional[str] = None, content: Optional[str] = None,
+                     enabled: Optional[bool] = None,
+                     last_run_at: Optional[str] = None,
+                     last_status: Optional[str] = None) -> bool:
+    """更新定时任务的字段（仅更新传入的字段）"""
+    now = _timestamp()
+    sets = []
+    vals = []
+    if name is not None:
+        sets.append("name = ?"); vals.append(name)
+    if cron is not None:
+        sets.append("cron = ?"); vals.append(cron)
+    if content is not None:
+        sets.append("content = ?"); vals.append(content)
+    if enabled is not None:
+        sets.append("enabled = ?"); vals.append(1 if enabled else 0)
+    if last_run_at is not None:
+        sets.append("last_run_at = ?"); vals.append(last_run_at)
+    if last_status is not None:
+        sets.append("last_status = ?"); vals.append(last_status)
+    if not sets:
+        return False
+    sets.append("updated_at = ?"); vals.append(now)
+    vals.append(task_id)
+    sql = f"UPDATE cron_tasks SET {', '.join(sets)} WHERE id = ?"
+    with _connect(user_id) as conn:
+        cur = conn.execute(sql, vals)
+        return cur.rowcount > 0
+
+
+def delete_cron_task(user_id: str, task_id: str) -> bool:
+    with _connect(user_id) as conn:
+        cur = conn.execute("DELETE FROM cron_tasks WHERE id = ?", (task_id,))
+        return cur.rowcount > 0
+
+
+def list_enabled_cron_tasks(user_id: str) -> list[dict]:
+    """列出该用户所有启用的定时任务（供调度器扫描）"""
+    with _connect(user_id) as conn:
+        rows = conn.execute(
+            "SELECT * FROM cron_tasks WHERE enabled = 1 ORDER BY created_at DESC",
+        ).fetchall()
+        return [_row_to_cron(r) for r in rows]

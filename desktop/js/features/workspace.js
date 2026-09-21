@@ -415,6 +415,7 @@ function toggleProjectMenu(btn, projectId) {
   const items = [
     { icon: '📂', label: t('viewFiles') || '查看文件', fn: () => openFileBrowser(projectId) },
     { icon: '✎', label: t('editProject') || '编辑', fn: () => editProject(projectId) },
+    { icon: '⏰', label: t('cronTasks') || '定时任务', fn: () => openCronPanel(projectId) },
     { icon: '🗑', label: t('deleteProject') || '删除', danger: true, fn: () => deleteProject(projectId) },
   ];
   items.forEach(it => {

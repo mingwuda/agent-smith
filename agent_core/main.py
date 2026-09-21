@@ -186,12 +186,25 @@ async def lifespan(app):
                 pass
     _hub_cleanup_task = asyncio.create_task(_hub_cleanup_loop())
 
+    # 定时常驻任务调度器（后台循环）
+    scheduler_task = None
+    try:
+        from cron_service import run_scheduler_loop
+        scheduler_task = asyncio.create_task(run_scheduler_loop(interval=30.0))
+    except Exception:
+        scheduler_task = None
+
     yield
     # 关闭前取消清理任务，避免关停时报 "Task was destroyed" 告警
     try:
         _hub_cleanup_task.cancel()
     except Exception:
         pass
+    if scheduler_task:
+        try:
+            scheduler_task.cancel()
+        except Exception:
+            pass
 
 app = FastAPI(
     title="Moss Agent",
@@ -531,6 +544,7 @@ from api.routes.monitoring import router as monitoring_router
 from api.routes.update import router as update_router
 from api.routes.mcp import router as mcp_router
 from api.routes.projects import router as projects_router
+from api.routes.cron import router as cron_router
 from api.routes.files import router as files_router
 from api.routes.admin_evolution import router as admin_evolution_router
 
@@ -546,6 +560,7 @@ app.include_router(monitoring_router)
 app.include_router(update_router)
 app.include_router(mcp_router)
 app.include_router(projects_router)
+app.include_router(cron_router)
 app.include_router(files_router)
 app.include_router(admin_evolution_router)
 

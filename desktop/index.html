@@ -69,6 +69,18 @@
     <div id="file-tree" class="file-tree"></div>
   </div>
 
+  <!-- 定时任务面板（默认隐藏，从项目 ⋯ 菜单「定时任务」进入，类似文件浏览器） -->
+  <div id="cron-panel" class="cron-panel" style="display:none;">
+    <div class="fb-header">
+      <button class="fb-back" onclick="exitCronPanel()" title="返回项目列表">←</button>
+      <div class="fb-path" id="cron-panel-title">⏰ 定时任务</div>
+      <button class="fb-refresh" onclick="loadCronTasks()" data-i18n-title="cronRefresh" title="刷新">⟳</button>
+      <button class="fb-refresh" onclick="openCronEditor()" data-i18n-title="cronNew" title="新增">＋</button>
+    </div>
+    <div class="cron-panel-hint" data-i18n="cronPanelHint">到点自动驱动 Agent 执行。执行时机支持自然语言（如「每天早上9点」「每周一到周五 8:30」「每30分钟」）。</div>
+    <div id="cron-list" class="cron-list"></div>
+  </div>
+
   <!-- 监控手风琴 -->
   <div class="sidebar-accordion" id="monitoring-accordion">
     <button class="accordion-toggle" type="button" aria-expanded="false" aria-controls="monitoring-body" onclick="toggleSidebarAccordion('monitoring-accordion')">
@@ -314,6 +326,34 @@
     <div class="modal-actions">
       <button class="btn-secondary" onclick="closeNewProjectModal()" data-i18n="cancelButton">取消</button>
       <button class="btn-primary" id="np-create-btn" data-i18n="createProjectButton" onclick="submitNewProjectModal()">创建</button>
+    </div>
+  </div>
+</div>
+
+<!-- 定时任务 新增/编辑 弹窗 -->
+<div class="modal-overlay" id="cron-editor-modal" onclick="if(event.target===this)closeCronEditor()">
+  <div class="modal cron-editor-modal">
+    <h2 id="cron-editor-title">新增定时任务</h2>
+    <div class="form-group">
+      <label for="cron-edit-project" data-i18n="cronProjectLabel">所属项目</label>
+      <select id="cron-edit-project" class="cron-project-select"></select>
+    </div>
+    <div class="form-group">
+      <label for="cron-edit-name" data-i18n="cronNameLabel">任务名称</label>
+      <input id="cron-edit-name" data-i18n-placeholder="cronNamePlaceholder" placeholder="例如：每日生产进度汇总" />
+    </div>
+    <div class="form-group">
+      <label for="cron-edit-cron" data-i18n="cronTimeLabel">执行时机（自然语言或 cron）</label>
+      <input id="cron-edit-cron" data-i18n-placeholder="cronTimePlaceholder" placeholder="每天 8:30 / 每周一 9:00 / 每30分钟 / 每月1号和15号 10:00 / 5 4 * * *" />
+      <div class="hint" id="cron-edit-hint">例如：每天 8:30 / 每周一 9:00 / 每30分钟 / 每月1号和15号 10:00</div>
+    </div>
+    <div class="form-group">
+      <label for="cron-edit-content" data-i18n="cronContentLabel">执行内容（发给 Agent 的指令）</label>
+      <textarea id="cron-edit-content" rows="3" data-i18n-placeholder="cronContentPlaceholder" placeholder="例如：统计本项目的未提交变更并生成提交信息"></textarea>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="closeCronEditor()" data-i18n="cronCancel">取消</button>
+      <button class="btn-primary" id="cron-edit-submit" onclick="submitCronEditor()">创建</button>
     </div>
   </div>
 </div>
@@ -676,6 +716,7 @@
   <script src="/static/js/features/sessions.js"></script>
   <script src="/static/js/features/file-preview.js"></script>
   <script src="/static/js/features/workspace.js"></script>
+  <script src="/static/js/features/cron.js"></script>
   <script src="/static/js/features/settings.js"></script>
 <script src="/static/js/features/database.js"></script>
 <script src="/static/js/features/permissions.js"></script>
