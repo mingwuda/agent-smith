@@ -123,3 +123,52 @@ async def test_push_command_without_content_help():
     assert handled is True
     assert bot.processed == []
     assert "用法" in bot.send_message.call_args.args[2]
+# ── /steer 命令（实时干预）────────────────────────────
+
+async def test_steer_command_busy_injects_to_inbox():
+    """任务执行中：/steer 把内容写入 inbox(next_step)，供运行中的 agent 下一步注入。"""
+    import inbox as Inbox  # noqa: E402  # 生产代码用顶层 inbox 模块（agent_core 在 sys.path）
+
+    bot = _make_bot()
+    bot._active_run_task = asyncio.create_task(asyncio.sleep(3600))
+    bot._wechat_sessions = {"u1": "sess-steer-1"}
+    # 清空目标会话 inbox
+    Inbox.get_inbox_manager().get("wechat_admin", "sess-steer-1").claim_next_step(999)
+
+    handled = await WeChatCommandMixin._handle_command(
+        bot, "/steer 改用 JSON 输出", "u1", "tok-1", "wechat_admin",
+    )
+    assert handled is True
+    # 内容进入 next_step 桶（未进入普通 push 队列）
+    inbox = Inbox.get_inbox_manager().get("wechat_admin", "sess-steer-1")
+    pending = inbox.peek_step()
+    assert [c["content"] for c in pending] == ["改用 JSON 输出"]
+    assert bot._push_queues.get("u1", []) == []  # 未入 push 队列
+    assert bot.processed == []  # 未走普通消息处理
+    assert "注入" in bot.send_message.call_args.args[2]
+    assert inbox.active is True  # 任务中被标记 active
+    Inbox.get_inbox_manager().get("wechat_admin", "sess-steer-1").claim_next_step(999)
+    bot._active_run_task.cancel()
+
+
+async def test_steer_command_idle_flushes_via_push_queue():
+    """空闲：/steer 走与 /push 闲时一致的 push 队列 flush 立即处理。"""
+    bot = _make_bot()
+    bot._wechat_sessions = {"u1": "sess-steer-2"}
+
+    handled = await WeChatCommandMixin._handle_command(
+        bot, "/steer 空闲时的补充", "u1", "tok-1", "wechat_admin",
+    )
+    assert handled is True
+    assert bot.processed == ["空闲时的补充"]
+    assert bot._push_queues.get("u1", []) == []
+
+
+async def test_steer_command_without_content_help():
+    bot = _make_bot()
+    handled = await WeChatCommandMixin._handle_command(
+        bot, "/steer", "u1", "tok-1", "wechat_admin",
+    )
+    assert handled is True
+    assert bot.processed == []
+    assert "用法" in bot.send_message.call_args.args[2]
