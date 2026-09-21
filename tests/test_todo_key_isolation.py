@@ -79,3 +79,42 @@ def test_manage_todo_writes_under_full_config_thread_id():
     assert peek_todo_list("uid:S")["items"][0]["content"] == "步骤一"
     assert pop_todo_list("uid:S") is not None
     assert peek_todo_list("uid:S") is None
+
+
+def test_run_config_thread_id_is_full_key_so_writes_are_readable():
+    """回归：_run_config 必须把「裸会话 ID」转成完整 thread_key 后写入 configurable.thread_id。
+
+    历史 bug：stream_run 里 run_config = _run_config(tid) 直接把裸 tid 当 thread_key，
+    于是工具按裸 key 写 _TODO_CACHE，而运行链路用完整 key peek → 恒为 None，
+    todo 事件永不发出（前端任务清单面板消失）。同时 inbox 注入钩子要求 key 含 ":",
+    裸 key 会被直接跳过 → 实时干预静默失效。
+    """
+    from types import SimpleNamespace
+
+    from agent_run import AgentRunMixin
+
+    class _Stub(AgentRunMixin):
+        def __init__(self):
+            self._user_id = "uid"
+            self._thread_id = "fallback-sid"
+            self.config = SimpleNamespace(recursion_limit=60, enable_loop_guard=True)
+
+    stub = _Stub()
+
+    # 1) 传裸 tid：config 里的 thread_id 必须是完整 key
+    cfg = stub._run_config("S1")
+    assert cfg["configurable"]["thread_id"] == "uid:S1"
+
+    # 2) 不传参：回落到 self._thread_id，同样要带 uid 前缀
+    cfg2 = stub._run_config()
+    assert cfg2["configurable"]["thread_id"] == "uid:fallback-sid"
+
+    # 3) 端到端：工具按该 config 写入，运行链路按 _thread_key(tid) 必须能读到
+    manage_todo.invoke(
+        {"action": "create_todo", "items": ["步骤一"]},
+        config=cfg,
+    )
+    run_link_key = stub._thread_key("S1")
+    assert peek_todo_list(run_link_key)["items"][0]["content"] == "步骤一"
+    assert pop_todo_list(run_link_key) is not None
+    assert peek_todo_list(run_link_key) is None

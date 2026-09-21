@@ -23,6 +23,27 @@ import inbox as Inbox  # noqa: E402
 from agent_helpers import _make_inbox_pre_hook  # noqa: E402
 
 
+def _run_cfg(user_id: str, session_id: str) -> dict:
+    """走真实的 _run_config 装配点生成 run config，禁止手工伪造 key。
+
+    历史教训：本文件曾用 {"configurable": {"thread_id": "u:s4"}} 手工喂完整 key，
+    而生产里 config 由 _run_config(裸 tid) 生成、当时装的是裸 key（无 uid 前缀），
+    于是钩子的 `if ":" not in thread_key: return None` 直接跳过 → 实时干预静默失效，
+    测试却全绿。此处统一从装配点取 config，让「key 命名空间」这一环被真实覆盖。
+    """
+    from types import SimpleNamespace
+
+    from agent_run import AgentRunMixin
+
+    class _Stub(AgentRunMixin):
+        def __init__(self):
+            self._user_id = user_id
+            self._thread_id = session_id
+            self.config = SimpleNamespace(recursion_limit=10, enable_loop_guard=True)
+
+    return _Stub()._run_config(session_id)
+
+
 def test_inbox_double_bucket_semantics():
     m = Inbox.get_inbox_manager()
     m.get("u", "s1").claim_next_step(999)
@@ -58,7 +79,7 @@ def test_pre_hook_no_pending_returns_none():
     hook = _make_inbox_pre_hook("u")
     m = Inbox.get_inbox_manager()
     state = {"messages": [HumanMessage(content="hi")]}
-    result = hook(state, config={"configurable": {"thread_id": "u:empty"}})
+    result = hook(state, config=_run_cfg("u", "empty"))
     assert result is None
 
 
@@ -69,7 +90,7 @@ def test_pre_hook_injects_human_messages():
     m.get("u", "s4").append("step", "请改用 JSON 输出")
 
     state = {"messages": [HumanMessage(content="原始任务")]}
-    result = hook(state, config={"configurable": {"thread_id": "u:s4"}})
+    result = hook(state, config=_run_cfg("u", "s4"))
     assert result is not None
     msgs = result["messages"]
     contents = [getattr(x, "content", "") for x in msgs]
@@ -87,7 +108,7 @@ def test_pre_hook_wrong_user_noop():
     m.get("alice", "s5").append("step", "给 alice 的指令")
     # 用 bob 身份调 hook（thread_id 前缀不匹配）→ 不注入，且不消费
     state = {"messages": [HumanMessage(content="x")]}
-    result = hook(state, config={"configurable": {"thread_id": "bob:s5"}})
+    result = hook(state, config=_run_cfg("bob", "s5"))
     assert result is None
     assert len(m.get("alice", "s5").peek_step()) == 1
 
@@ -151,7 +172,7 @@ async def test_pre_model_hook_in_real_graph():
     m.get("u", "graph-run").append("step", "途中请改用 JSON")
     await graph.ainvoke(
         {"messages": [HumanMessage(content="开始")]},
-        {"configurable": {"thread_id": "u:graph-run"}, "recursion_limit": 10},
+        _run_cfg("u", "graph-run"),
     )
 
     # 注入内容确实进入过 LLM 输入

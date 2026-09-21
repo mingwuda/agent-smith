@@ -360,9 +360,17 @@ class AgentRunMixin:
         return f"{self._user_id}:{tid}"
 
 
-    def _run_config(self, thread_key: str = "") -> dict:
-        if not thread_key:
-            thread_key = self._thread_key()
+    def _run_config(self, thread_id: str = "") -> dict:
+        # 入参是「裸会话 ID」（或空）；统一转成完整 thread_key（"{uid}:{sid}"）后再写入
+        # configurable.thread_id。必须与 _thread_key()/工具/peek/注入钩子同一命名空间：
+        # 曾因直接把裸 tid 当 thread_key（漏掉 _thread_key 的 uid 前缀），导致工具按裸 key
+        # 写 _TODO_CACHE、链路按完整 key peek 读到 None（todo 事件不再发出、面板消失），
+        # 且 inbox 注入钩子因 key 不含 ":" 而永久放弃注入（实时干预静默失效）。
+        thread_key = self._thread_key(thread_id)
+        # 命名空间不变式：thread_key 必须是 "{uid}:{sid}"。工具写缓存 / peek 读缓存 /
+        # inbox 注入钩子全部按这个 key 对齐，漏掉 uid 前缀会「静默失效」（todo 面板消失、
+        # 实时干预不注入，见 d1d9b8b 回归）。这里把静默错误变成显式崩溃，便于早发现。
+        assert ":" in thread_key, f"thread_key 缺少 uid 前缀（应为 'uid:sid'）: {thread_key!r}"
         limit = max(1, int(self.config.recursion_limit or 60))
         # 关闭防循环时放宽递归上限，交由用户手动终止任务
         if not getattr(self.config, "enable_loop_guard", True):
