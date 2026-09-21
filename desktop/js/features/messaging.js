@@ -423,8 +423,15 @@ input.addEventListener('keydown', (e) => {
   if (inputComposing || e.isComposing || e.keyCode === 229 || justEndedComposition) {
     return;
   }
-  // Enter 单独按 → 发送；⌘/Ctrl+Enter → 换行；屏蔽 Shift+Enter
+  // Enter 单独按 → 发送；Ctrl+Enter → 实时打断(streaming 时)/换行；Shift+Enter → 换行
   if (e.metaKey || e.ctrlKey) {
+    // streaming 中 Ctrl+Enter = 打断注入（实时干预，见 steerCurrentRun）；
+    // 空闲时 Ctrl+Enter 仍为换行（保留原编辑能力）。
+    if (streamingActive && typeof steerCurrentRun === 'function') {
+      e.preventDefault();
+      steerCurrentRun();
+      return;
+    }
     // 插入换行
     const start = input.selectionStart, end = input.selectionEnd;
     input.value = input.value.slice(0, start) + '\n' + input.value.slice(end);
@@ -433,7 +440,15 @@ input.addEventListener('keydown', (e) => {
     e.preventDefault();
     return;
   }
-  if (e.shiftKey) return;
+  if (e.shiftKey) {
+    // Shift+Enter → 换行（与 Ctrl+Enter 空闲一致，避免打扰打断快捷键）
+    const start = input.selectionStart, end = input.selectionEnd;
+    input.value = input.value.slice(0, start) + '\n' + input.value.slice(end);
+    input.selectionStart = input.selectionEnd = start + 1;
+    resizeComposer();
+    e.preventDefault();
+    return;
+  }
   e.preventDefault();
   send();
 });
@@ -444,3 +459,10 @@ sendBtn.onclick = () => {
   }
   send();
 };
+// 打断注入按钮()
+const steerBtn = document.getElementById('steer-btn');
+if (steerBtn) {
+  steerBtn.onclick = () => {
+    if (typeof steerCurrentRun === 'function') steerCurrentRun();
+  };
+}

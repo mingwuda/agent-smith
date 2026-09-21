@@ -192,6 +192,74 @@ function stopCurrentRun() {
   addMessage(t('runStopRequested'), 'system');
   sendBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 16 16"><rect x="3" y="3" width="10" height="10" rx="2" fill="currentColor"/></svg>';
   sendBtn.disabled = true;
+
+  // 彻底终止：仅 abort 浏览器到后端的 SSE 连接只能断开订阅，后台 driver 仍会跑完。
+  // 调用后端 cancel 端点取消 driver 的 asyncio task，让真正的 stream 停止并走清理。
+  const sessionId = currentSessionId || threadId;
+  if (sessionId) {
+    fetch(`/agent/sessions/${encodeURIComponent(sessionId)}/cancel`, { method: 'POST' })
+      .then(res => res.json().catch(() => ({})))
+      .then(data => {
+        // 若本就在跑、取消成功，driver 的 finally 会补发 done；前端保持还原逻辑即可。
+        if (data && !data.ok && data.detail) {
+          addMessage(data.detail, 'system');
+        }
+      })
+      .catch(() => {/* 取消请求失败不阻塞按钮还原，后台 driver 继续由超时兜底 */});
+  }
+}
+
+// ---------- 实时干预（打断注入） ----------
+
+// 立即把输入框内容作为「打断指令」写入后端 inbox(next_step)，
+// 由运行中 agent 在下一个 LLM 调用边界注入。不打断正在执行的工具。
+function steerCurrentRun() {
+  const text = (input.value || '').trim();
+  const sessionId = currentSessionId || threadId;
+  if (!text) {
+    addMessage('⚡ ' + (t('steerEmpty') || '输入不能为空'), 'system');
+    return;
+  }
+  if (!streamingActive) {
+    addMessage('⚡ ' + (t('steerNotActive') || '当前无执行任务'), 'system');
+    // 无执行任务时回退为普通发送
+    send();
+    return;
+  }
+  const btn = document.getElementById('steer-btn');
+  if (btn) btn.disabled = true;
+  // 注意：不在本地立即 addUserMessage —— 后端在下个 LLM 边界注入后会回放
+  // 'user_message_injected' 事件（见 handleStreamEvent），由它补渲染正式 user 消息，
+  // 避免此处先渲染、事件又渲染导致重复。
+  input.value = '';
+  pendingAttachments = [];
+  renderAttachmentPreview();
+  resizeComposer();
+  addMessage('⚡ ' + (t('steerOutgoing') || '正在打断…'), 'system');
+
+  fetch(`/agent/sessions/${encodeURIComponent(sessionId)}/inject`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content: text, mode: 'step' }),
+  })
+    .then(res => res.json())
+    .then(data => {
+      if (btn) btn.disabled = false;
+      if (data && data.ok) {
+        // 后端会在下个 LLM 边界把该消息注入并回放 user_message_injected 事件（见 stream_run），
+        // 前端届时把该消息作为正式 user 消息补渲染；这里仅提示已注入。
+        addMessage('⚡ ' + (t('steerQueued') || '打断指令已注入（下一步生效）'), 'system');
+      } else {
+        addMessage('⚡ ' + ((data && data.detail) || '注入失败'), 'system');
+        // 失败时还原输入
+        input.value = text;
+      }
+    })
+    .catch(() => {
+      if (btn) btn.disabled = false;
+      addMessage('⚡ ' + (t('connectionInterrupted') || '连接中断'), 'system');
+      input.value = text;  // 还原输入，避免丢内容
+    });
 }
 
 // ---------- 核心 SSE 发送 ----------
@@ -1825,6 +1893,28 @@ function handleStreamEvent(data) {
     case 'model_switch':
       addMessage(t('modelSwitched', { reason: data.reason || (currentLanguage === 'en' ? 'request' : '请求'), model: data.model }), 'system');
       break;
+
+    case 'user_message_injected': {
+      // 实时干预：用户发的打断消息已在 LLM 边界注入（后端 stream_run 回放此事件）。
+      // 补渲染为正式 user 消息，让对话流完整。
+      markStreamActivity();
+      if (data && data.content) {
+        addUserMessage(data.content, []);
+      }
+      break;
+    }
+
+    case 'inbox_next_turn': {
+      // 排队（turn 模式）的消息，在本轮结束后由 driver 归还给前端，按序发起新一轮。
+      const msgs = data && Array.isArray(data.messages) ? data.messages : [];
+      if (msgs.length) {
+        const rt2 = sessionRuntimes.get(visibleSessionKey);
+        rt2.interventionQueue = rt2.interventionQueue || [];
+        for (const m of msgs) rt2.interventionQueue.push(m);
+        // 该事件紧跟在 done 之后、[DONE] 之前；send() 的 finally 会 drain interventionQueue 发起新一轮
+      }
+      break;
+    }
     
     case 'token':
     case 'token_delta':  // 回放端合并的批量 token（刷新恢复用，与逐字 token 同逻辑）

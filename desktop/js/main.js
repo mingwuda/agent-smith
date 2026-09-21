@@ -17,6 +17,12 @@ function setSendButtonRunning(running) {
   sendBtn.innerHTML = running
     ? '<svg width="16" height="16" viewBox="0 0 16 16"><rect x="3" y="3" width="10" height="10" rx="2" fill="currentColor"/></svg>'
     : '<svg width="18" height="18" viewBox="0 0 18 18"><path d="M2 9l14-7-7 14-2-5-5-2z" fill="currentColor"/></svg>';
+  // 打断注入按钮只在执行中显示（空闲隐藏）
+  const steerBtn = document.getElementById('steer-btn');
+  if (steerBtn) {
+    steerBtn.style.display = running ? '' : 'none';
+    if (!running) steerBtn.disabled = false;
+  }
 }
 
 // ---------- 定时器 ----------
