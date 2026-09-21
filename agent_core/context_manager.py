@@ -37,6 +37,47 @@ SUMMARY_MAX_CHARS = 6000         # 摘要文本安全上限（分层后实际远
 
 
 @dataclass
+class CompactionPolicy:
+    """单个模型的压缩策略（参考 dsh-compaction 的 modelPolicies 语义）。
+
+    - threshold_ratio: 上下文窗口的多大比例触发压缩（默认 COMPACTION_RATIO）
+    - retain_ratio:     压缩后保留最近轮 verbatim 占窗口比例
+    - retain_tokens:    若给定，则用绝对 token 数替代 retain_ratio（互斥）
+    - summarization_model / summarization_provider: 可选的专属摘要模型（空则复用主模型）
+    - max_retries:      单轮压缩后仍超阈值的重试次数上限
+    """
+    threshold_ratio: Optional[float] = None
+    retain_ratio: Optional[float] = None
+    retain_tokens: Optional[int] = None
+    summarization_model: str = ""
+    summarization_provider: str = ""
+    max_retries: int = 0
+
+
+# 按模型名（子串匹配）覆盖的压缩策略。未命中的模型用全局默认（COMPACTION_RATIO 等）。
+# key 支持局部匹配（如 "qwen-long" 匹配 "qwen-long-latest"），与 MODEL_CONTEXT_WINDOWS 一致。
+MODEL_COMPACTION_POLICIES: dict[str, CompactionPolicy] = {
+    # 超大窗口模型：触发阈值可以更高（充分利用长上下文，减少无谓压缩）
+    "qwen-long": CompactionPolicy(threshold_ratio=0.85),
+    "mimo-v2.5-pro": CompactionPolicy(threshold_ratio=0.85),
+    "gpt-4.1": CompactionPolicy(threshold_ratio=0.85),
+    # 常规窗口模型：保持默认 0.4，但显式声明供配置参考
+    "deepseek-chat": CompactionPolicy(),
+    "qwen-plus": CompactionPolicy(),
+    "claude": CompactionPolicy(),
+}
+
+
+def resolve_compaction_policy(model: str) -> CompactionPolicy:
+    """按模型名解析压缩策略；未命中则返回全默认策略（基于全局 COMPACTION_RATIO）。"""
+    model_name = (model or "").lower()
+    for key, policy in MODEL_COMPACTION_POLICIES.items():
+        if key in model_name:
+            return policy
+    return CompactionPolicy()
+
+
+@dataclass
 class CompactionReport:
     """一次上下文压缩的结构化结果（对齐 dsh-compaction 的 CompactionResult 语义）。
 
@@ -119,7 +160,26 @@ def context_window_tokens(model: str, configured: int = 0) -> int:
 
 
 def compaction_threshold_tokens(model: str, configured: int = 0) -> int:
-    return int(context_window_tokens(model, configured) * COMPACTION_RATIO)
+    window = context_window_tokens(model, configured)
+    return int(window * _threshold_ratio_for(model))
+
+
+def _threshold_ratio_for(model: str) -> float:
+    """返回模型的触发阈值比例（per-model 策略优先，否则全局 COMPACTION_RATIO）。"""
+    return resolve_compaction_policy(model).threshold_ratio or COMPACTION_RATIO
+
+
+def _retain_tokens_for(model: str, threshold: int) -> int:
+    """返回模型的最近轮 verbatim 保留预算（token 数）。
+
+    策略显式指定 retain_tokens 则用之；否则按 retain_ratio（或默认 RECENT_BUDGET_RATIO）
+    乘以 threshold 计算。与 compress_messages 的 P1 预算口径保持一致。
+    """
+    policy = resolve_compaction_policy(model)
+    if policy.retain_tokens is not None:
+        return max(0, policy.retain_tokens)
+    ratio = policy.retain_ratio or RECENT_BUDGET_RATIO
+    return int(threshold * ratio)
 
 
 # ---------------------------------------------------------------------------
@@ -400,7 +460,7 @@ def compact_messages_report(messages: list[BaseMessage], model: str, configured_
     round_of = _assign_rounds(dialogue)
 
     # P1: 最近轮 verbatim（按 token 预算 + 消息数上限），以工具组为原子单位避免切裂
-    recent_budget = int(threshold * RECENT_BUDGET_RATIO)
+    recent_budget = _retain_tokens_for(model, threshold)
     recent_groups: list = []
     used = 0
     for g in reversed(groups):
