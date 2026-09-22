@@ -1743,6 +1743,395 @@ def browser_captcha_scan_grid(config: RunnableConfig, grid_rows: int = 9, grid_c
         return f"❌ 网格扫描失败: {type(e).__name__}: {e}"
 
 
+# ══════════════════════════════════════════════════════════════
+# 表单决策（Jev 驱动）：枚举表单控件 → Jev 决策"填什么/选哪个" → 执行
+# ══════════════════════════════════════════════════════════════
+
+# 枚举可见表单控件与候选提交按钮。
+# ponytail: 一段内联 JS 就够了，不引第三方 DOM 库。天花板：不覆盖 canvas/自定义
+# 组件（无文本标签）与 shadow DOM 内部；需要时扩选择器即可，无需改架构。
+_FORM_ENUM_JS = r"""
+() => {
+  const vis = (el) => {
+    const r = el.getBoundingClientRect();
+    if (r.width <= 0 || r.height <= 0) return false;
+    const s = getComputedStyle(el);
+    return s.visibility !== 'hidden' && s.display !== 'none';
+  };
+  const esc = (s) => (window.CSS && CSS.escape) ? CSS.escape(s) : s;
+  const textOf = (el) => {
+    // 去掉内嵌的表单控件再取文本，否则 <label>所在行业<select>…</select></label> 会把选项文字也算进标签
+    const c = el.cloneNode(true);
+    c.querySelectorAll('input,select,textarea,button,svg').forEach(n => n.remove());
+    return (c.textContent || '').replace(/\s+/g, ' ').trim();
+  };
+  const labelOf = (el) => {
+    if (el.labels && el.labels.length) {
+      const t = Array.from(el.labels).map(textOf).filter(Boolean).join(' ').trim();
+      if (t) return t;
+    }
+    if (el.id) {
+      const l = document.querySelector('label[for="' + esc(el.id) + '"]');
+      if (l) return textOf(l);
+    }
+    const up = el.closest('label');
+    if (up) { const t = textOf(up); if (t) return t; }
+    return (el.getAttribute('aria-label') || el.getAttribute('placeholder') || '').trim();
+  };
+  const selOf = (el) => {
+    if (el.id && document.querySelectorAll('#' + esc(el.id)).length === 1) return '#' + esc(el.id);
+    if (el.name) {
+      const q = el.tagName.toLowerCase() + '[name="' + el.name + '"]';
+      if (document.querySelectorAll(q).length === 1) return q;
+      // 单选/复选常无 id，但同 name 下 value 唯一 → input[name=x][value=y] 稳定
+      if (el.value && el.value.indexOf('"') < 0) {
+        const q2 = q + '[value="' + el.value + '"]';
+        if (document.querySelectorAll(q2).length === 1) return q2;
+      }
+    }
+    return null;   // 无稳定选择器：调用方跳过并提示，不瞎猜
+  };
+  const fields = [];
+  for (const el of document.querySelectorAll('input, select, textarea')) {
+    const tag = el.tagName.toLowerCase(), type = (el.type || '').toLowerCase();
+    if (['hidden','submit','button','reset','image','file'].includes(type)) continue;
+    if (!vis(el)) continue;
+    const it = {tag, type, name: el.name || '', id: el.id || '',
+                label: labelOf(el), required: !!el.required, selector: selOf(el)};
+    if (tag === 'select') {
+      it.type = 'select';
+      it.options = Array.from(el.options).filter(o => !o.disabled)
+        .map(o => ({text: (o.text || '').trim(), value: o.value}))
+        .filter(o => o.text);
+      it.value = el.value;
+    } else if (type === 'radio' || type === 'checkbox') {
+      it.value = el.value; it.checked = !!el.checked;
+    } else {
+      it.value = el.value || '';
+    }
+    fields.push(it);
+  }
+  const buttons = [];
+  for (const b of document.querySelectorAll('button, input[type=submit]')) {
+    if (!vis(b)) continue;
+    const tag = b.tagName.toLowerCase();
+    const type = (b.getAttribute('type') || 'submit').toLowerCase();
+    if (tag === 'button' && type !== 'submit') continue;
+    buttons.push({selector: selOf(b), text: (b.innerText || b.value || '').trim().slice(0, 40)});
+  }
+  return {fields, buttons};
+}
+"""
+
+
+def _field_key(f: dict) -> str:
+    return f.get("name") or f.get("id") or f.get("label") or f.get("selector") or "?"
+
+
+def _lookup_value(values: dict, f: dict):
+    """按 label/name/id/selector 精确或包含匹配取值（文本框内容 Jev 生成不了，须由调用方给）。"""
+    keys = [f.get("label"), f.get("name"), f.get("id"), f.get("selector")]
+    norm = lambda s: str(s).strip().lower()
+    for k in keys:
+        if not k:
+            continue
+        for vk, vv in values.items():
+            if norm(vk) == norm(k):
+                return vv
+    for k in keys:
+        if not k or len(str(k)) < 2:
+            continue
+        kl = norm(k)
+        for vk, vv in values.items():
+            if norm(vk) in kl:
+                return vv
+    return None
+
+
+def _plan_form_actions(form: dict, goal: str, values: dict, submit: bool = False,
+                       client=None) -> tuple:
+    """纯函数：表单枚举结果 + 目标 → 待执行动作列表（Jev client 可注入，便于单测）。
+
+    返回 (actions, notes, state)：
+      - actions: [{"action": fill|check|uncheck|select|click, "selector":..., "value":..., "label":...}]
+      - notes:   跳过原因/无需改动等说明（给人看）
+      - state:   ["字段=最终值", ...] 各字段的**结果状态**摘要，供提交前核对（含未改动的字段）
+    Jev 不可用时（决策返回 None）跳过该字段并在 notes 里说明，不猜。
+    """
+    from tools.jev_tools import pick_option, option_matches, confirm_submit
+
+    actions, notes, state = [], [], []
+    fields = (form or {}).get("fields") or []
+
+    # 分组：radio 按 name 成组（单选），checkbox 同名成组（多选），其余各自独立
+    groups, order = {}, []
+    for f in fields:
+        t = f.get("type")
+        if t in ("radio", "checkbox") and f.get("name"):
+            gk = f"{t}:{f['name']}"
+        else:
+            gk = f"one:{f.get('selector') or _field_key(f)}"
+        if gk not in groups:
+            groups[gk] = []
+            order.append(gk)
+        groups[gk].append(f)
+
+    for gk in order:
+        items = groups[gk]
+        head = items[0]
+        t = head.get("type")
+        label = head.get("label") or head.get("name") or head.get("selector") or "?"
+        if t in ("radio", "checkbox"):
+            # 单选/复选组的每项 label 是"选项文本"，组名用 name/id（别拿选项文本当组名）
+            label = head.get("name") or head.get("id") or label
+        sel = head.get("selector")
+
+        if t in ("radio", "checkbox"):
+            by_label = {}
+            for it in items:
+                name = (it.get("label") or it.get("value") or "").strip()
+                if name and name not in by_label:
+                    by_label[name] = it
+            if not by_label:
+                notes.append(f"跳过「{label}」：选项无可读文本，无法决策")
+                state.append(f"{label}=(无法识别选项)")
+                continue
+            desc = f"{label}（{'单选' if t == 'radio' else '复选'}）"
+            if t == "radio":
+                picked = pick_option(goal, desc, list(by_label), client=client)
+                if not picked:
+                    notes.append(f"跳过「{label}」：Jev 未能决策（单选）")
+                    state.append(f"{label}=(未决定)")
+                    continue
+                it = by_label[picked]
+                state.append(f"{label}={picked}")
+                if it.get("checked"):
+                    notes.append(f"「{label}」已是 {picked}，无需改动")
+                elif not it.get("selector"):
+                    notes.append(f"跳过「{picked}」：无稳定选择器")
+                else:
+                    actions.append({"action": "check", "selector": it["selector"],
+                                    "label": f"{label}={picked}"})
+            else:
+                chosen, undecided = [], []
+                for name, it in by_label.items():
+                    want = option_matches(goal, desc, name, client=client)
+                    if want is None:
+                        notes.append(f"跳过「{name}」：Jev 未能决策（复选）")
+                        undecided.append(name)
+                        continue
+                    if want:
+                        chosen.append(name)
+                    if not it.get("selector"):
+                        notes.append(f"跳过「{name}」：无稳定选择器")
+                        continue
+                    if want and not it.get("checked"):
+                        actions.append({"action": "check", "selector": it["selector"],
+                                        "label": f"{label}={name}"})
+                    elif not want and it.get("checked"):
+                        actions.append({"action": "uncheck", "selector": it["selector"],
+                                        "label": f"{label}={name}（取消勾选）"})
+                if undecided:
+                    chosen.append("(未决定:" + ",".join(undecided) + ")")
+                state.append(f"{label}=[{', '.join(chosen)}]")
+
+        elif t == "select":
+            opts = [o["text"] for o in (head.get("options") or [])]
+            if not opts or not sel:
+                notes.append(f"跳过「{label}」：无选项或无稳定选择器")
+                state.append(f"{label}=(不可选)")
+                continue
+            picked = pick_option(goal, f"{label}（下拉框）", opts, client=client)
+            if not picked:
+                notes.append(f"跳过「{label}」：Jev 未能决策（下拉框）")
+                state.append(f"{label}=(未决定)")
+                continue
+            val = next((o["value"] for o in head["options"] if o["text"] == picked), picked)
+            state.append(f"{label}={picked}")
+            if head.get("value") == val:
+                notes.append(f"「{label}」已是 {picked}，无需改动")
+            else:
+                actions.append({"action": "select", "selector": sel, "value": val,
+                                "label": f"{label}={picked}"})
+
+        else:  # 文本类：Jev 不能生成内容，只能取调用方提供的值
+            val = _lookup_value(values, head)
+            if val is None:
+                state.append(f"{label}=(空)")
+                if head.get("required") or values:
+                    notes.append(f"跳过「{label}」：未提供该文本字段的值（Jev 不生成文本）")
+                continue
+            state.append(f"{label}={str(val)[:40]}")
+            if not sel:
+                notes.append(f"跳过「{label}」：无稳定选择器")
+                continue
+            if str(head.get("value") or "") == str(val):
+                notes.append(f"「{label}」已是该值，无需改动")
+            else:
+                actions.append({"action": "fill", "selector": sel, "value": str(val),
+                                "label": f"{label}={str(val)[:40]}"})
+
+    if submit:
+        # 按钮可能既无 id 也无 name（selector=null）→ 保留 text，执行时用 role/text 定位
+        btns = [b for b in ((form or {}).get("buttons") or []) if b.get("selector") or b.get("text")]
+        if not btns:
+            notes.append("未找到可用的提交按钮，未提交")
+        else:
+            texts = [b["text"] or f"按钮{i}" for i, b in enumerate(btns)]
+            if len(btns) == 1:
+                pick = texts[0]
+            else:
+                pick = pick_option(goal, "提交按钮（单选）", texts, client=client)
+            if not pick:
+                notes.append("Jev 未能选出提交按钮，未提交")
+            else:
+                btn = btns[texts.index(pick)]   # ponytail: 文案重复时取第一个，够用
+                ok = confirm_submit(goal, "; ".join(state), client=client)
+                if ok is False:
+                    notes.append("Jev 判定表单状态与目标不符，已跳过提交（请人工确认）")
+                else:
+                    action = {"action": "click", "selector": btn.get("selector"), "text": pick,
+                              "label": f"提交（{pick}）"}
+                    actions.append(action)
+
+    return actions, notes, state
+
+
+@tool
+def browser_form_inspect(config: RunnableConfig) -> str:
+    """枚举当前页面的表单控件（输入框/单选/复选/下拉/提交按钮）。
+
+    只读，不修改页面。用于在 browser_form_fill 前了解表单结构，或人工核对。
+    """
+    thread_id = config.get("configurable", {}).get("thread_id", "default")
+
+    async def _run():
+        page = await _ensure_browser(thread_id)
+        form = await page.evaluate(_FORM_ENUM_JS)
+        fields = form.get("fields") or []
+        if not fields and not form.get("buttons"):
+            return "未在当前页面发现可见表单控件。"
+        lines = [f"发现 {len(fields)} 个表单控件："]
+        for f in fields:
+            kind = f.get("type") or f.get("tag")
+            desc = f"- [{kind}] {f.get('label') or f.get('name') or '（无标签）'}"
+            if f.get("required"):
+                desc += " *必填"
+            if kind == "select":
+                desc += " 选项: " + " / ".join(o["text"] for o in (f.get("options") or []))
+            elif kind in ("radio", "checkbox"):
+                desc += f" 值={f.get('value')} 当前={'已选' if f.get('checked') else '未选'}"
+            elif f.get("value"):
+                desc += f" 当前值={str(f['value'])[:30]}"
+            lines.append(desc)
+        btns = [b.get("text") for b in (form.get("buttons") or [])]
+        if btns:
+            lines.append("提交按钮: " + " / ".join(t or "(无文本)" for t in btns))
+        return "\n".join(lines)
+
+    try:
+        return _run_browser(_run(), thread_id)
+    except Exception as e:
+        return f"❌ 表单枚举失败: {type(e).__name__}: {e}"
+
+
+@tool
+def browser_form_fill(goal: str, config: RunnableConfig, values: str = "",
+                      submit: bool = False, dry_run: bool = False) -> str:
+    """用自然语言目标自动填写表单（单选/复选/下拉/文本），可选提交。
+
+    内部流程：枚举表单控件 → Jev 逐字段决策（单选 Choice、复选 Noul、提交 Noul 校验）
+    → 执行。Jev 只做"选择/判断"，不生成文本，所以文本字段的值必须由 values 提供。
+
+    参数:
+      goal: 自然语言目标（如"选技术类，勾选订阅周报，然后提交"）
+      values: 文本字段的取值，JSON 对象字符串，键用 label/name/id 均可（如 '{"邮箱":"a@b.com"}'）
+      submit: 是否在填完后点提交按钮（默认 false，先看清楚再提交更稳）。
+              只有 Jev 明确判定"与目标不符"才会拦下提交；Jev 不可用时不拦（提交是你显式要求的）
+      dry_run: true 时只返回"打算怎么做"，不真正改动页面（推荐先跑一次）
+    """
+    thread_id = config.get("configurable", {}).get("thread_id", "default")
+
+    values_dict = {}
+    if values:
+        try:
+            parsed = json.loads(values)
+            if isinstance(parsed, dict):
+                values_dict = parsed
+            else:
+                return f"❌ values 必须是 JSON 对象字符串，收到: {values[:80]}"
+        except Exception as e:
+            return f"❌ values 解析失败（需 JSON 对象）: {e}"
+
+    async def _enumerate():
+        page = await _ensure_browser(thread_id)
+        return await page.evaluate(_FORM_ENUM_JS)
+
+    try:
+        form = _run_browser(_enumerate(), thread_id)
+    except Exception as e:
+        return f"❌ 表单枚举失败: {type(e).__name__}: {e}"
+
+    # Jev 决策放在浏览器锁之外（同步 HTTP 不能占用浏览器事件循环）
+    try:
+        actions, notes, state = _plan_form_actions(form, goal, values_dict, submit=submit)
+    except Exception as e:
+        return f"❌ 表单决策失败: {type(e).__name__}: {e}"
+
+    head = [f"🎯 目标: {goal}", f"表单控件 {len(form.get('fields') or [])} 个，计划动作 {len(actions)} 项"]
+    if state:
+        head.append("填后状态: " + "; ".join(state))
+    if not actions:
+        head.append("无需改动或无法决策（见下）")
+    for a in actions:
+        head.append(f"  · {a['action']}: {a.get('label') or a['selector']}")
+    if notes:
+        head.append("说明:")
+        head.extend(f"  - {n}" for n in notes)
+
+    if dry_run:
+        head.append("\n（dry_run=true，未改动页面）")
+        return "\n".join(head)
+
+    async def _apply():
+        page = await _ensure_browser(thread_id)
+        done, failed = [], []
+        for a in actions:
+            try:
+                if a["action"] == "fill":
+                    await page.fill(a["selector"], a["value"], timeout=10000)
+                elif a["action"] == "check":
+                    await page.check(a["selector"], timeout=10000)
+                elif a["action"] == "uncheck":
+                    await page.uncheck(a["selector"], timeout=10000)
+                elif a["action"] == "select":
+                    await page.select_option(a["selector"], a["value"], timeout=10000)
+                elif a["action"] == "click":
+                    if a.get("selector"):
+                        await page.click(a["selector"], timeout=10000)
+                    else:
+                        # 按钮无 id/name → 用可访问名定位（Playwright role 引擎）
+                        await page.get_by_role("button", name=a.get("text") or "").first.click(timeout=10000)
+                done.append(a)
+            except Exception as e:
+                failed.append(f"{a.get('label') or a.get('selector')}: {type(e).__name__}: {e}")
+        await asyncio.sleep(0.5)  # 等页面响应
+        info = await _page_info(page)
+        return done, failed, info
+
+    try:
+        done, failed, info = _run_browser(_apply(), thread_id)
+    except Exception as e:
+        return "\n".join(head) + f"\n\n❌ 表单填写失败: {type(e).__name__}: {e}"
+
+    out = head + [f"\n✅ 已执行 {len(done)} 项"]
+    if failed:
+        out.append(f"❌ 失败 {len(failed)} 项:")
+        out.extend(f"  - {f}" for f in failed)
+    out.append(f"\n{info}")
+    return "\n".join(out)
+
+
 TOOLS = [
     browser_navigate,
     browser_click,
@@ -1762,4 +2151,7 @@ TOOLS = [
     browser_click_captcha,
     browser_captcha_refresh,
     browser_captcha_scan_grid,
+    # 表单决策（Jev）
+    browser_form_inspect,
+    browser_form_fill,
 ]

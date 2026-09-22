@@ -7,9 +7,12 @@ Jev 是 TypeSafe AI 的「系统一模型」：不生成文本，只返回带校
   - choice(多选一 + 各选项概率)
   - score (对有序档位的打分 0~N)
 
-同时提供两个业务层封装（内部用三原语组合）：
+同时提供业务层封装（内部用三原语组合）：
   - risk_gate            ：shell 命令语义风险门控（本项目最契合场景）
   - captcha_confidence   ：浏览器验证码识别结果的二次置信度校验
+  - loop_should_stop     ：agent 防循环的二次确认
+  - vision_pick_model    ：视觉模型路由
+  - pick_option / option_matches / confirm_submit：浏览器表单（单选/多选/提交）决策
 
 ## 设计原则
 1. **零第三方依赖**：仅用标准库 urllib.request（httpx 虽已装，但本库保持零依赖，
@@ -220,7 +223,7 @@ def loop_should_stop(tool_name: str, args_summary: str, repeat_count: int,
     """
     clf = client or _client(api_key)
     noul = clf.noul(
-        f"tool={tool_name} repeat_count={repeat_count} args_summary={args_summary[:500]}",
+        f"tool={tool_name} repeat_count={repeat_count} args_summary={str(args_summary)[:500]}",
         (
             "An AI agent keeps calling the same tool with near-identical arguments. "
             "Return 1.0 if this is a futile loop that should be STOPPED now; return 0.0 "
@@ -251,6 +254,62 @@ def vision_pick_model(state_text: str, candidates: List[str],
         return None
     pick = r.get("choice")
     return pick if pick in candidates else None
+
+
+# ── 表单决策（浏览器表单填充场景）────────────────────────────
+
+def pick_option(goal: str, field_desc: str, options: List[str],
+                api_key: Optional[str] = None, client=None) -> Optional[str]:
+    """单选决策（Choice）：从候选项里选出最符合目标的**一个**（单选组/下拉框）。
+
+    goal: 用户目标（自然语言）；field_desc: 字段描述（标签+类型）；
+    options: 候选选项文本列表。返回选中的选项文本（保证在 options 内），失败 None。
+    """
+    if not options:
+        return None
+    clf = client or _client(api_key)
+    r = clf.choice(
+        f"goal={goal}\nfield={field_desc}\noptions={json.dumps(options, ensure_ascii=False)}",
+        "Pick the single option that best fulfils the user's goal for this form field. "
+        "If the goal does not specify any suitable option, pick the most neutral/default one.",
+        {o: f"option: {o}" for o in options},
+    )
+    if not r:
+        return None
+    pick = r.get("choice")
+    return pick if pick in options else None
+
+
+def option_matches(goal: str, field_desc: str, option: str,
+                   api_key: Optional[str] = None, client=None) -> Optional[bool]:
+    """多选单项判定（Noul）：逐项判断某复选框是否应勾选。返回 True/False/None。"""
+    clf = client or _client(api_key)
+    noul = clf.noul(
+        f"goal={goal}\nfield={field_desc}\noption={option}",
+        "Given the user's goal, return 1.0 if this checkbox option SHOULD be checked; "
+        "return 0.0 if it should be left unchecked.",
+    )
+    if noul is None:
+        return None
+    return _normalize_bool(noul)
+
+
+def confirm_submit(goal: str, form_summary: str,
+                   api_key: Optional[str] = None, client=None) -> Optional[bool]:
+    """提交前确认（Noul）：表单已填内容是否与目标一致、可以安全提交。None=不可用。
+
+    form_summary 建议用 "字段=值; 字段=值" 的紧凑形式（实测该格式判别力明显更好：
+    正确 0.94 / 矛盾 0.05 / 缺必填 0.06）。
+    """
+    clf = client or _client(api_key)
+    noul = clf.noul(
+        f"goal={goal}\nform={str(form_summary)[:800]}",
+        "Return 1.0 if the filled form matches the user's goal and is ready to submit; "
+        "return 0.0 if any filled value contradicts the goal or a required field is missing.",
+    )
+    if noul is None:
+        return None
+    return _normalize_bool(noul)
 
 
 # ════════════════════════════════════════════════════════════════

@@ -119,6 +119,8 @@ def _resolve_vision_model():
     order = [active_pid] + [p for p in providers if p != active_pid]
     for pid in order:
         prov = providers.get(pid) or {}
+        if not isinstance(prov, dict):
+            continue  # __provider_order__ 等排序元数据不是 provider
         vision_models = prov.get("vision_models") or []
         if not vision_models:
             continue
