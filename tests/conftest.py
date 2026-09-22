@@ -20,5 +20,9 @@ _TMP_HOME = Path(tempfile.mkdtemp(prefix="desktop_agent_pytest_home_"))
 os.environ["HOME"] = str(_TMP_HOME)
 os.environ["USERPROFILE"] = str(_TMP_HOME)  # Windows 兼容（Path.home 走 USERPROFILE）
 
+# 外部服务隔离：测试进程继承的 Jev key 会让 loop_guard / 验证码校验等接入点
+# 在单测里发起真实 HTTP 调用（慢且不稳定）。测试一律走 fake client，弹掉该 key。
+os.environ.pop("TYPESAFE_API_KEY", None)
+
 # pytest 不会自动清理 mkdtemp 目录，注册进程退出钩子确保测试完删掉临时数据
 atexit.register(shutil.rmtree, _TMP_HOME, ignore_errors=True)

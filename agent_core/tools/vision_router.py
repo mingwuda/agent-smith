@@ -122,7 +122,19 @@ def _resolve_vision_model():
         vision_models = prov.get("vision_models") or []
         if not vision_models:
             continue
-        model_name = vision_models[0]  # 取第一个被标记的视觉模型
+        # Jev 路由：候选 >1 时让 Jev 挑最合适的视觉模型；失败/单候选回退取第一个
+        model_name = vision_models[0]
+        if len(vision_models) > 1:
+            try:
+                from tools.jev_tools import vision_pick_model
+                _picked = vision_pick_model(
+                    f"active_provider={pid} candidates={vision_models}",
+                    vision_models,
+                )
+                if _picked:
+                    model_name = _picked
+            except Exception:
+                pass  # Jev 不可用 → 回退取第一个
         api_key = prov.get("api_key") or getattr(cfg, "api_key", "") or ""
         base_url = prov.get("base_url") or getattr(cfg, "base_url", "") or ""
         if not api_key or not model_name:

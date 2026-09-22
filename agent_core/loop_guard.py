@@ -1,9 +1,12 @@
 """防循环检测（纯逻辑，仅依赖标准库，便于独立测试）。
 
-在 agent.py 的工具调用流中周期性调用：命中循环模式时返回非空原因字符串，
-由调用方提前终止本轮任务。详见 agent.py 中 _detect_tool_loop 的调用点。
+在 agent_run.py 的工具调用流中周期性调用：命中循环模式时返回非空原因字符串，
+由调用方提前终止本轮任务。详见 agent_run.py 中 _detect_tool_loop 的调用点。
 """
+import logging
 from typing import Dict, List
+
+logger = logging.getLogger(__name__)
 
 
 # ponytail: 探索类工具（搜索/执行）天然会被反复调用且参数各异，
@@ -30,6 +33,18 @@ def _detect_tool_loop(calls: List[Dict], recursion_limit: int, current_steps: in
         last30_sigs = [item.get("signature", "") for item in calls[-30:] if item.get("signature")]
         count = last30_sigs.count(latest_sig)
         if count >= 20:
+            # Jev 二次确认：减少"参数微调但目标一致"被误杀。Jev 不可用 → 维持原判定（停）。
+            # ponytail: 同步 HTTP（≤2s）跑在事件流协程里会短暂阻塞，但仅循环命中时触发（低频）。
+            try:
+                from tools.jev_tools import loop_should_stop
+                _jev = loop_should_stop(
+                    latest.get("tool", ""), latest_sig, count,
+                )
+                if _jev is False:
+                    logger.info("[loop_guard] Jev 判定重复调用可能有效（count=%d），跳过中断", count)
+                    return ""
+            except Exception:
+                pass  # Jev 不可用 → 按原判定中断
             return f"最近 30 次工具调用中，同一工具和参数严格重复了 {count} 次"
 
     # ── 检测2：参数循环（A→B→A→B 模式）──

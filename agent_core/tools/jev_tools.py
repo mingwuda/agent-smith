@@ -196,18 +196,61 @@ def risk_gate(command: str, api_key: Optional[str] = None, client=None) -> Dict[
     }
 
 
-def captcha_confidence(state_text: str, api_key: Optional[str] = None) -> Optional[float]:
+def captcha_confidence(state_text: str, api_key: Optional[str] = None, client=None) -> Optional[float]:
     """验证码识别结果的二次置信度校验（Noul）。
 
     对 LLM 识别验证码后的结果做交叉校验，减少"识别错→白点/白刷"的无效动作。
     state_text: 待判断文本（如验证码描述 + 识别结果 + 页面提示）。返回置信度 0~1，失败 None。
     """
-    clf = _client(api_key)
+    clf = client or _client(api_key)
     return clf.noul(state_text, (
         "The following is a description of an image and the result of an automated captcha "
         "recognition. Return 1.0 if the recognition result is highly likely CORRECT and "
         "confident; return 0.0 if it is likely wrong, incomplete, or should be refreshed/re-done."
     ))
+
+
+def loop_should_stop(tool_name: str, args_summary: str, repeat_count: int,
+                     api_key: Optional[str] = None, client=None) -> Optional[bool]:
+    """防循环二次确认（Noul）：正则/签名检测命中循环后，问 Jev 是否真的该停。
+
+    仅在 loop_guard 已命中循环模式时调用（低频），用于减少"参数微调但目标一致"
+    被误杀的情况。返回 True=建议停止，False=建议继续，None=Jev 不可用（调用方
+    按原判定执行，即命中即停）。
+    """
+    clf = client or _client(api_key)
+    noul = clf.noul(
+        f"tool={tool_name} repeat_count={repeat_count} args_summary={args_summary[:500]}",
+        (
+            "An AI agent keeps calling the same tool with near-identical arguments. "
+            "Return 1.0 if this is a futile loop that should be STOPPED now; return 0.0 "
+            "if the repetition is plausibly productive (e.g. polling a changing resource, "
+            "retrying an operation that may succeed) and should be allowed to continue."
+        ),
+    )
+    if noul is None:
+        return None
+    return _normalize_bool(noul)
+
+
+def vision_pick_model(state_text: str, candidates: List[str],
+                      api_key: Optional[str] = None, client=None) -> Optional[str]:
+    """视觉模型路由（Choice）：从候选视觉模型中挑一个最适合当前任务的。
+
+    candidates 为空或 Jev 不可用时返回 None，调用方回退现有"取第一个"逻辑。
+    """
+    if not candidates:
+        return None
+    clf = client or _client(api_key)
+    criteria = {m: f"vision model: {m}" for m in candidates}
+    r = clf.choice(state_text, (
+        "Pick the vision model best suited for describing this image. "
+        "Consider general image understanding capability and reliability."
+    ), criteria)
+    if not r:
+        return None
+    pick = r.get("choice")
+    return pick if pick in candidates else None
 
 
 # ════════════════════════════════════════════════════════════════
