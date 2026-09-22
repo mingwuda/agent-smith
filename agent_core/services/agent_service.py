@@ -92,7 +92,27 @@ def _current_model_name() -> str:
         return ""
 
 
-def _save_assistant_result(uid: str, session_id: str, user_message: str, result: str, steps: Optional[list[dict]] = None, todo_list: Optional[dict] = None):
+def _request_effective_model(model_override: str = "", provider_override: str = "") -> str:
+    """解析本次请求真正生效的模型名（与 _build_llm 同一套规则）。
+
+    规则（见 agent_init._resolve_provider_config）：
+        pid    = provider_override or config.active_provider
+        model  = model_override or provider.model or config.model
+    返回实际的模型名；任何异常回退到全局默认模型名（_current_model_name）。
+    """
+    try:
+        from app_state import get_agent
+        agent = get_agent()
+        if agent is not None and hasattr(agent, "_resolve_provider_config"):
+            _pid, model = agent._resolve_provider_config(model_override, provider_override)[:2]
+            if model:
+                return str(model)
+    except Exception:
+        pass
+    return _current_model_name()
+
+
+def _save_assistant_result(uid: str, session_id: str, user_message: str, result: str, steps: Optional[list[dict]] = None, todo_list: Optional[dict] = None, model: str = ""):
     # 存储前剥离历史浏览器截图引用，防止旧截图 URL 持久化到 session store
     result = _strip_screenshot_urls(result)
     content = result
@@ -103,7 +123,7 @@ def _save_assistant_result(uid: str, session_id: str, user_message: str, result:
         if todo_list:
             payload["todo_list"] = todo_list
         content = json.dumps(payload, ensure_ascii=False)
-    session_store.add_message(uid, session_id, "assistant", content, model=_current_model_name())
+    session_store.add_message(uid, session_id, "assistant", content, model=model or _current_model_name())
     title = user_message[:30] + ("..." if len(user_message) > 30 else "")
     session_store.rename_session(uid, session_id, title or f"会话 {session_id[:8]}")
 

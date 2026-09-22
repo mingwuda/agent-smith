@@ -25,6 +25,7 @@ from services.agent_service import (
     _async_reflect,
     _reflect_from_feedback,
     _strip_screenshot_urls,
+    _request_effective_model,
 )
 from logger import set_log_context, get_logger
 from config import AgentConfig
@@ -169,6 +170,9 @@ async def run_agent(req: RunRequest, request: Request):
     model_override = _image_model_override(attachments)
     # 解析可选的 provider 覆盖：仅当该 provider 在配置中存在时才生效（否则回退到全局 active_provider）
     provider_override = req.provider if (req.provider and agent and req.provider in (getattr(agent.config, "providers", {}) or {})) else ""
+    # 本次请求实际生效的模型名（与 LLM 构建同一个规则：override > provider.model > config.model）。
+    # 回放消息展示「用户请求用的模型」，不能用全局默认模型（_current_model_name）。
+    effective_model = _request_effective_model(model_override, provider_override)
     # ── 解析文本文件内容，直接嵌入 agent 消息 ──
     agent_message = req.message
     if attachments:
@@ -202,7 +206,7 @@ async def run_agent(req: RunRequest, request: Request):
             pass
     if _is_skill_inventory_query(req.message):
         result = _format_loaded_skills()
-        _save_assistant_result(uid, session_id, req.message, result)
+        _save_assistant_result(uid, session_id, req.message, result, model=effective_model)
         return RunResponse(result=result, steps=[])
 
     result, steps = await agent.run(
@@ -234,7 +238,7 @@ async def run_agent(req: RunRequest, request: Request):
         and step.get("args", {}).get("path")
     ]
     result = _append_artifact_links(result, uid, artifact_paths)
-    _save_assistant_result(uid, session_id, req.message, result, todo_list=todo_list_r)
+    _save_assistant_result(uid, session_id, req.message, result, todo_list=todo_list_r, model=effective_model)
     
     # 后台反思
     asyncio.create_task(_async_reflect(uid, req.message, steps, result))
@@ -263,6 +267,9 @@ async def run_agent_stream(req: RunRequest, request: Request):
     session_store.add_message(uid, session_id, "user", display_text)
     model_override = _image_model_override(attachments)
     provider_override = req.provider if (req.provider and agent and req.provider in (getattr(agent.config, "providers", {}) or {})) else ""
+    # 本次请求实际生效的模型名（与 LLM 构建同一个规则：override > provider.model > config.model）。
+    # 回放消息展示「用户请求用的模型」，不能用全局默认模型（_current_model_name）。
+    effective_model = _request_effective_model(model_override, provider_override)
     agent_message = req.message
     if attachments:
         try:
@@ -293,7 +300,7 @@ async def run_agent_stream(req: RunRequest, request: Request):
             pass
     if _is_skill_inventory_query(req.message):
         result = _format_loaded_skills()
-        _save_assistant_result(uid, session_id, req.message, result)
+        _save_assistant_result(uid, session_id, req.message, result, model=effective_model)
 
         async def skill_inventory_stream():
             yield f"data: {json.dumps({'type': 'done', 'content': result}, ensure_ascii=False)}\n\n"
@@ -317,6 +324,7 @@ async def run_agent_stream(req: RunRequest, request: Request):
         agent_message=agent_message, history=history_messages,
         attachments=attachments, model_override=model_override,
         provider_override=provider_override,
+        effective_model=effective_model,
         req=req, artifact_paths=artifact_paths,
         collected_steps=collected_steps,
         collected_todo_list=collected_todo_list,
@@ -502,6 +510,7 @@ async def _drive_agent_stream(
     attachments: list,
     model_override: str,
     provider_override: str,
+    effective_model: str,
     req: RunRequest,
     artifact_paths: list,
     collected_steps: list,
@@ -601,13 +610,13 @@ async def _drive_agent_stream(
             if final_content:
                 final_content = _strip_screenshot_urls(final_content)
                 final_content = _append_artifact_links(final_content, uid, artifact_paths)
-                _save_assistant_result(uid, session_id, req.message, final_content, collected_steps, collected_todo_list)
+                _save_assistant_result(uid, session_id, req.message, final_content, collected_steps, collected_todo_list, model=effective_model)
                 hub.publish(f"data: {json.dumps({'type': 'done', 'content': final_content}, ensure_ascii=False)}\n\n")
             elif error_content:
-                _save_assistant_result(uid, session_id, req.message, "❌ " + error_content, collected_steps, collected_todo_list)
+                _save_assistant_result(uid, session_id, req.message, "❌ " + error_content, collected_steps, collected_todo_list, model=effective_model)
             elif artifact_paths:
                 summary = _append_artifact_links("任务已完成，文件已保存。", uid, artifact_paths)
-                _save_assistant_result(uid, session_id, req.message, summary, collected_steps, collected_todo_list)
+                _save_assistant_result(uid, session_id, req.message, summary, collected_steps, collected_todo_list, model=effective_model)
                 hub.publish(f"data: {json.dumps({'type': 'done', 'content': summary}, ensure_ascii=False)}\n\n")
             elif not forwarded_terminal_event:
                 fallback = (
@@ -616,11 +625,11 @@ async def _drive_agent_stream(
                     f"当前最大推理步数为 {agent.config.recursion_limit}。可直接重试；"
                     "若任务较复杂，可提高该值或把任务拆小后再试。"
                 )
-                _save_assistant_result(uid, session_id, req.message, fallback, collected_steps, collected_todo_list)
+                _save_assistant_result(uid, session_id, req.message, fallback, collected_steps, collected_todo_list, model=effective_model)
                 hub.publish(f"data: {json.dumps({'type': 'done', 'content': fallback}, ensure_ascii=False)}\n\n")
             else:
                 note = "（本轮已结束，但未生成正文；已记录以下工作步骤。）"
-                _save_assistant_result(uid, session_id, req.message, note, collected_steps, collected_todo_list)
+                _save_assistant_result(uid, session_id, req.message, note, collected_steps, collected_todo_list, model=effective_model)
                 hub.publish(f"data: {json.dumps({'type': 'done', 'content': note}, ensure_ascii=False)}\n\n")
         except Exception as e:
             logger.exception("[driver] finalize error")
