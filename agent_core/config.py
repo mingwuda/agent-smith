@@ -81,6 +81,7 @@ class AgentConfig:
     tavily_api_key: str = ""
     tavily_search_url: str = "https://api.tavily.com/search"
     anysearch_api_key: str = ""
+    typesafe_api_key: str = ""
     
     # 更新
     update_server: str = ""
@@ -199,6 +200,7 @@ class AgentConfig:
             "TAVILY_API_KEY": ("tavily_api_key", str),
             "TAVILY_SEARCH_URL": ("tavily_search_url", str),
             "ANYSEARCH_API_KEY": ("anysearch_api_key", str),
+            "TYPESAFE_API_KEY": ("typesafe_api_key", str),
             "AGENT_UPDATE_SERVER": ("update_server", str),
             "ANTHROPIC_API_KEY": ("api_key", str),  # 兼容
             "ANTHROPIC_BASE_URL": ("base_url", str),  # 兼容
@@ -322,12 +324,27 @@ class AgentConfig:
         self.providers["__provider_order__"] = valid_ids
 
     def set_model_order(self, provider_id: str, order: list[str]):
-        """保存指定 provider 的模型显示顺序"""
+        """保存指定 provider 的模型显示顺序。
+
+        order 是前端提交的"该 provider 当前完整模型列表"（前端从 provider.models 实时构造）。
+        因此这里不仅重排显示顺序，还同步收缩 provider["models"]，使前端删除单个模型能真正落库
+        （否则被删模型仍驻留在 models，下次加载又冒出来）。自定义 provider 才收缩，避免误动内置路径。
+        """
         self._normalize_providers()
         if provider_id not in self.providers:
             return
-        valid = [m for m in order if m in self.providers[provider_id].get("models", [])]
-        self.providers[provider_id]["model_order"] = valid
+        provider = self.providers[provider_id]
+        valid = [m for m in order if m in provider.get("models", [])]
+        # 收缩 models 到 order（order 即用户当前的权威模型列表），并清理关联字段残留
+        if provider.get("is_custom"):
+            removed = set(provider.get("models", [])) - set(valid)
+            if removed:
+                provider["models"] = valid
+                provider["vision_models"] = [m for m in provider.get("vision_models", []) if m not in removed]
+                if provider.get("model", "") in removed:
+                    provider["model"] = valid[0] if valid else ""
+                self._sync_effective_model()
+        provider["model_order"] = valid
 
     def set_vision_models(self, provider_id: str, models: list[str]):
         """标记该 provider 下哪些模型支持图片输入（来自设置页的显式勾选）。"""
@@ -389,6 +406,7 @@ class AgentConfig:
             "tavily_api_key": self.tavily_api_key,
             "tavily_search_url": self.tavily_search_url,
             "anysearch_api_key": self.anysearch_api_key,
+            "typesafe_api_key": self.typesafe_api_key,
             "review_provider_id": self.review_provider_id,
             "review_model": self.review_model,
             "update_server": self.update_server,
@@ -454,6 +472,8 @@ class AgentConfig:
             "tavily_search_url": self.tavily_search_url or "https://api.tavily.com/search",
             "anysearch_api_key_configured": bool(self.anysearch_api_key),
             "anysearch_api_key_preview": self.anysearch_api_key[:8] + "..." if len(self.anysearch_api_key) > 8 else ("已设置" if self.anysearch_api_key else "未设置"),
+            "typesafe_api_key_configured": bool(self.typesafe_api_key),
+            "typesafe_api_key_preview": self.typesafe_api_key[:8] + "..." if len(self.typesafe_api_key) > 8 else ("已设置" if self.typesafe_api_key else "未设置"),
             "review_provider_id": self.review_provider_id,
             "review_model": self.review_model,
             "update_server": self.update_server,

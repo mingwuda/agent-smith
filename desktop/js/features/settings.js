@@ -530,6 +530,7 @@ async function saveSettings() {
         tavily_api_key: document.getElementById('s-tavily-api-key').value,
         tavily_search_url: document.getElementById('s-tavily-search-url').value,
         anysearch_api_key: document.getElementById('s-anysearch-api-key').value,
+        typesafe_api_key: document.getElementById('s-typesafe-api-key').value,
         review_provider_id: document.getElementById('s-review-provider').value,
         review_model: document.getElementById('s-review-model').value,
         update_server: document.getElementById('s-update-server') ? document.getElementById('s-update-server').value : '',
@@ -555,6 +556,7 @@ async function saveSettings() {
       document.getElementById('s-api-key').value = '';
       document.getElementById('s-tavily-api-key').value = '';
       document.getElementById('s-anysearch-api-key').value = '';
+      document.getElementById('s-typesafe-api-key').value = '';
       // 刷新状态
       setTimeout(async () => {
         closeSettings();
@@ -824,6 +826,14 @@ function renderParamsFields(data) {
       ? t('anysearchApiKeySaved', { preview: data.anysearch_api_key_preview })
       : t('anysearchApiKeyNotSaved');
   }
+  const typesafeKey = document.getElementById('s-typesafe-api-key');
+  const typesafeHint = document.getElementById('s-typesafe-api-key-hint');
+  if (typesafeKey) typesafeKey.value = '';
+  if (typesafeHint) {
+    typesafeHint.textContent = data.typesafe_api_key_configured
+      ? t('typesafeApiKeySaved', { preview: data.typesafe_api_key_preview })
+      : t('typesafeApiKeyNotSaved');
+  }
 
   // 联动前端 fetch 总超时：留 30s 余量，且不小于 5 分钟，避免前端比后端硬超时先掐断
   if (typeof setFrontendFetchTimeoutMs === 'function' && data.llm_hard_timeout_seconds) {
@@ -856,7 +866,16 @@ async function persistOrder() {
   if (!isAdmin || !settingsData) return;
   const payload = {
     provider_order: settingsData.provider_order || [],
-    model_order: settingsData.model_order || {},
+    // ponytail: model_order 必须实时从 providers[pid].models 构造，而不能用陈旧的
+    // settingsData.model_order（它只在 saveSettings 时更新，视觉标记/排序走这里会
+    // 提交旧列表 → 后端 set_model_order 收缩 models 时会误删刚添加的模型）。
+    model_order: (() => {
+      const out = {};
+      Object.entries(settingsData.providers || {}).forEach(([pid, p]) => {
+        if (p.models && p.models.length) out[pid] = p.models;
+      });
+      return out;
+    })(),
     vision_models: {},
   };
   // 把每个厂商的 vision_models（按当前 settingsData）一并提交
@@ -901,4 +920,41 @@ async function toggleVisionModel(modelName, currentlyVision) {
   showToast('✅ ' + (currentLanguage === 'en'
     ? (currentlyVision ? 'Vision capability removed' : 'Marked as vision model')
     : (currentlyVision ? '已取消视觉模型标记' : '已标记为视觉模型')), 'success');
+}
+// 删除指定 Provider 下的单个模型（视觉模型列表行末的 ✕）
+// 与 addModelToProvider 对称：本地更新 provider.models + 相关字段，再 persistOrder 落库。
+// 此前仅 370 行处有调用却没有函数定义 → 点击报 ReferenceError 删除无效；这里补齐实现。
+async function deleteModelFromProvider(modelName) {
+  if (!isAdmin || !settingsData) return;
+  const select = document.getElementById('s-provider');
+  const providerId = select && select.value;
+  if (!providerId) return;
+  const provider = settingsData.providers[providerId];
+  if (!provider) return;
+
+  // 1) 从模型列表移除
+  if (Array.isArray(provider.models)) {
+    const i = provider.models.indexOf(modelName);
+    if (i >= 0) provider.models.splice(i, 1);
+  }
+  // 2) 若它是当前激活模型，回退到第一个模型
+  if (provider.model === modelName) {
+    provider.model = (provider.models && provider.models[0]) || '';
+  }
+  // 3) 同步清理 vision_models / model_order 里的残留
+  if (Array.isArray(provider.vision_models)) {
+    const vi = provider.vision_models.indexOf(modelName);
+    if (vi >= 0) provider.vision_models.splice(vi, 1);
+  }
+  if (Array.isArray(provider.model_order)) {
+    const oi = provider.model_order.indexOf(modelName);
+    if (oi >= 0) provider.model_order.splice(oi, 1);
+  }
+
+  // 重新渲染
+  renderVisionModels(provider);
+  populateProviderSelect(settingsData);
+  // 持久化
+  await persistOrder();
+  showToast('✅ ' + (currentLanguage === 'en' ? 'Model deleted' : '已删除模型'), 'success');
 }

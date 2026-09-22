@@ -45,6 +45,7 @@ class SettingsRequest(BaseModel):
     tavily_api_key: str = ""
     tavily_search_url: str = "https://api.tavily.com/search"
     anysearch_api_key: str = ""
+    typesafe_api_key: str = ""
     review_provider_id: str = ""
     review_model: str = ""
     update_server: str = ""
@@ -157,6 +158,8 @@ def save_settings(req: SettingsRequest, request: Request):
     cfg.tavily_search_url = req.tavily_search_url or cfg.tavily_search_url or "https://api.tavily.com/search"
     if req.anysearch_api_key:
         cfg.anysearch_api_key = req.anysearch_api_key
+    if req.typesafe_api_key:
+        cfg.typesafe_api_key = req.typesafe_api_key
     cfg.update_server = req.update_server or cfg.update_server
 
     # 保存排序
@@ -203,6 +206,10 @@ def save_settings(req: SettingsRequest, request: Request):
         os.environ["ANYSEARCH_API_KEY"] = cfg.anysearch_api_key
     else:
         os.environ.pop("ANYSEARCH_API_KEY", None)
+    if cfg.typesafe_api_key:
+        os.environ["TYPESAFE_API_KEY"] = cfg.typesafe_api_key
+    else:
+        os.environ.pop("TYPESAFE_API_KEY", None)
     if cfg.base_url:
         os.environ["LLM_BASE_URL"] = cfg.base_url
     else:

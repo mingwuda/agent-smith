@@ -631,6 +631,11 @@
             <input id="s-anysearch-api-key" type="password" placeholder="留空则保留已保存的 AnySearch API Key" autocomplete="new-password" />
             <div class="hint" id="s-anysearch-api-key-hint">留空则保留当前已保存的 AnySearch API Key。</div>
           </div>
+          <div class="form-group">
+            <label for="s-typesafe-api-key">TypeSafe (Jev) API Key</label>
+            <input id="s-typesafe-api-key" type="password" placeholder="留空则保留已保存的 TypeSafe API Key" autocomplete="new-password" />
+            <div class="hint" id="s-typesafe-api-key-hint">用于 Jev 结构化决策（shell 风险门控 / 模型路由等）。留空则保留当前已保存的 Key；未配置时相关功能自动跳过，不影响其它能力。</div>
+          </div>
 
           <div class="form-group" style="margin-top:8px;">
             <div class="hint" style="background:rgba(255,193,7,.08);border-left:3px solid #ffc107;padding:8px 10px;">修改后点击「保存设置」即生效，无需重启后端（Agent 会自动重新初始化）。</div>
