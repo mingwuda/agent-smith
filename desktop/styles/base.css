@@ -425,6 +425,13 @@
   .agent-time-label {
     color: #888; font-weight: 400; margin-right: 3px;
   }
+  /* 回放卡片 header 上的模型名标签（该条回复由哪个模型生成） */
+  .agent-model {
+    font-size: 11px; color: #6b6b70; background: #f0f0f3;
+    border-radius: 4px; padding: 1px 6px; margin-left: 8px;
+    max-width: 180px; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; vertical-align: middle;
+  }
 
   /* 展开区：思考 + 工具调用序列 */
   .agent-body { padding: 6px 0 4px; }

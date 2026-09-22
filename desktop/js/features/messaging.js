@@ -14,7 +14,7 @@ messages.addEventListener('click', (event) => {
 
 // ---------- 消息渲染 ----------
 
-function addMessage(text, role, index) {
+function addMessage(text, role, index, meta) {
   text = unescapeDisplay(String(text || ''));
   const div = document.createElement('div');
   div.className = `msg ${role}`;
@@ -27,6 +27,18 @@ function addMessage(text, role, index) {
   } else {
     div.textContent = text;
   }
+  // ponytail: 回放消息末尾追加「模型名 + 回复时间」元信息行（复用 .msg-time 样式）。
+  // 仅回放路径传 meta；实时流式消息不传（时间/模型由流式卡片自己展示）。
+  if (meta && (meta.model || meta.timestamp)) {
+    const metaEl = document.createElement('div');
+    metaEl.className = 'msg-time';
+    const parts = [];
+    if (meta.model) parts.push(escapeHtml(String(meta.model)));
+    const ts = _formatMsgTime(meta.timestamp);
+    if (ts) parts.push(escapeHtml(ts));
+    if (parts.length) metaEl.textContent = parts.join(' · ');
+    div.appendChild(metaEl);
+  }
   // ponytail: 右下角一键复制按钮（用户消息与最终输出都挂）
   attachCopyButton(div);
   // bot 历史消息挂 👍/👎 反馈条（流式最终输出在 streaming.js done 分支挂）
@@ -34,6 +46,15 @@ function addMessage(text, role, index) {
   messages.appendChild(div);
   smartScroll(messages);
   return div;
+}
+
+// ponytail: 把后端时间戳格式化为「MM-DD HH:mm」；解析失败返回空串（调用方据此不显示）。
+function _formatMsgTime(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  if (isNaN(d.getTime())) return '';
+  const pad = n => String(n).padStart(2, '0');
+  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 // ponytail: 给任意消息元素挂右下角复制按钮，复制消息纯文本（bot 用 textContent 避免带 HTML 标签）。

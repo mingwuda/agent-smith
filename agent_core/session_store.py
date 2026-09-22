@@ -159,10 +159,16 @@ def _init_db(conn: sqlite3.Connection):
             role TEXT NOT NULL,
             content TEXT NOT NULL,
             timestamp TEXT NOT NULL,
+            model TEXT NOT NULL DEFAULT '',
             FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
         )
         """
     )
+    # 兼容旧库：messages 表早期没有 model 列，补列以便回放时展示「该条回复用的模型」。
+    # 旧消息补列为空串，前端据此隐藏模型名（只显示时间），不做猜测填充。
+    _msg_cols = {r["name"] for r in conn.execute("PRAGMA table_info(messages)").fetchall()}
+    if "model" not in _msg_cols:
+        conn.execute("ALTER TABLE messages ADD COLUMN model TEXT NOT NULL DEFAULT ''")
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id, id)"
     )
@@ -211,8 +217,12 @@ def create_session(user_id: str = "default", title: Optional[str] = None, sessio
     }
 
 
-def add_message(user_id: str, session_id: str, role: str, content: str) -> Optional[dict]:
-    """追加一条消息到会话"""
+def add_message(user_id: str, session_id: str, role: str, content: str, model: str = "") -> Optional[dict]:
+    """追加一条消息到会话
+
+    model: 该条消息产生时使用的模型名（仅 assistant 消息有实际意义）。
+           传入空串表示未知/不记录，回放时前端据此只显示时间不显示模型名。
+    """
     now = _timestamp()
     with _connect(user_id) as conn:
         exists = conn.execute(
@@ -221,8 +231,8 @@ def add_message(user_id: str, session_id: str, role: str, content: str) -> Optio
         if not exists:
             return None
         conn.execute(
-            "INSERT INTO messages (session_id, role, content, timestamp) VALUES (?, ?, ?, ?)",
-            (session_id, role, content, now),
+            "INSERT INTO messages (session_id, role, content, timestamp, model) VALUES (?, ?, ?, ?, ?)",
+            (session_id, role, content, now, model or ""),
         )
         conn.execute(
             "UPDATE sessions SET updated_at = ? WHERE id = ?",
@@ -305,13 +315,13 @@ def get_session_lite(user_id: str, session_id: str, limit: int = 20, offset: int
             start = max(0, total_count + offset)
             end = total_count
             msg_rows = conn.execute(
-                "SELECT id, role, content, timestamp FROM messages WHERE session_id = ? ORDER BY id ASC LIMIT ? OFFSET ?",
+                "SELECT id, role, content, timestamp, model FROM messages WHERE session_id = ? ORDER BY id ASC LIMIT ? OFFSET ?",
                 (session_id, limit, start),
             ).fetchall()
         else:
             # 从开头跳过 offset 条
             msg_rows = conn.execute(
-                "SELECT id, role, content, timestamp FROM messages WHERE session_id = ? ORDER BY id ASC LIMIT ? OFFSET ?",
+                "SELECT id, role, content, timestamp, model FROM messages WHERE session_id = ? ORDER BY id ASC LIMIT ? OFFSET ?",
                 (session_id, limit, offset),
             ).fetchall()
 
@@ -324,6 +334,7 @@ def get_session_lite(user_id: str, session_id: str, limit: int = 20, offset: int
                 "role": r["role"],
                 "timestamp": r["timestamp"],
                 "index": real_index,
+                "model": r["model"] or "",
             }
             # 用户消息：保留 content，截断大文本
             if r["role"] == "user":

@@ -133,12 +133,12 @@ async function loadSessionMessages(sessionId, source, options = {}) {
           if (msg.timestamp && lastUserTs > 0) {
             try { botElapsed = new Date(msg.timestamp).getTime() - lastUserTs; } catch(e){}
           }
-          var placeholderEl = addBotMessagePlaceholder(content, msg.content_preview, botElapsed, sessionId, msgIndex);
+          var placeholderEl = addBotMessagePlaceholder(content, msg.content_preview, botElapsed, sessionId, msgIndex, msg.model);
           if (placeholderEl) container.appendChild(placeholderEl);
         } else if (role === 'bot') {
-          addMessage(content || msg.content_preview || '', 'bot', msgIndex);
+          addMessage(content || msg.content_preview || '', 'bot', msgIndex, { model: msg.model, timestamp: msg.timestamp });
         } else {
-          addMessage(content, role, msgIndex);
+          addMessage(content, role, msgIndex, { timestamp: msg.timestamp });
         }
       });
       } else {
@@ -168,7 +168,7 @@ async function loadSessionMessages(sessionId, source, options = {}) {
 }
 
 // 历史消息占位卡片（带步骤但尚未展开详情）
-function addBotMessagePlaceholder(content, contentPreview, elapsedMs, sessionId, messageIndex) {
+function addBotMessagePlaceholder(content, contentPreview, elapsedMs, sessionId, messageIndex, model) {
   const container = document.getElementById('messages');
   _lastToolImageHtml = null;
   if (_currentTodoPanel && _currentTodoPanel.parentNode) {
@@ -190,10 +190,13 @@ function addBotMessagePlaceholder(content, contentPreview, elapsedMs, sessionId,
   var timeVal = (elapsedMs && elapsedMs > 0) ? formatElapsed(elapsedMs) : '\u2014';
   var headerEl = document.createElement('div');
   headerEl.className = 'agent-header';
+  // ponytail: header 除「工作耗时」外，回放时还展示该条回复使用的模型名（旧消息无此字段则不显示）。
+  var modelHtml = model ? '<span class="agent-model" title="' + escapeHtml(String(model)) + '">' + escapeHtml(String(model)) + '</span>' : '';
   headerEl.innerHTML =
     '<div class="agent-avatar">\uD83E\uDD16</div>' +
     '<span class="agent-toggle-arrow">\u25B6</span>' +
-    '<span class="agent-time"><span class="agent-time-label">' + (t('workElapsed') || '工作耗时') + ': </span> <span class="agent-time-val">' + timeVal + '</span></span>';
+    '<span class="agent-time"><span class="agent-time-label">' + (t('workElapsed') || '工作耗时') + ': </span> <span class="agent-time-val">' + timeVal + '</span></span>' +
+    modelHtml;
   headerEl.onclick = function() {
     if (responseCard.classList.contains('collapsed')) {
       expandBotMessagePlaceholder(responseCard, sessionId, messageIndex);

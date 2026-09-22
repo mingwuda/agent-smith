@@ -78,6 +78,20 @@ def _format_loaded_skills() -> str:
     return "\n".join(lines)
 
 
+def _current_model_name() -> str:
+    """取当前生效的模型名，用于回放时标注「该条回复由哪个模型生成」。
+
+    取不到（配置未初始化/异常）时返回空串：调用方据此不记录，
+    前端只显示时间不显示模型名，不做猜测填充。
+    """
+    try:
+        from app_state import get_agent_config
+        cfg = get_agent_config()
+        return str(getattr(cfg, "model", "") or "")
+    except Exception:
+        return ""
+
+
 def _save_assistant_result(uid: str, session_id: str, user_message: str, result: str, steps: Optional[list[dict]] = None, todo_list: Optional[dict] = None):
     # 存储前剥离历史浏览器截图引用，防止旧截图 URL 持久化到 session store
     result = _strip_screenshot_urls(result)
@@ -89,7 +103,7 @@ def _save_assistant_result(uid: str, session_id: str, user_message: str, result:
         if todo_list:
             payload["todo_list"] = todo_list
         content = json.dumps(payload, ensure_ascii=False)
-    session_store.add_message(uid, session_id, "assistant", content)
+    session_store.add_message(uid, session_id, "assistant", content, model=_current_model_name())
     title = user_message[:30] + ("..." if len(user_message) > 30 else "")
     session_store.rename_session(uid, session_id, title or f"会话 {session_id[:8]}")
 
