@@ -231,6 +231,53 @@ def _is_command_approved(uid: str, command: str) -> bool:
     return _normalize_cmd(command) in _approved_commands.get(uid, set())
 
 
+# ── Jev 语义风险门控辅助 ──────────────────────────────────────
+def _jev_risk_gate_enabled() -> bool:
+    """Jev 风险门控是否开启。默认开启，可用环境变量 JEV_RISK_GATE=0 关闭。"""
+    return str(os.getenv("JEV_RISK_GATE", "1")).strip().lower() not in ("0", "false", "off", "no")
+
+
+def _jev_risk_gate(command: str) -> Optional[dict]:
+    """调用 Jev 判断命令是否存在正则未覆盖的语义风险。
+
+    返回 None = Jev 不可用（未配置/失败/超时），由调用方放行；
+    返回 dict 含 needs_confirmation/probability/reason/available。
+
+    在独立子线程中加软超时兜底，确保最坏情况也不阻塞 run_shell 主流程
+    （urllib 内部已有 timeout，这里防御极端慢 DNS / 代理等）。
+    """
+    try:
+        from .jev_tools import risk_gate, _load_key
+        if not _load_key():
+            return None  # 未配置 key，静默放行（交给既有正则闸）
+    except Exception:
+        return None
+
+    result: dict = {}
+    # 软超时：最多等 _JEV_GATE_TIMEOUT 秒；超时视为不可用
+    timeout_s = float(os.getenv("JEV_RISK_GATE_TIMEOUT", "2.0"))
+    try:
+        import threading as _threading
+
+        def _target():
+            try:
+                result.update(risk_gate(command))
+            except Exception:
+                result["needs_confirmation"] = False
+                result["available"] = False
+
+        t = _threading.Thread(target=_target, daemon=True)
+        t.start()
+        t.join(timeout_s)
+        if t.is_alive():
+            # 超时：不阻塞，放行
+            logger.warning("Jev 语义风险门控超时(>%.0fs)，放行: %.40s", timeout_s, command)
+            return None
+    except Exception:
+        return None
+    return result or None
+
+
 # cmd 参数标志：以 / 开头、第二字符为字母，且不含点号与额外斜杠（如 /i /s /c:"x" /d:C:\p）
 # ponytail: 旧实现把所有非 URL 片段的 / 都替换成 \，会把 findstr /i、dir /s 等参数
 # 标志破坏成 \i、\s，导致命令报错（FINDSTR: Cannot open ...）。现跳过疑似 cmd 标志的片段。
@@ -301,6 +348,18 @@ def run_shell(command: str, timeout: int = _DEFAULT_TIMEOUT) -> str:
     risky, risk_reason = _is_command_high_risk(cmd)
     if risky and not _is_command_approved(_current_user_ctx.get(), command):
         return f"__CONFIRM_NEEDED__::{risk_reason}::__CMD__::{command}"
+
+    # ── Jev 语义风险门控（补漏层）──
+    # 正则未命中时，用 Jev(系统一决策)判断命令是否存在正则覆盖不到的语义风险
+    # （混淆 / 下载即执行 / 编码绕过 / 多条高危叠加等），命中且用户未确认则追加确认闸。
+    # 设计：
+    #   - 仅当正则令人误放行时才介入，避免重复打扰；
+    #   - 未配置 key / 调用失败 / 超时 → 静默放行，绝不阻塞 run_shell；
+    #   - 可在设置中通过 JEV_RISK_GATE=0 全局关闭。
+    if _jev_risk_gate_enabled() and not risky and not _is_command_approved(_current_user_ctx.get(), command):
+        _jev_gate = _jev_risk_gate(cmd)
+        if _jev_gate and _jev_gate.get("needs_confirmation"):
+            return f"__CONFIRM_NEEDED__::{_jev_gate['reason']}::__CMD__::{command}"
 
     # ── 超时上限 ──
     timeout = min(max(1, int(timeout)), 600)
