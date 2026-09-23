@@ -1273,7 +1273,7 @@ class RetryableLLM(Runnable):
         self,
         llm,
         idle_timeout: float = 90.0,
-        max_idle_retries: int = 1,
+        max_idle_retries: int = 3,
         on_retry=None,
         rate_limit_wait: float = 30.0,
         max_rate_limit_retries: int = 3,
@@ -1378,6 +1378,17 @@ class RetryableLLM(Runnable):
                             self.on_retry(idle_attempt, "idle_timeout")
                         except Exception:
                             pass
+                    # ponytail: 空闲重试期间（等待重发首 token + 退避）LangGraph 不产生任何事件，
+                    # 若不像限流那样标记豁免窗口，外层 90s 空闲看门狗会在重试序列中途强杀整轮——
+                    # 这正是用户「90s 没收到回复就断开、且没重试」的根因（空闲重试被外层看门狗掐死，
+                    # 转而产出 _timeout 错误而非真正的重试）。此处标记的窗口需盖住余下可能的最长重试序列：
+                    # 本次调用尚未结束，任一 retry 都可能再次超时，故按「最多还会空闲 (剩余重试+1) 次 × idle」上界豁免。
+                    _remaining = (self.max_idle_retries - idle_attempt + 1) * self.idle_timeout
+                    _mark_llm_wait(_remaining + min(2 ** (idle_attempt - 1), 5))
+                    logger.warning(
+                        "[RetryableLLM] 空闲超时，退避 %.1fs 后重试本次调用（第 %d/%d 次）",
+                        min(2 ** (idle_attempt - 1), 5), idle_attempt, self.max_idle_retries,
+                    )
                     await asyncio.sleep(min(2 ** (idle_attempt - 1), 5))
                     continue
                 raise

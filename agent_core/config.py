@@ -67,7 +67,7 @@ class AgentConfig:
     # 否则上游只发空心跳、真实首 token 永远不来时，看门狗会被空包一直重置而永不触发重试。
     llm_idle_timeout_seconds: float = 60.0
     # 空闲超时后的重试次数（仅就地重发 LLM 调用，不重启图/重跑工具；0 表示不重试）
-    llm_idle_max_retries: int = 2
+    llm_idle_max_retries: int = 3
     # 单次 LLM 调用的硬墙钟上限（秒）：即便是有效进展也会刷新，作为兜底，
     # 必须明显大于 idle 重试总预算（idle × (retries+1) + 退避），否则会抢在重试序列结束前杀掉调用。
     llm_hard_timeout_seconds: float = 600.0

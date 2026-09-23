@@ -245,6 +245,36 @@ def test_idle_timeout_retry_still_works():
         assert llm.calls == 2
         assert notes == [(1, "idle_timeout", 0.0)], notes
         assert _SLEPT == [1.0], "空闲重试退避 min(2**0, 5) = 1s"
-        assert not any(_WAITING_AT_SLEEP), "空闲重试不应标记限流等待窗口"
+        # 本次修复：空闲重试期间必须标记豁免窗口（llm_waiting()==True），
+        # 否则外层 90s 空闲看门狗会在重试序列中途无事件 → 误判卡死 → 强杀整轮断连。
+        # 这正是「90s 没收到回复就断开、且没重试」的根因。
+        assert all(_WAITING_AT_SLEEP), "空闲重试的退避等待期间必须标记豁免窗口（防外层看门狗误杀）"
     finally:
         asyncio.sleep = orig
+def test_idle_retry_exemption_window_covers_sequence():
+    """空闲重试标记的豁免窗口必须盖住后续可能的最长重试序列（防外层看门狗中途误杀）。
+
+    用户在 idle_timeout 内多次超时（丢弃所有补发重试仍无首 token）时，RetryableLLM
+    会连续重试 max_idle_retries 次。等待的余量窗口须 ≥ 剩余潜在空闲时长，
+    否则外层空闲看门狗在「重试期间无任何图事件」的空窗内设 timeout 就把整轮强杀断连。
+    """
+    _reset()
+    # 复现修复后的分支标记：_remaining = (3 - 1 + 1) * 8 + 退避(min(2**0,5)=1) = 3*8 + 1 = 25
+    H._mark_llm_wait((3 - 1 + 1) * 8 + 1.0)
+    # 外层看门狗在重试序列中最长等待 ~25s，全部在豁免窗口内 → 不会误杀
+    assert H.llm_waiting() is True
+    # 用尽 3 次重试后仍失败 → RetryableLLM 上抛；外层看门狗窗口仍应保持豁免直到重试完全结束
+    H._mark_llm_wait(0.0)  # 模拟重试序列结束后窗口自然失效
+    assert H.llm_waiting() is False
+
+
+def test_default_idle_retries_is_three():
+    """锁定需求：默认空闲超时重试次数为 3（config 与 RetryableLLM 两处）。"""
+    import inspect
+
+    sig = inspect.signature(H.RetryableLLM.__init__)
+    assert sig.parameters["max_idle_retries"].default == 3
+
+    from config import AgentConfig
+
+    assert AgentConfig().llm_idle_max_retries == 3
