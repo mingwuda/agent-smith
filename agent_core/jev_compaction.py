@@ -225,6 +225,10 @@ _KEEP_RESULT_Q = (
     "result should stay verbatim; 0.0 if it can be dropped or truncated."
 )
 
+# ponytail: 拼进单组 noul 提示的截断结果长度上限——够 Jev 判别噪音还是关键，
+# 又不至于把整条长结果塞满提示。超大列表/日志会截断，关键路径/错误/配置值在前部。
+_RESULT_IN_PROMPT_CHARS = 600
+
 
 def decide_group(group: Sequence[BaseMessage], group_index: int, state: str,
                  client, keep_threshold: float = DEFAULT_KEEP_THRESHOLD,
@@ -235,9 +239,18 @@ def decide_group(group: Sequence[BaseMessage], group_index: int, state: str,
     任何失败（None/异常）→ 保守判 keep（绝不因 Jev 故障丢信息）。
     """
     brief = _tool_call_brief(group[0]) if group else "(empty)"
+    # ponytail: 把该组实际结果内容截断拼进提示，Jev 才能判别噪音 vs 关键信息。
+    # 原 POC 只给 Jev 看"调用 + 通用问题"，结果被 build_state 省略成 'ok, N chars (omitted)'，
+    # 导致 Jev 对噪音/关键全给 ~0.45 模糊值 → 恒 keep → 删除率 0%（实测证实）。
+    result_text = ""
+    for m in reversed(group):
+        if isinstance(m, ToolMessage):
+            result_text = _clip(_msg_text(m), _RESULT_IN_PROMPT_CHARS)
+            break
+    result_note = f"\n\nTool result content:\n{result_text}" if result_text else ""
     try:
-        keep_call = client.noul(state, f"Tool call: {brief}\n\n{_KEEP_CALL_Q}")
-        keep_result = client.noul(state, f"Tool call: {brief}\n\n{_KEEP_RESULT_Q}")
+        keep_call = client.noul(state, f"Tool call: {brief}\n\n{_KEEP_CALL_Q}{result_note}")
+        keep_result = client.noul(state, f"Tool call: {brief}\n\n{_KEEP_RESULT_Q}{result_note}")
     except Exception as e:  # Jev 故障 → 保守保留
         logger.debug("[JevCompaction] 组 %d 决策失败，保守保留: %r", group_index, e)
         return GroupDecision(group_index, "keep", reason="Jev 调用异常，保守保留")
