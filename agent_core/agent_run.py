@@ -900,6 +900,20 @@ class AgentRunMixin:
                     else:
                         # 无运行中工具时仍发送 ping 事件，避免连接因空闲断开
                         yield _sse({"type": "ping"})
+
+                    # ── ask_user 征询：drain 该会话新鲜待响应的 ask，推 SSE 给前端渲染弹窗 ──
+                    # ask_user 工具阻塞等待用户响应期间，图不产生事件（on_tool_start→on_tool_end 之间），
+                    # 靠心跳循环把待响应的问卷推给前端；用户提交经 API resolve 后工具才返回、图才继续。
+                    # 用 not_emitted 去重，避免同一 ask 在每次心跳重复弹窗。
+                    try:
+                        from tools.ask_user_tools import get_registry as _ask_reg
+                        _ask_asks = _ask_reg().pending_asks(thread_key)
+                        for _a in _ask_asks:
+                            if _ask_reg().not_emitted(thread_key, _a["ask_id"]):
+                                _ask_reg().mark_emitted(thread_key, _a["ask_id"])
+                                yield _sse({"type": "ask_user_modal", **_a})
+                    except Exception:
+                        pass
                     # 子代理结束但父模型长时间没有产生最终回复，强制终止
                     # 以 subagent_end 发送时间为基准，避免父模型内部的慢速/空轮询刷新 idle 时间
                     if self.config.enable_loop_guard and subagent_end_sent_at and not running_tools and not loop_guard_triggered:

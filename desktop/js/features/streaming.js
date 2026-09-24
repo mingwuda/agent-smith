@@ -262,6 +262,175 @@ function steerCurrentRun() {
     });
 }
 
+// ---------- ask_user 征询弹窗 ----------
+
+let askUserModalEl = null;       // 当前弹窗 DOM（同一时间只显示一个）
+let askUserOptions = [];         // 当前弹窗选项
+let askUserFreeAllowed = false;  // 当前弹窗是否允许自定义输入
+
+function showAskUserModal(data) {
+  const askId = data.ask_id;
+  const prompt = data.prompt || (t('askUserPrompt') || '请确认');
+  const options = Array.isArray(data.options) ? data.options : [];
+  const allowFree = !!data.allow_free_text;
+  askUserOptions = options;
+  askUserFreeAllowed = allowFree;
+
+  // 已存在弹窗则更新内容（尽量避免叠加；正常情况下同一会话一次只弹一个）
+  if (askUserModalEl) {
+    closeAskUserModal();
+  }
+
+  askUserModalEl = document.createElement('div');
+  askUserModalEl.className = 'modal-overlay active ask-user-modal-overlay';
+  askUserModalEl.dataset.askId = askId;
+  askUserModalEl.onclick = function (ev) {
+    if (ev.target === askUserModalEl) submitAskUserInternal(askId); // 点背景视为提交当前选中的选项
+  };
+
+  const card = document.createElement('div');
+  card.className = 'modal-card';
+  card.style.width = '440px';
+  card.style.maxWidth = '90vw';
+
+  // 标题
+  const header = document.createElement('div');
+  header.className = 'modal-header';
+  const hTitle = document.createElement('h3');
+  hTitle.textContent = (t('askUserTitle') || '等待你的确认');
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'modal-close';
+  closeBtn.textContent = '✕';
+  closeBtn.onclick = function () { resolveAskUser(askId, ''); };
+  header.appendChild(hTitle);
+  header.appendChild(closeBtn);
+  card.appendChild(header);
+
+  // 问题正文
+  const body = document.createElement('div');
+  body.className = 'modal-body';
+
+  const promptEl = document.createElement('div');
+  promptEl.className = 'ask-user-prompt';
+  promptEl.textContent = prompt;
+  promptEl.style.cssText = 'font-size:14px;color:#333;line-height:1.6;margin:4px 0 16px;white-space:pre-wrap;word-break:break-word;';
+  body.appendChild(promptEl);
+
+  // 选项区
+  const optionsWrap = document.createElement('div');
+  optionsWrap.className = 'ask-user-options';
+  optionsWrap.style.cssText = 'display:flex;flex-direction:column;gap:8px;margin-bottom:12px;';
+  let selectedBtn = null;
+  options.forEach(function (opt, idx) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'ask-user-option';
+    btn.style.cssText =
+      'padding:10px 14px;border:1px solid #ddd;border-radius:8px;background:#f9f9fb;' +
+      'font-size:14px;color:#333;cursor:pointer;text-align:left;transition:all .12s;';
+    btn.textContent = opt;
+    btn.onclick = function () {
+      if (selectedBtn) { selectedBtn.style.borderColor = '#ddd'; selectedBtn.style.background = '#f9f9fb'; }
+      btn.style.borderColor = '#007aff';
+      btn.style.background = '#e8f0fe';
+      selectedBtn = btn;
+      askUserSelected = opt;
+    };
+    optionsWrap.appendChild(btn);
+  });
+  body.appendChild(optionsWrap);
+
+  // 自定义输入区（可选）
+  let freeInput = null;
+  if (allowFree) {
+    const freeLabel = document.createElement('label');
+    freeLabel.textContent = (t('askUserFreeText') || '或输入你的意见');
+    freeLabel.style.cssText = 'display:block;font-size:13px;color:#555;margin-bottom:4px;';
+    body.appendChild(freeLabel);
+
+    freeInput = document.createElement('textarea');
+    freeInput.className = 'modal-input';
+    freeInput.rows = 3;
+    freeInput.style.cssText = 'width:100%;padding:10px 12px;border:1px solid #ddd;border-radius:8px;' +
+      'font-size:14px;box-sizing:border-box;outline:none;background:#fff;margin-top:4px;resize:vertical;' +
+      'font-family:inherit;';
+    freeInput.placeholder = (t('askUserFreePlaceholder') || '在此输入…');
+    body.appendChild(freeInput);
+  }
+
+  card.appendChild(body);
+
+  // 底部按钮
+  const footer = document.createElement('div');
+  footer.className = 'modal-footer';
+  footer.style.cssText = 'display:flex;justify-content:flex-end;gap:10px;padding:14px 22px 18px;';
+
+  const cancelBtn = document.createElement('button');
+  cancelBtn.className = 'modal-btn';
+  cancelBtn.textContent = (t('askUserCancel') || '取消');
+  cancelBtn.onclick = function () { resolveAskUser(askId, ''); };
+  footer.appendChild(cancelBtn);
+
+  const submitBtn = document.createElement('button');
+  submitBtn.className = 'modal-btn modal-btn-primary';
+  submitBtn.textContent = (t('askUserSubmit') || '提交');
+  submitBtn.onclick = function () {
+    let ans = askUserSelected || '';
+    if (freeInput && freeInput.value.trim()) ans = freeInput.value.trim();
+    const answer = ans || (options.length === 1 ? options[0] : '');
+    resolveAskUser(askId, answer);
+  };
+  footer.appendChild(submitBtn);
+
+  card.appendChild(footer);
+  askUserModalEl.appendChild(card);
+  document.body.appendChild(askUserModalEl);
+}
+
+// 当前已选中的选项（全局，供提交读取）
+let askUserSelected = '';
+
+// 点背景 / 关闭按钮时，如有选中的选项则提交它，否则取消；都不选则用唯一选项
+function submitAskUserInternal(askId, freeInputEl) {
+  let ans = askUserSelected || '';
+  if (freeInputEl && freeInputEl.value && freeInputEl.value.trim()) {
+    ans = freeInputEl.value.trim();
+  }
+  // 单选项且用户未做任何选择 → 默认选它（最符合「确认」语义）
+  if (!ans && askUserOptions.length === 1) ans = askUserOptions[0];
+  resolveAskUser(askId, ans);
+}
+
+function closeAskUserModal() {
+  if (askUserModalEl && askUserModalEl.parentNode) {
+    askUserModalEl.parentNode.removeChild(askUserModalEl);
+  }
+  askUserModalEl = null;
+  askUserSelected = '';
+  askUserOptions = [];
+  askUserFreeAllowed = false;
+}
+
+function resolveAskUser(askId, answer) {
+  const sessionId = currentSessionId || threadId;
+  closeAskUserModal();
+  if (!sessionId || !askId) return;
+  fetch(`/agent/sessions/${encodeURIComponent(sessionId)}/ask/${encodeURIComponent(askId)}/resolve`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ answer: answer || '' }),
+  })
+    .then(function (resp) { return resp.json(); })
+    .then(function (data) {
+      if (!data || !data.resolved) {
+        addMessage('⚠️ ' + (t('askUserFailed') || '征询提交失败'), 'system');
+      }
+    })
+    .catch(function () {
+      addMessage('⚠️ ' + (t('connectionInterrupted') || '连接中断'), 'system');
+    });
+}
+
 // ---------- 核心 SSE 发送 ----------
 
 // 全局回合状态（handleStreamEvent 内部 80+ 处引用的 11 个隐式全局变量）。
@@ -1900,6 +2069,16 @@ function handleStreamEvent(data) {
       markStreamActivity();
       if (data && data.content) {
         addUserMessage(data.content, []);
+      }
+      break;
+    }
+
+    case 'ask_user_modal': {
+      // agent 调用 ask_user 向用户征询意见：弹出问卷弹窗等待用户选择/输入。
+      // 用户提交后 POST 到 resolve 端点，后端唤醒阻塞中的 ask_user 工具继续执行。
+      markStreamActivity();
+      if (data && data.ask_id) {
+        showAskUserModal(data);
       }
       break;
     }

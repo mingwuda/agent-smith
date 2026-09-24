@@ -464,6 +464,30 @@ async def session_inbox_state(session_id: str, request: Request):
             "next_step": counts["step"], "next_turn": counts["turn"]}
 
 
+class AskAnswerRequest(BaseModel):
+    answer: str = ""
+
+
+@router.post("/sessions/{session_id}/ask/{ask_id}/resolve")
+async def resolve_session_ask(session_id: str, ask_id: str, req: AskAnswerRequest, request: Request):
+    """用户提交 ask_user 征询的答复：唤醒等待中的 agent 继续执行。
+
+    answer: 用户选择的选项内容或自定义输入。空时视为取消。
+    """
+    uid = _resolve_user(request)
+    session = session_store.get_session(uid, session_id)
+    if session is None:
+        raise HTTPException(404, "会话不存在或无权访问")
+    thread_key = f"{uid}:{session_id}"
+    answer = (req.answer or "").strip()
+    from tools.ask_user_tools import resolve_ask, cancel_ask
+    if not answer:
+        resolved = cancel_ask(thread_key, ask_id, "用户关闭了征询")
+        return {"ok": resolved, "resolved": resolved, "answer": ""}
+    resolved = resolve_ask(thread_key, ask_id, answer)
+    return {"ok": resolved, "resolved": resolved, "answer": answer}
+
+
 @router.post("/sessions/{session_id}/cancel")
 async def cancel_session_run(session_id: str, request: Request):
     """彻底终止某会话当前正在运行的后台 driver。

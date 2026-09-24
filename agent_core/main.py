@@ -90,7 +90,7 @@ from agent import DesktopAgent
 from tools import (
     file_tools, code_tools, system_tools, web_tools, memory_tools, session_tools,
     git_tools, database_tool, shell_tools, browser_tools, todo_tools,
-    ocr_tools, context_tools,
+    ocr_tools, context_tools, ask_user_tools,
 )
 import subagents
 from monitoring.usage_tracker import get_tracker
@@ -353,6 +353,7 @@ def init_agent(caller: str = "unknown", force: bool = False):
     all_tools.extend(ocr_tools.TOOLS)
     all_tools.extend(session_tools.TOOLS)
     all_tools.extend(context_tools.TOOLS)
+    all_tools.extend(ask_user_tools.TOOLS)
 
     subagents.manager.configure(config, all_tools, review_llm=None)
     
