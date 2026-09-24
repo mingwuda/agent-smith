@@ -531,6 +531,7 @@ async function saveSettings() {
         tavily_search_url: document.getElementById('s-tavily-search-url').value,
         anysearch_api_key: document.getElementById('s-anysearch-api-key').value,
         typesafe_api_key: document.getElementById('s-typesafe-api-key').value,
+        jev_compaction_enabled: document.getElementById('s-jevecompaction-enabled').checked,
         review_provider_id: document.getElementById('s-review-provider').value,
         review_model: document.getElementById('s-review-model').value,
         update_server: document.getElementById('s-update-server') ? document.getElementById('s-update-server').value : '',
@@ -804,6 +805,10 @@ function renderParamsFields(data) {
   if (selfEvolution) selfEvolution.checked = data.enable_self_evolution === true;
   if (selfHealing) selfHealing.checked = data.enable_self_healing === true;
   if (healingInterval) healingInterval.value = data.self_healing_interval_seconds || 600;
+
+  // ── Jev 判别式上下文压缩 ──
+  const jevCompaction = document.getElementById('s-jevecompaction-enabled');
+  if (jevCompaction) jevCompaction.checked = data.jev_compaction_enabled === true;
 
   // ── 搜索 ──
   const tavilyEnabled = document.getElementById('s-tavily-enabled');

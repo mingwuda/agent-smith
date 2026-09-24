@@ -1071,7 +1071,8 @@ def _ensure_no_image_for_non_vision(messages: list, config: AgentConfig, provide
 
 def compact_history_messages(messages: list, config: AgentConfig, memory=None) -> list:
     if should_compact(messages, config.model, config.context_window_tokens):
-        return compact_messages(messages, config.model, config.context_window_tokens, memory)
+        return compact_messages(messages, config.model, config.context_window_tokens, memory,
+                                use_jev_compaction=getattr(config, "jev_compaction_enabled", False))
     return messages
 
 

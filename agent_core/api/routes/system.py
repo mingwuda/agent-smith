@@ -46,6 +46,7 @@ class SettingsRequest(BaseModel):
     tavily_search_url: str = "https://api.tavily.com/search"
     anysearch_api_key: str = ""
     typesafe_api_key: str = ""
+    jev_compaction_enabled: bool = False
     review_provider_id: str = ""
     review_model: str = ""
     update_server: str = ""
@@ -160,6 +161,7 @@ def save_settings(req: SettingsRequest, request: Request):
         cfg.anysearch_api_key = req.anysearch_api_key
     if req.typesafe_api_key:
         cfg.typesafe_api_key = req.typesafe_api_key
+    cfg.jev_compaction_enabled = bool(req.jev_compaction_enabled)
     cfg.update_server = req.update_server or cfg.update_server
 
     # 保存排序
@@ -210,6 +212,7 @@ def save_settings(req: SettingsRequest, request: Request):
         os.environ["TYPESAFE_API_KEY"] = cfg.typesafe_api_key
     else:
         os.environ.pop("TYPESAFE_API_KEY", None)
+    os.environ["AGENT_JEV_COMPACTION_ENABLED"] = "1" if cfg.jev_compaction_enabled else "0"
     if cfg.base_url:
         os.environ["LLM_BASE_URL"] = cfg.base_url
     else:

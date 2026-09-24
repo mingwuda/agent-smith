@@ -637,6 +637,14 @@
             <div class="hint" id="s-typesafe-api-key-hint">用于 Jev 结构化决策（shell 风险门控 / 模型路由等）。留空则保留当前已保存的 Key；未配置时相关功能自动跳过，不影响其它能力。</div>
           </div>
 
+          <div class="form-group">
+            <label>
+              <input id="s-jevecompaction-enabled" type="checkbox" style="width:auto;height:auto;margin-right:6px;" />
+              <span>启用 Jev 判别式上下文压缩</span>
+            </label>
+            <div class="hint">开启后，上下文压缩时会先用 Jev 判定「确无保留价值」的旧工具结果整组删除，再走既有分层摘要，减少关键信息（文件路径/错误/约束）被机械裁剪丢失的风险。需先配置 TypeSafe API Key；未配置或调用失败时自动回退原有压缩，不影响其它能力。默认关闭。</div>
+          </div>
+
           <div class="form-group" style="margin-top:8px;">
             <div class="hint" style="background:rgba(255,193,7,.08);border-left:3px solid #ffc107;padding:8px 10px;">修改后点击「保存设置」即生效，无需重启后端（Agent 会自动重新初始化）。</div>
           </div>

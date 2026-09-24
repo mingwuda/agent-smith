@@ -82,6 +82,9 @@ class AgentConfig:
     tavily_search_url: str = "https://api.tavily.com/search"
     anysearch_api_key: str = ""
     typesafe_api_key: str = ""
+    # Jev 判别式上下文压缩：默认关闭，需先在设置页配置 TypeSafe API Key 再开启。
+    # 开启后 context_manager 压缩时先让 Jev 判定旧工具组是否可删，再走既有分层。
+    jev_compaction_enabled: bool = False
     
     # 更新
     update_server: str = ""
@@ -187,6 +190,7 @@ class AgentConfig:
             "AGENT_SELF_EVOLUTION": ("enable_self_evolution", _env_bool),
             "AGENT_SELF_HEALING": ("enable_self_healing", _env_bool),
             "AGENT_SELF_HEALING_INTERVAL": ("self_healing_interval_seconds", int),
+            "AGENT_JEV_COMPACTION_ENABLED": ("jev_compaction_enabled", _env_bool),
             "AGENT_API_MAX_RETRIES": ("api_max_retries", int),
             "AGENT_API_TIMEOUT_SECONDS": ("api_timeout_seconds", float),
             "AGENT_LLM_IDLE_TIMEOUT_SECONDS": ("llm_idle_timeout_seconds", float),
@@ -407,6 +411,7 @@ class AgentConfig:
             "tavily_search_url": self.tavily_search_url,
             "anysearch_api_key": self.anysearch_api_key,
             "typesafe_api_key": self.typesafe_api_key,
+            "jev_compaction_enabled": self.jev_compaction_enabled,
             "review_provider_id": self.review_provider_id,
             "review_model": self.review_model,
             "update_server": self.update_server,
@@ -474,6 +479,7 @@ class AgentConfig:
             "anysearch_api_key_preview": self.anysearch_api_key[:8] + "..." if len(self.anysearch_api_key) > 8 else ("已设置" if self.anysearch_api_key else "未设置"),
             "typesafe_api_key_configured": bool(self.typesafe_api_key),
             "typesafe_api_key_preview": self.typesafe_api_key[:8] + "..." if len(self.typesafe_api_key) > 8 else ("已设置" if self.typesafe_api_key else "未设置"),
+            "jev_compaction_enabled": bool(self.jev_compaction_enabled),
             "review_provider_id": self.review_provider_id,
             "review_model": self.review_model,
             "update_server": self.update_server,

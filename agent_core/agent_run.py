@@ -161,6 +161,7 @@ class AgentRunMixin:
             messages, self.config.model, self.config.context_window_tokens,
             memory=get_memory(self._user_id), trigger="context-overflow",
             reason="模型报上下文超长，强制压缩后重试",
+            use_jev_compaction=getattr(self.config, "jev_compaction_enabled", False),
         )
         # 未触发压缩（低于阈值）→ 无实际缩减，重试无益
         if report is None:
@@ -217,6 +218,7 @@ class AgentRunMixin:
         compacted, report = compact_messages_report(
             messages, self.config.model, self.config.context_window_tokens,
             memory=get_memory(self._user_id), trigger=trigger, reason=reason,
+            use_jev_compaction=getattr(self.config, "jev_compaction_enabled", False),
         )
         # 兜底：压缩切片仍可能在边界残留悬空/孤儿 tool 消息，写回前统一自净，
         # 保证喂给 graph 的历史永远满足 tool_call ↔ ToolMessage 配对（避免 INVALID_CHAT_HISTORY）。
@@ -284,6 +286,7 @@ class AgentRunMixin:
         compacted, report = compact_messages_report(
             head, self.config.model, self.config.context_window_tokens,
             memory=get_memory(self._user_id), trigger=trigger, reason=reason,
+            use_jev_compaction=getattr(self.config, "jev_compaction_enabled", False),
         )
         compacted, _ = _drop_dangling_tool_call_messages(compacted)
         if not compacted:

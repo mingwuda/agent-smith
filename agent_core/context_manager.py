@@ -96,6 +96,8 @@ class CompactionReport:
     recent_verbatim: int = 0            # P1 最近轮 verbatim 保留条数
     medium_groups: int = 0              # P2 中段摘要组数
     old_groups: int = 0                 # P2 早期归档组数
+    jev_pruned_groups: int = 0          # Jev 判别式删除的工具组数（0 = 未启用/未参与）
+    jev_available: bool = False         # Jev 本次压缩是否实际参与（配了 key 且收到决策）
     reason: str = ""                    # 可选触发原因说明（手动工具传入）
 
     @property
@@ -123,6 +125,8 @@ class CompactionReport:
             "recent_verbatim": self.recent_verbatim,
             "medium_groups": self.medium_groups,
             "old_groups": self.old_groups,
+            "jev_pruned_groups": self.jev_pruned_groups,
+            "jev_available": self.jev_available,
             "saved_tokens": self.saved_tokens,
             "reduction_pct": round(self.reduction_pct, 1),
             "reason": self.reason,
@@ -425,14 +429,21 @@ def _build_summary(medium_entries: list, old_entries: list, round_of: list[int],
     return text
 
 
-def compact_messages(messages: list[BaseMessage], model: str, configured_window: int = 0, memory=None) -> list[BaseMessage]:
+def compact_messages(messages: list[BaseMessage], model: str, configured_window: int = 0, memory=None,
+                     use_jev_compaction: bool = False) -> list[BaseMessage]:
     """分层上下文压缩（向后兼容入口，仅返回压缩后的消息列表）。"""
-    result, _report = compact_messages_report(messages, model, configured_window, memory)
+    result, _report = compact_messages_report(messages, model, configured_window, memory,
+                                              use_jev_compaction=use_jev_compaction)
     return result
 
 
 def compact_messages_report(messages: list[BaseMessage], model: str, configured_window: int = 0,
-                            memory=None, trigger: str = "auto", reason: str = "") -> tuple[list[BaseMessage], Optional[CompactionReport]]:
+                            memory=None, trigger: str = "auto", reason: str = "",
+                            use_jev_compaction: bool = False,
+                            jev_client=None,
+                            jev_preserve_recent: int = 6,
+                            jev_min_reduction: float = 0.25
+                            ) -> tuple[list[BaseMessage], Optional[CompactionReport]]:
     """分层上下文压缩，并返回结构化报告（供 UI 卡片展示）。
 
     与 `compact_messages` 行为完全一致，仅额外产出 CompactionReport：
@@ -443,6 +454,12 @@ def compact_messages_report(messages: list[BaseMessage], model: str, configured_
     - memory: 可选。传入 LocalMemory 实例时，old 段用户指令归档进长期记忆，
       摘要行写 [见记忆: key] 引用（详见 _archive_user_instruction）。None 时行为不变。
     - trigger / reason: 记录本次压缩的触发来源（自动阈值 / 工具前 / 手动工具），随报告展示。
+    - use_jev_compaction: 开启后，在 P1 分层之前先对旧工具组做 Jev 判别式删除
+      （仅删 Jev 判定的"无用"工具组，文本消息永不删，决策可审计）。
+      默认 False（不改变既有行为）；开关由调用方从 config 读入，纯函数保持可测。
+    - jev_client: Jev 决策 client（缺省自动构造 JevClient，**未配置 key 时内部返回
+      None → 判定为不可用，完全走既有链路，零影响**）。测试可注入 FakeJevClient。
+    - jev_preserve_recent / jev_min_reduction: 透传给判别式删除的 pin 数与收益门槛。
     - 防抖动：若压缩后总 token 仍接近阈值，把最近轮里最老的整组降级为 old 段（仅留用户指令），
       保证总 token 单调下降、不会下一轮立刻再压；整组移动，工具链始终完整。
     - 未触发压缩（低于阈值）时返回 (原消息, None)。
@@ -458,6 +475,45 @@ def compact_messages_report(messages: list[BaseMessage], model: str, configured_
 
     groups = _group_messages(dialogue)
     round_of = _assign_rounds(dialogue)
+
+    # ── Jev 判别式前置过滤（阶段 2）：默认关闭，显式开启才参与 ──
+    # 对旧工具组问 Jev「还有保留价值吗」，把判为无用的整组删掉，剩下的再走 P1/P2。
+    # Jev 未配置 key / 调用失败 → available=False，原样返回 groups，行为与不开一致。
+    # 关键（POC 实测结论）：Jev 删除后若已低于阈值就**直接采用**，不再走 medium 段
+    #   100 字裁剪，否则 Jev 辛辛苦苦保留的关键组又会被下游裁掉、判别式收益被吃掉。
+    jev_pruned_groups = 0
+    jev_available = False
+    if use_jev_compaction:
+        from jev_compaction import flatten_groups, jev_prune_tool_groups
+        if jev_client is None:
+            from tools.jev_tools import JevClient
+            jev_client = JevClient()   # 未配 key → 内部 noul 全返回 None → 判不可用
+        pruned = jev_prune_tool_groups(
+            groups, client=jev_client,
+            preserve_recent=jev_preserve_recent, min_reduction=jev_min_reduction,
+        )
+        if pruned.available:
+            kept_dialogue = flatten_groups(pruned.groups)
+            groups = pruned.groups
+            jev_pruned_groups = pruned.dropped_groups
+            jev_available = True
+            # 若删除后已低于阈值，直接采用 Jev 结果（本轮压缩即完成，不走既有分层）
+            after_jev_tok = estimate_messages_tokens(system_msgs + kept_dialogue, model)
+            if after_jev_tok < threshold:
+                result = [*system_msgs, *kept_dialogue]
+                report = CompactionReport(
+                    trigger=trigger, summary="", before_tokens=before_tok,
+                    after_tokens=after_jev_tok, threshold_tokens=threshold,
+                    before_count=len(messages), after_count=len(result),
+                    shadowed_count=len(messages) - len(result),
+                    recent_verbatim=len(kept_dialogue), medium_groups=0, old_groups=0,
+                    jev_pruned_groups=jev_pruned_groups, jev_available=True, reason=reason,
+                )
+                logger.info(
+                    "[Context] Jev 判别式删除已使上下文低于阈值(%d→%d tok, 删 %d 工具组)，直接采用",
+                    before_tok, after_jev_tok, jev_pruned_groups,
+                )
+                return result, report
 
     # P1: 最近轮 verbatim（按 token 预算 + 消息数上限），以工具组为原子单位避免切裂
     recent_budget = _retain_tokens_for(model, threshold)
@@ -524,6 +580,8 @@ def compact_messages_report(messages: list[BaseMessage], model: str, configured_
                 recent_verbatim=recent_cnt,
                 medium_groups=len(medium_entries),
                 old_groups=len(old_entries),
+                jev_pruned_groups=jev_pruned_groups,
+                jev_available=jev_available,
                 reason=reason,
             )
             return result, report
