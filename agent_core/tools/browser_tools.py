@@ -1164,6 +1164,30 @@ def _image_dimensions(png_data: bytes) -> tuple[int, int]:
         return 0, 0
 
 
+def _jev_cross_check_captcha(parsed: dict, client=None) -> dict:
+    """Jev 二次置信度校验：识别结果可疑时压低 confidence 并提示刷新。
+
+    纯函数（client 可注入），便于单测。设计：
+      - Jev 判 <0.5 → confidence 取 min(原值, Jev值)，explain 追加不可靠说明
+        （_format_result 见 confidence<0.5 会引导 agent 先刷新再识别，减少"识别错→白点"）
+      - Jev 不可用/失败/异常 → 原样返回，绝不阻断识别主流程
+    ponytail: 同步调用（≤2s 超时）跑在浏览器线程会短暂阻塞该会话的页面锁，
+    但验证码识别本身已是秒级操作，可接受。
+    """
+    try:
+        from tools.jev_tools import captcha_confidence
+        _jev_conf = captcha_confidence(
+            f"captcha_type={parsed.get('type')} result={json.dumps(parsed, ensure_ascii=False)[:300]}",
+            client=client,
+        )
+        if _jev_conf is not None and _jev_conf < 0.5:
+            parsed["confidence"] = min(float(parsed.get("confidence", 0) or 0), _jev_conf)
+            parsed["explain"] = (str(parsed.get("explain", "")) + " [Jev 交叉校验判定识别结果不可靠]").strip()
+    except Exception:
+        pass  # Jev 不可用/失败 → 静默跳过，保持原识别结果
+    return parsed
+
+
 def _format_result(parsed: dict, img_w: int, img_h: int, source: str = "page") -> str:
     """把识别结果格式化为给 Agent 的可读文本。
 
@@ -1339,20 +1363,7 @@ def browser_captcha_recognize(config: RunnableConfig, source: str = "page") -> s
                 return result
 
             parsed = _normalize_captcha_result(parsed, img_w, img_h)
-
-            # Jev 二次置信度校验：识别结果可疑时提示刷新，减少"识别错→白点"无效动作。
-            # ponytail: 同步调用（≤2s 超时）跑在浏览器线程会短暂阻塞该会话的页面锁，
-            # 但验证码识别本身已是秒级操作，可接受；失败静默跳过不影响主流程。
-            try:
-                from tools.jev_tools import captcha_confidence
-                _jev_conf = captcha_confidence(
-                    f"captcha_type={parsed.get('type')} result={json.dumps(parsed, ensure_ascii=False)[:300]}",
-                )
-                if _jev_conf is not None and _jev_conf < 0.5:
-                    parsed["confidence"] = min(float(parsed.get("confidence", 0) or 0), _jev_conf)
-                    parsed["explain"] = (str(parsed.get("explain", "")) + " [Jev 交叉校验判定识别结果不可靠]").strip()
-            except Exception:
-                pass  # Jev 不可用/失败 → 静默跳过，保持原识别结果
+            parsed = _jev_cross_check_captcha(parsed)
 
             result_w, result_h = img_w, img_h
             if source == "page" and clip_info:

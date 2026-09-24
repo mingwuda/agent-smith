@@ -30,6 +30,7 @@ import os
 import sys
 import threading
 import time
+import traceback
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Optional, Union
@@ -278,6 +279,10 @@ def setup_logging(
 
     _initialized = True
     root.info("日志系统已初始化, 文件: %s, 级别: %s, 每日独立文件, 保留 %d 天", log_path, logging.getLevelName(level), retain_days)
+
+    # 日志就绪后安装全局未捕获异常钩子（幂等）
+    _install_exception_hook()
+
     return root
 
 
@@ -293,3 +298,66 @@ def shutdown_logging():
         handler.flush()
         handler.close()
         root.removeHandler(handler)
+
+
+# ── 全局未捕获异常安全网 ──────────────────────────────────────
+# 项目中存在大量 `except Exception: pass` 的防御性降级（多为刻意设计），
+# 但没有任何「逃逸到线程/事件循环外的未捕获异常」的统一观测点（确认过：
+# 项目无 sys.excepthook / threading.excepthook 覆盖）。这类异常如果不被记录
+# 就会彻底静默消失——这是 P0-③ 审计后真正值得补的缺口。
+#
+# 设计：
+#   - 在 setup_logging() 时安装一次（幂等），此时日志系统已就绪
+#   - 覆盖两类：主线程(sys.excepthook) 与 后台线程(threading.excepthook)
+#   - 记录完整堆栈，不影响主流程
+#   - 保留并转发原 hook，不破坏第三方/框架可能已装的 hook
+
+_exception_hook_installed = False
+
+
+def _install_exception_hook() -> None:
+    """安装全局未捕获异常钩子（幂等，可重复调用）。"""
+    global _exception_hook_installed
+    if _exception_hook_installed:
+        return
+    _exception_hook_installed = True
+
+    _hook_logger = get_logger("uncaught")
+
+    # 保存原钩子，之后链式调用
+    _orig_sys = sys.excepthook
+    _orig_thread = threading.excepthook
+
+    def _sys_hook(exc_type, exc, tb):
+        try:
+            _hook_logger.error(
+                "未捕获异常(主线程): %s: %s\n%s",
+                exc_type.__name__, exc,
+                "".join(traceback.format_exception(exc_type, exc, tb)),
+            )
+        except Exception:
+            pass
+        # 转发原钩子，保留默认打印/其他框架行为
+        try:
+            _orig_sys(exc_type, exc, tb)
+        except Exception:
+            pass
+
+    def _thread_hook(args):
+        try:
+            _hook_logger.error(
+                "未捕获异常(后台线程 %s): %s: %s\n%s",
+                getattr(args, "thread", None) and args.thread.name or "?",
+                args.exc_type.__name__, args.exc_value,
+                "".join(traceback.format_exception(args.exc_type, args.exc_value, args.exc_traceback)),
+            )
+        except Exception:
+            pass
+        try:
+            _orig_thread(args)
+        except Exception:
+            pass
+
+    sys.excepthook = _sys_hook
+    threading.excepthook = _thread_hook
+    _hook_logger.debug("全局未捕获异常钩子已安装（主线程 + 后台线程）")
