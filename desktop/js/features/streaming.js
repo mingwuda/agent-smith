@@ -284,6 +284,10 @@ function showAskUserModal(data) {
   askUserModalEl = document.createElement('div');
   askUserModalEl.className = 'modal-overlay active ask-user-modal-overlay';
   askUserModalEl.dataset.askId = askId;
+  // 绑定弹窗所属会话：SSE 载荷带 session_id（裸 id）/ thread_key，提交时必须用它而非常用当前会话，
+  // 否则弹窗期间切换会话会把 resolve 打到别的会话导致 ask 找不到 → 「征询提交失败」。
+  askUserModalEl.dataset.sessionId = data.session_id || '';
+  askUserModalEl.dataset.threadKey = data.thread_key || '';
   askUserModalEl.onclick = function (ev) {
     if (ev.target === askUserModalEl) submitAskUserInternal(askId); // 点背景视为提交当前选中的选项
   };
@@ -412,7 +416,10 @@ function closeAskUserModal() {
 }
 
 function resolveAskUser(askId, answer) {
-  const sessionId = currentSessionId || threadId;
+  // 优先用弹窗绑定所属会话（若该会话并未被用户切走则得相同值；若已切走则仍是原会话），
+  // 兜底退回全局当前会话——避免弹窗期间切换会话导致 resolve 打到别的会话、ask 找不到。
+  const boundSession = (askUserModalEl && askUserModalEl.dataset.sessionId) || '';
+  const sessionId = boundSession || currentSessionId || threadId;
   closeAskUserModal();
   if (!sessionId || !askId) return;
   fetch(`/agent/sessions/${encodeURIComponent(sessionId)}/ask/${encodeURIComponent(askId)}/resolve`, {

@@ -908,10 +908,15 @@ class AgentRunMixin:
                     try:
                         from tools.ask_user_tools import get_registry as _ask_reg
                         _ask_asks = _ask_reg().pending_asks(thread_key)
+                        _ask_thread = thread_key  # "{uid}:{sid}"
                         for _a in _ask_asks:
                             if _ask_reg().not_emitted(thread_key, _a["ask_id"]):
                                 _ask_reg().mark_emitted(thread_key, _a["ask_id"])
-                                yield _sse({"type": "ask_user_modal", **_a})
+                                # 把 session_id（裸 id）与 thread_key 一并带上：
+                                # 前端弹窗绑定其所属会话，提交时用它而非常用全局 currentSessionId，
+                                # 避免弹窗期间切换会话导致 resolve 打到别的会话、ask 找不到 → 「征询提交失败」。
+                                yield _sse({"type": "ask_user_modal", "session_id": tid,
+                                            "thread_key": _ask_thread, **_a})
                     except Exception:
                         pass
                     # 子代理结束但父模型长时间没有产生最终回复，强制终止
