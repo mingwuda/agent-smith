@@ -699,11 +699,15 @@ class AgentRunMixin:
         input_messages.append(HumanMessage(content=_human_content(message, attachments, ocr_fallback=_ocr_fallback, ocr_sink=ocr_sink)))
         # 插件事件钩子：on_message（用户消息进入 agent 处理前广播）。
         # 单个插件监听器异常已被 PluginHost.emit 隔离，绝不影响主流程。
+        # 广播后把插件经 host.push_sse 排队的前端事件随之 yield 成 SSE 帧（E 注入点）。
         try:
             from plugin_loader import get_registry as _get_plugin_reg
-            _get_plugin_reg().emit("on_message", {
+            _plug = _get_plugin_reg()
+            _plug.emit("on_message", {
                 "text": message, "user_id": self._user_id, "session_id": tid,
             })
+            for _ev_name, _ev_payload in _plug.drain_sse():
+                yield _sse({"type": "plugin_event", "event": _ev_name, "payload": _ev_payload})
         except Exception:
             pass
         # 兜底：模型不支持视觉时，清除任何残留 image_url（防御未来新路径漏图）
@@ -1283,9 +1287,11 @@ class AgentRunMixin:
 
                     # 插件事件钩子：on_tool_end（工具调用结束后广播）。
                     # 单个插件监听器异常已被 PluginHost.emit 隔离，绝不影响主流程。
+                    # 广播后把插件经 host.push_sse 排队的前端事件随之 yield 成 SSE 帧（E 注入点）。
                     try:
                         from plugin_loader import get_registry as _get_plugin_reg
-                        _get_plugin_reg().emit("on_tool_end", {
+                        _plug = _get_plugin_reg()
+                        _plug.emit("on_tool_end", {
                             "name": tool_name,
                             "args": (tinfo or {}).get("input", {}),
                             "result": output_str,
@@ -1293,6 +1299,8 @@ class AgentRunMixin:
                             "user_id": self._user_id,
                             "session_id": tid,
                         })
+                        for _ev_name, _ev_payload in _plug.drain_sse():
+                            yield _sse({"type": "plugin_event", "event": _ev_name, "payload": _ev_payload})
                     except Exception:
                         pass
 

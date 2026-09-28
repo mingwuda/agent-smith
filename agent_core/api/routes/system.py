@@ -1,7 +1,8 @@
 """系统路由（设置、用户管理、UI）"""
 import os
 import sys
-from typing import Optional
+from pathlib import Path
+from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
@@ -128,6 +129,74 @@ def list_plugins(request: Request):
         "enabled_plugins": enabled,
         "plugin_dirs": cfg.plugin_dirs,
     }
+
+
+@router.get("/plugin-frontend")
+def list_plugin_frontend(request: Request):
+    """返回所有启用插件的 FRONTEND 注入清单，供前端 plugin-ui.js 注册。
+
+    A/C/F（侧边栏 / 设置 Tab / 裸 CSS/JS）与 E（自定义 SSE 事件名）统一在此收集。
+    """
+    _require_admin(request)
+    try:
+        from plugin_loader import get_registry
+    except Exception:
+        return {"plugins": []}
+    reg = get_registry()
+    # 用实际运行期注册表（可能已被 init_agent 热重载），而非重新扫描
+    return {"plugins": reg.collect_frontend()}
+
+
+class PluginState(BaseModel):
+    """插件设置 Tab 的持久化 KV。宽松存储：value 为任意 JSON。"""
+    value: Any = None
+
+
+@router.get("/plugin-state/{plugin_id}")
+def get_plugin_state(plugin_id: str, request: Request):
+    """读取某插件的持久化设置（供插件设置 Tab / 前端展示用）。
+
+    存于磁盘 JSON，普通 JSON 序列化即可；不存敏感信息。
+    """
+    _require_admin(request)
+    return _load_plugin_state(plugin_id)
+
+
+@router.post("/plugin-state/{plugin_id}")
+def save_plugin_state(plugin_id: str, req: PluginState, request: Request):
+    """保存某插件的持久化设置。"""
+    _require_admin(request)
+    _save_plugin_state(plugin_id, req.value)
+    return {"status": "ok"}
+
+
+def _plugin_state_file(plugin_id: str):
+    import os
+    base = Path(os.path.expanduser("~/.desktop_agent"))
+    base.mkdir(parents=True, exist_ok=True)
+    safe = "".join(c for c in plugin_id if c.isalnum() or c in "-_") or "plugin"
+    return base / f"plugin_state_{safe}.json"
+
+
+def _load_plugin_state(plugin_id: str) -> dict:
+    import json
+    p = _plugin_state_file(plugin_id)
+    try:
+        if p.exists():
+            return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        logger.warning("[插件] 读取 %s 状态失败，返回空", plugin_id)
+    return {}
+
+
+def _save_plugin_state(plugin_id: str, value):
+    import json
+    p = _plugin_state_file(plugin_id)
+    try:
+        p.write_text(json.dumps(value if isinstance(value, dict) else {"value": value},
+                                 ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        logger.exception("[插件] 保存 %s 状态失败", plugin_id)
 
 
 @router.delete("/settings/provider/{provider_id}")

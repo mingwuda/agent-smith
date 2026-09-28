@@ -14,8 +14,17 @@
     INFO    = {"id": "my_plugin", "name": "...", "description": "...", "version": "1.0"}
              # 必填 id；其余用于展示
     TOOLS   = [tool1, tool2, ...]          # 可选：贡献的工具（langchain tool 对象）
+    FRONTEND = {...}                       # 可选：前端注入清单（A/C/F/E 前后端注入点）
     on_load(self)   # 可选：插件被启用并加载时调用，可做初始化（self 是 PluginHost）
     on_unload(self) # 可选：插件被禁用时调用，可做清理
+
+FRONTEND 是 dict，支持的字段（全部可选）：
+    css           [str]             裸 CSS 全局注入（F）
+    js            [str]             裸 JS 全局注入（F）
+    sidebar       {"title": str, "html": str}   侧边栏底部手风琴区块（A）
+    settings_tabs [{"key","title"},...]          设置弹窗自定义 Tab（C）
+    events        [str, ...]        插件将推送的自定义 SSE 事件名（E，配合 host.push_sse）
+自定义 Tab 的展示内容一般由 js 注入的代码填充（见 example_plugin）。
 
 ## 目录约定
 - 内置插件目录：`agent_core/plugins/`（每个子目录带 __init__.py，或一个 .py 模块）
@@ -112,6 +121,16 @@ class PluginHost:
         """插件在加载期向全局注册表追加工具（贡献点之一）。"""
         self.registry.register_external_tools(self.registry.current_plugin_id, tools)
 
+    def push_sse(self, event: str, payload: dict = None):
+        """插件向前端推送自定义 SSE 事件（注入点 E 的后端侧）。
+
+        事件不会立即发出：记入注册表全局待发队列，由 agent_run 在每次插件事件
+        （on_message / on_tool_end）广播之后 drain_sse() 取出并 yield 成 SSE 帧，
+        前端 handleStreamEvent 的 default 分支按 event 名 dispatch 给插件注册的
+        前端 listener。payload 异常不影响主流程。
+        """
+        self.registry.queue_sse(event, payload or {})
+
     def emit(self, event: str, payload: Any = None) -> int:
         """向所有已加载插件的 HOOKS[event] 监听器广播事件。
 
@@ -161,6 +180,42 @@ class PluginRegistry:
         self.external_tools: list = []       # 插件通过 host.register_tools 追加的工具
         self.current_plugin_id: str = ""
         self._plugin_modules: dict[str, Any] = {}  # id -> module（供卸载用）
+        self._queued_sse: list[tuple[str, dict]] = []  # 插件推送的前端 SSE 事件（E 注入点）
+
+    # ── 前端资源（FRONTEND 注入点 A/C/F 的后端侧）──
+    def collect_frontend(self) -> list[dict]:
+        """收集所有启用且加载成功插件声明的 FRONTEND 清单。
+
+        每个插件的 FRONTEND 是 dict，支持字段：
+          css         [str]       裸 CSS 片段（F）
+          js          [str]       裸 JS 片段（F）
+          sidebar     [dict]      {title, html} — 侧边栏下方手风琴区块（A）
+          settings_tabs [list]    [{key, title}...] — 设置弹窗自定义 Tab（C）
+          events      [list]      [name,...] — 本插件将推送的自定义 SSE 事件（E）
+        """
+        out = []
+        for rec in self.plugins.values():
+            if not (rec.enabled and rec.injectable) or rec.module is None:
+                continue
+            fe = getattr(rec.module, "FRONTEND", None)
+            if not fe:
+                continue
+            if not isinstance(fe, dict):
+                logger.warning("[插件] %s 的 FRONTEND 非 dict，忽略", rec.id)
+                continue
+            out.append({"id": rec.id, "name": rec.name, "description": rec.description,
+                        "frontend": fe})
+        return out
+
+    # ── SSE 待发队列（E 注入点）──
+    def queue_sse(self, event: str, payload: dict):
+        self._queued_sse.append((event, payload))
+
+    def drain_sse(self) -> list:
+        """取走并清空全局待发 SSE 队列。"""
+        pending = self._queued_sse
+        self._queued_sse = []
+        return pending
 
     # ── 插件目录扫描 ──
     def discover(self) -> list[PluginRecord]:
@@ -310,6 +365,7 @@ class PluginRegistry:
         if plugin_dirs is not None:
             self.custom_dirs = [Path(p) for p in plugin_dirs]
         self.external_tools = []
+        self._queued_sse = []
         self.discover()
         return self.load_all()
 

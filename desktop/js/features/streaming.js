@@ -2309,6 +2309,19 @@ function handleStreamEvent(data) {
       }
       smartScroll(container);
       break;
+
+    default:
+      // 插件自定义 SSE 事件（E 注入点）：后端在 on_message/on_tool_end 广播后
+      // 把插件经 host.push_sse 排队的事件 yield 成 {type:'plugin_event', event, payload}，
+      // 这里按 event 名 dispatch 给插件用 PluginUI.onEvent 注册的前端回调。
+      if (data && data.type === 'plugin_event' && typeof window.PluginUI !== 'undefined') {
+        try {
+          window.PluginUI.dispatchEvent(data.event, data.payload);
+        } catch (e) {
+          console.error('[plugin-event] dispatch failed:', e);
+        }
+      }
+      break;
   }
 }
 

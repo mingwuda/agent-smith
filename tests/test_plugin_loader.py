@@ -288,3 +288,104 @@ def test_get_registry_no_reload_when_params_unchanged(plugin_dir):
     reg2.load_all()
     assert reg2.plugins["good"].module is module_before
     reset_registry()
+# ── FRONTEND 注入（A/C/F/E）──
+def test_collect_frontend_ignores_plugin_without_frontend(plugin_dir):
+    _write_plugin(plugin_dir, "good", GOOD_PLUGIN)
+    reg = _registry(plugin_dir, ["good"])
+    reg.discover()
+    reg.load_all()
+    assert reg.collect_frontend() == []
+
+
+def test_collect_frontend_gathers_manifest(plugin_dir):
+    p = '''
+        INFO = {"id": "fe", "name": "前端插件", "version": "1.0"}
+        FRONTEND = {
+            "css": ["a{}", "b{}"],
+            "js": ["window.x=1;"],
+            "sidebar": {"title": "我的侧栏", "html": "<b>hi</b>"},
+            "settings_tabs": [{"key": "k", "title": "T"}],
+            "events": ["my.event"],
+        }
+    '''
+    _write_plugin(plugin_dir, "fe", p)
+    reg = _registry(plugin_dir, ["fe"])
+    reg.discover()
+    reg.load_all()
+    fe = reg.collect_frontend()
+    assert len(fe) == 1
+    f = fe[0]
+    assert f["id"] == "fe"
+    assert len(f["frontend"]["css"]) == 2
+    assert f["frontend"]["js"] == ["window.x=1;"]
+    assert f["frontend"]["sidebar"]["title"] == "我的侧栏"
+    assert f["frontend"]["settings_tabs"][0]["key"] == "k"
+    assert f["frontend"]["events"] == ["my.event"]
+
+
+def test_collect_frontend_normalizes_frontend_type(plugin_dir):
+    """FRONTEND 非 dict 时忽略并记 warning，不崩。"""
+    _write_plugin(plugin_dir, "bad_fe", 'INFO={"id":"bad_fe"}\nFRONTEND=42\n')
+    reg = _registry(plugin_dir, ["bad_fe"])
+    reg.discover()
+    reg.load_all()
+    assert reg.collect_frontend() == []
+
+
+def test_disabled_plugin_frontend_not_collected(plugin_dir):
+    p = 'INFO={"id":"fe"}\nFRONTEND={"css":["a{}"]}\n'
+    _write_plugin(plugin_dir, "fe", p)
+    reg = _registry(plugin_dir, [])
+    reg.discover()
+    reg.load_all()
+    assert reg.collect_frontend() == []
+
+
+# ── SSE 推送通道（E 注入点）──
+def test_queue_and_drain_sse(plugin_dir):
+    reg = _registry(plugin_dir, [])
+    reg.queue_sse("ev1", {"a": 1})
+    reg.queue_sse("ev2", {})
+    assert reg.drain_sse() == [("ev1", {"a": 1}), ("ev2", {})]
+    # 清空后再取为空
+    assert reg.drain_sse() == []
+
+
+def test_push_sse_updates_queue_then_drains(plugin_dir):
+    """插件 on_tool_end 里 host.push_sse → 队列累积 → drain_sse 取走，供 agent_run yield。"""
+    p = '''
+        INFO = {"id": "pusher", "name": "p"}
+        _host = None
+        def _on_tool_end(payload):
+            _host.push_sse("my.event", {"tool": payload.get("name", "")})
+        HOOKS = {"on_tool_end": _on_tool_end}
+        def on_load(host):
+            global _host
+            _host = host
+    '''
+    _write_plugin(plugin_dir, "pusher", p)
+    reg = _registry(plugin_dir, ["pusher"])
+    reg.discover()
+    reg.load_all()
+    # 通过 emit 广播 on_tool_end → 插件 push_sse
+    reg.emit("on_tool_end", {"name": "run_shell"})
+    queued = reg.drain_sse()
+    assert queued == [("my.event", {"tool": "run_shell"})]
+    assert reg.drain_sse() == []
+
+
+def test_broken_push_sse_isolated(plugin_dir):
+    """插件 push_sse 抛异常不影响主流程。"""
+    p = '''
+        INFO = {"id": "badpush"}
+        def _on_tool_end(payload):
+            raise RuntimeError("boom")
+        HOOKS = {"on_tool_end": _on_tool_end}
+    '''
+    _write_plugin(plugin_dir, "badpush", p)
+    reg = _registry(plugin_dir, ["badpush"])
+    reg.discover()
+    reg.load_all()
+    # 不抛异常，只是队列为空
+    reg.emit("on_tool_end", {"name": "x"})
+    assert reg.drain_sse() == []

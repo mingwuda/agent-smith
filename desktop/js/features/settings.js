@@ -555,6 +555,11 @@ async function saveSettings() {
     if (data.status === 'ok') {
       feedback.textContent = '✅ ' + (currentLanguage === 'en' ? t('settingsSaved') : (data.message || t('settingsSaved')));
       feedback.className = 'save-feedback ok';
+      // 同步插件前端注入点：取消勾选的插件，其侧边栏区块/设置 Tab 立即移除
+      // （CSS/JS 已注入的副作用无法卸载，需刷新页面才彻底清除，见 PluginUI.unregister 注释）
+      if (typeof window.PluginUI !== 'undefined' && window.PluginUI.sync) {
+        try { window.PluginUI.sync(collectEnabledPlugins()); } catch (e) { console.error('[plugin-ui] sync', e); }
+      }
       // 清空密码框
       document.getElementById('s-api-key').value = '';
       document.getElementById('s-tavily-api-key').value = '';
