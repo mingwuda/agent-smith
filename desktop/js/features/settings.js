@@ -976,7 +976,7 @@ async function deleteModelFromProvider(modelName) {
   showToast('✅ ' + (currentLanguage === 'en' ? 'Model deleted' : '已删除模型'), 'success');
 }
 /* ── 插件管理 ─────────────────────────────────────────────────────────────
-   拉取 /system/plugins 渲染可发现的插件列表（勾选 = 启用），
+   拉取 /plugins 渲染可发现的插件列表（勾选 = 启用），
    保存时由 collectEnabledPlugins() 汇总进 enabled_plugins。
    ──────────────────────────────────────────────────────────────────────── */
 
@@ -985,7 +985,7 @@ async function loadPluginPanel(preselect) {
   if (!box) return;
   box.innerHTML = '<div class="hint">正在加载插件列表…</div>';
   try {
-    const res = await fetch('/system/plugins', { credentials: 'include' });
+    const res = await fetch('/plugins', { credentials: 'include' });
     const data = await res.json();
     const enabled = new Set(preselect || data.enabled_plugins || []);
     const plugins = data.plugins || [];

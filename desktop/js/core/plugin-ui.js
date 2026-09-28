@@ -1,5 +1,5 @@
 /* plugin-ui.js — 前端插件注册框架（依赖: state.js, util.js, i18n.js）
-   启动时拉取 /system/plugin-frontend，按插件的 FRONTEND 清单注册 4 类注入点：
+   启动时拉取 /plugin-frontend，按插件的 FRONTEND 清单注册 4 类注入点：
      F  css/js    —— 裸 CSS/JS 全局注入
      A  sidebar    —— 侧边栏底部手风琴区块
      C  settings_tabs —— 设置弹窗自定义 Tab
@@ -119,7 +119,7 @@ const PluginUI = (() => {
   // 供插件 JS 拉取其持久化设置
   async function loadState(pluginId) {
     try {
-      const res = await fetch('/system/plugin-state/' + encodeURIComponent(pluginId), { credentials: 'include' });
+      const res = await fetch('/plugin-state/' + encodeURIComponent(pluginId), { credentials: 'include' });
       return await res.json();
     } catch (e) { return {}; }
   }
@@ -127,7 +127,7 @@ const PluginUI = (() => {
   // 供插件 JS 保存其持久化设置
   async function saveState(pluginId, value) {
     try {
-      await fetch('/system/plugin-state/' + encodeURIComponent(pluginId), {
+      await fetch('/plugin-state/' + encodeURIComponent(pluginId), {
         method: 'POST', credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ value }),
@@ -156,13 +156,13 @@ const PluginUI = (() => {
 
   // 入口：拉取所有启用插件的 FRONTEND 并注册
   async function init() {
-    // 插件注入是 admin 能力（后端 /system/plugin-frontend 走 _require_admin）。
+    // 插件注入是 admin 能力（后端 /plugin-frontend 走 _require_admin）。
     // 非 admin 拉取只会拿到 403，且其 UI 注入点（设置 Tab）本就不可见，
     // 因此直接跳过，避免每次页面加载都产生一次无谓的 403 请求。
     if (typeof isAdmin !== 'undefined' && !isAdmin) return;
     let data;
     try {
-      const res = await fetch('/system/plugin-frontend', { credentials: 'include' });
+      const res = await fetch('/plugin-frontend', { credentials: 'include' });
       if (!res.ok) {
         // 403（非 admin）/ 500 等：插件注入是增强能力，失败不影响主流程
         console.warn('[plugin-ui] 拉取前端清单失败 HTTP', res.status);
