@@ -197,7 +197,7 @@ function stopCurrentRun() {
   // 调用后端 cancel 端点取消 driver 的 asyncio task，让真正的 stream 停止并走清理。
   const sessionId = currentSessionId || threadId;
   if (sessionId) {
-    fetch(`/agent/sessions/${encodeURIComponent(sessionId)}/cancel`, { method: 'POST' })
+    fetch(`/sessions/${encodeURIComponent(sessionId)}/cancel`, { method: 'POST' })
       .then(res => res.json().catch(() => ({})))
       .then(data => {
         // 若本就在跑、取消成功，driver 的 finally 会补发 done；前端保持还原逻辑即可。
@@ -237,7 +237,7 @@ function steerCurrentRun() {
   resizeComposer();
   addMessage('⚡ ' + (t('steerOutgoing') || '正在打断…'), 'system');
 
-  fetch(`/agent/sessions/${encodeURIComponent(sessionId)}/inject`, {
+  fetch(`/sessions/${encodeURIComponent(sessionId)}/inject`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ content: text, mode: 'step' }),
@@ -422,14 +422,23 @@ function resolveAskUser(askId, answer) {
   const sessionId = boundSession || currentSessionId || threadId;
   closeAskUserModal();
   if (!sessionId || !askId) return;
-  fetch(`/agent/sessions/${encodeURIComponent(sessionId)}/ask/${encodeURIComponent(askId)}/resolve`, {
+  // 注意：后端路由挂在根路径（无 /agent 前缀），路径写错会 404 → 提交必然失败。
+  fetch(`/sessions/${encodeURIComponent(sessionId)}/ask/${encodeURIComponent(askId)}/resolve`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ answer: answer || '' }),
   })
-    .then(function (resp) { return resp.json(); })
+    .then(function (resp) {
+      // 显式检查 HTTP 状态：路由写错(404)/鉴权失败(401) 的响应体不含 resolved 字段，
+      // 过去会被笼统报成"征询提交失败"，掩盖了真实的 404（排查时耗了很久）。带上状态码。
+      if (!resp.ok) {
+        addMessage('⚠️ ' + (t('askUserFailed') || '征询提交失败') + ' (HTTP ' + resp.status + ')', 'system');
+        return null;
+      }
+      return resp.json();
+    })
     .then(function (data) {
-      if (!data || !data.resolved) {
+      if (data && !data.resolved) {
         addMessage('⚠️ ' + (t('askUserFailed') || '征询提交失败'), 'system');
       }
     })
@@ -2084,6 +2093,10 @@ function handleStreamEvent(data) {
       // agent 调用 ask_user 向用户征询意见：弹出问卷弹窗等待用户选择/输入。
       // 用户提交后 POST 到 resolve 端点，后端唤醒阻塞中的 ask_user 工具继续执行。
       markStreamActivity();
+      // 历史回放（刷新页面/切到已结束会话）不重弹：该 ask 早已 resolve 或早已超时，
+      // 此时后端没有 pending ask，弹出来提交必然失败（resolved:false）。陈旧弹窗只此一处来源。
+      // 但「切回仍在跑的会话」的重建回放（_isReconstructing）要正常弹——那是真的在等用户回答。
+      if (_isReplaying && !_isReconstructing) break;
       if (data && data.ask_id) {
         showAskUserModal(data);
       }
