@@ -97,16 +97,21 @@ async function runCronNow(taskId) {
   if (cronRunningIds.has(taskId)) return;
   cronRunningIds.add(taskId);
   _refreshCronRunButtons();
+  let ok = false;
   try {
     const res = await fetch('/cron/' + encodeURIComponent(taskId) + '/run', { method: 'POST' });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.detail || 'HTTP ' + res.status);
     }
+    ok = true;
   } catch (e) {
     alert(t('cronRunFailed') + '：' + String(e && e.message || e));
   } finally {
     cronRunningIds.delete(taskId);
+    if (ok && typeof switchSession === 'function') {
+      switchSession('cron_sess_' + taskId, 'web', true);
+    }
     loadCronTasks();
   }
 }
