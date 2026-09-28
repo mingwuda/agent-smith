@@ -197,14 +197,20 @@ function stopCurrentRun() {
 
   // 彻底终止：仅 abort 浏览器到后端的 SSE 连接只能断开订阅，后台 driver 仍会跑完。
   // 调用后端 cancel 端点取消 driver 的 asyncio task，让真正的 stream 停止并走清理。
-  const sessionId = currentSessionId || threadId;
+  // 关键：cancel 的目标必须是「被 stop 的那个 rt 所属会话」（rt.sessionId），而不能用
+  // currentSessionId —— 多页签切换会话时 currentSessionId 会随可见 tab 漂移，
+  // 若停在后台运行中的会话 B 上却去 cancel 当前可见会话 A，会找到 A 的 driver（无/错），
+  // 导致 B 的 driver 不停、回复继续，表现为「停止按钮无效」。
+  const sessionId = rt.sessionId || currentSessionId || threadId;
   if (sessionId) {
     fetch(`/sessions/${encodeURIComponent(sessionId)}/cancel`, { method: 'POST' })
       .then(res => res.json().catch(() => ({})))
       .then(data => {
         // 若本就在跑、取消成功，driver 的 finally 会补发 done；前端保持还原逻辑即可。
+        // 取消失败（无运行中任务等）属于临时反馈，用 toast 轻提示，不再往消息区插入第二条系统消息。
         if (data && !data.ok && data.detail) {
-          addMessage(data.detail, 'system');
+          if (typeof showToast === 'function') showToast(data.detail, 'warn');
+          else addMessage(data.detail, 'system');
         }
       })
       .catch(() => {/* 取消请求失败不阻塞按钮还原，后台 driver 继续由超时兜底 */});

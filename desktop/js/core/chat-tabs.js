@@ -77,14 +77,24 @@
     // 恢复该页签滚动位置
     if (scrollCache[key] != null) panel.scrollTop = scrollCache[key];
     _setActiveKey(key);
+    // ponytail: 同步侧边栏会话选中高亮（.session-item / .psession-item）。
+    // 点击页签栏或点击「已在页签中」的侧边栏会话，都只走 activate() 而不经过
+    // switchSession() 末尾的高亮代码（后者在 tabAlreadyOpen 早退分支会被跳过），
+    // 因此必须在这里一并同步，否则侧边栏选中态不会跟随切换。
+    document.querySelectorAll('.session-item, .psession-item').forEach(function (el) {
+      el.classList.toggle('active', el.dataset.key === key);
+    });
     // 同步全局「当前可见会话」，保证 streaming 的 live 只对激活页签生效
     if (window.setVisibleSessionKey) setVisibleSessionKey(key);
-    // 同步 currentSessionId / source，保证本轮后续 fetch 走对会话
+    // 同步 currentSessionId / source，保证本轮后续 fetch 走对会话。
+    // 注意：state.js 里 currentSessionId 是顶层 let（不挂 window），
+    // 这里必须按共享全局作用域名赋值，不能写 window.currentSessionId（那样永远 undefined、同步无效）。
+    // 用 typeof 守卫规避加载顺序（currentSessionSource 定义于 sessions.js，晚于本文件加载，但 call 时均已就绪）。
     const s = splitKey(key);
-    if (s && window.currentSessionId !== undefined) {
-      window.currentSessionId = s.id;
-      window.currentSessionSource = s.source;
-      window.threadId = s.id;
+    if (s && typeof currentSessionId !== 'undefined') {
+      currentSessionId = s.id;
+      if (typeof currentSessionSource !== 'undefined') currentSessionSource = s.source;
+      if (typeof threadId !== 'undefined') threadId = s.id;
     }
     // 重建悬浮「滚动到底部」按钮绑定（只绑到当前 #messages）
     if (window.initScrollToBottomBtn) initScrollToBottomBtn();

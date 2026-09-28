@@ -488,6 +488,12 @@ async function switchSession(sessionId, source, forceLoad = false) {
 
   // ── 多页签：若目标会话已在页签中（非强制刷新），仅切激活、同步状态后直接返回，不重载 ──
   if (window.ChatTabs && tabAlreadyOpen) {
+    // 此分支按目标会话本身同步全局状态（activate() 也会同步，这里再保险一次），
+    // 否则 currentSessionId 滞后于可见页签，下次切换到该会话会被开头的
+    // `sessionId === currentSessionId` 提前 return 拦下 → 点击无效。
+    currentSessionId = sessionId;
+    currentSessionSource = source;
+    threadId = sessionId;
     if (typeof syncStreamingActive === 'function') syncStreamingActive();
     if (typeof updateRunIndicators === 'function') updateRunIndicators();
     if (typeof refreshStats === 'function') refreshStats();
