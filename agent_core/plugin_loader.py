@@ -373,14 +373,26 @@ def get_registry(enabled_plugins: Optional[list[str]] = None,
 
     首次调用时创建并**立即 discover()**（否则 load_all() 遍历空的 plugins
     什么都不会加载——这是原实现的隐患：单例建好了但从未扫描目录）。
-    后续调用返回同一实例；传入的参数仅在首次创建时生效，运行期变更请用
-    registry.reload(enabled_plugins=..., plugin_dirs=...)。
+
+    后续调用返回同一实例，但**参数变更会触发热重载**：init_agent 在保存设置后
+    会被 force=True 重建，此时若沿用首次的 enabled_plugins/plugin_dirs，
+    用户在设置页勾选/取消的插件开关就永远不生效（2026-09-28 实测复现：
+    启动 enabled=[p1]，改配置为 [p2] 后 collect_tools 仍是 p1）。
+    因此这里检测到启用集合或目录变化即 reload，而不是静默忽略新参数。
     """
     global _registry
     if _registry is None:
         _registry = PluginRegistry(enabled_plugins=enabled_plugins,
                                    plugin_dirs=plugin_dirs)
         _registry.discover()
+        return _registry
+    # 参数变化 → 热重载（无变化则零成本返回）
+    new_enabled = set(enabled_plugins) if enabled_plugins is not None else None
+    new_dirs = [Path(p) for p in plugin_dirs] if plugin_dirs is not None else None
+    if new_enabled is not None and new_enabled != _registry.enabled:
+        _registry.reload(enabled_plugins=list(new_enabled), plugin_dirs=new_dirs)
+    elif new_dirs is not None and new_dirs != _registry.custom_dirs:
+        _registry.reload(enabled_plugins=list(_registry.enabled), plugin_dirs=new_dirs)
     return _registry
 
 

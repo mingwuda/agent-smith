@@ -248,3 +248,43 @@ def test_registry_singleton_and_reset(plugin_dir):
     assert a is b
     reset_registry()
     assert get_registry() is not a
+
+
+def test_get_registry_reloads_when_enabled_set_changes(plugin_dir):
+    """保存设置后 init_agent(force=True) 会用新 enabled_plugins 再调 get_registry。
+
+    单例若静默忽略新参数，设置页的插件勾选就永远不生效（2026-09-28 实测复现：
+    启动 enabled=[p1]，改配置为 [p2] 后 collect_tools 仍是 p1）。
+    """
+    _write_plugin(plugin_dir, "p1", GOOD_PLUGIN)
+    _write_plugin(plugin_dir, "p2", GOOD_PLUGIN.replace('"good"', '"p2"')
+                  .replace("good_tool", "p2_tool").replace("好插件", "P2"))
+    reset_registry()
+    from plugin_loader import get_registry
+    reg = get_registry(enabled_plugins=["p1"], plugin_dirs=[plugin_dir])
+    reg.load_all()
+    assert [getattr(t, "name", None) for t in reg.collect_tools()] == ["good_tool"]
+    # 同一进程内改用新启用集合（模拟保存设置后重建 Agent）
+    reg2 = get_registry(enabled_plugins=["p2"], plugin_dirs=[plugin_dir])
+    reg2.load_all()
+    assert reg2 is reg
+    assert [getattr(t, "name", None) for t in reg2.collect_tools()] == ["p2_tool"]
+    # 全关：工具必须被清空，不能残留上一个启用集合的工具
+    reg3 = get_registry(enabled_plugins=[], plugin_dirs=[plugin_dir])
+    reg3.load_all()
+    assert reg3.collect_tools() == []
+    reset_registry()
+
+
+def test_get_registry_no_reload_when_params_unchanged(plugin_dir):
+    """参数不变时不得触发热重载（避免每次 init_agent 都重放 on_load）。"""
+    _write_plugin(plugin_dir, "good", GOOD_PLUGIN)
+    reset_registry()
+    from plugin_loader import get_registry
+    reg = get_registry(enabled_plugins=["good"], plugin_dirs=[plugin_dir])
+    reg.load_all()
+    module_before = reg.plugins["good"].module
+    reg2 = get_registry(enabled_plugins=["good"], plugin_dirs=[plugin_dir])
+    reg2.load_all()
+    assert reg2.plugins["good"].module is module_before
+    reset_registry()
