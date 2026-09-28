@@ -33,7 +33,7 @@ from memory.local_memory import set_current_user
 from monitoring.usage_tracker import get_tracker, UsageTracker
 from network_resolver import configure_host_resolution
 from skills.registry import get_registry, SkillRegistry
-__all__ = ['logger', '_extract_tool_name', '_extract_tool_args', '_truncate', '_sse', '_tool_signature', '_tool_call_label', '_loop_guard_message', '_SCENE_PROMPTS', '_detect_scene', '_get_nested', '_extract_usage_tokens', '_message_text', '_normalize_messages', '_dump_context_profile', '_is_recursion_limit_error', '_recursion_limit_message', '_synthesize_guard_summary', '_connection_diagnostic', '_human_content', '_synthetic_ocr_sse_steps', '_SCREENSHOT_URL_RE', '_strip_screenshot_urls_from_text', '_strip_image_content_from_message', '_strip_image_content_from_messages', '_tool_call_ids', '_tool_message_id', '_drop_dangling_tool_call_messages', '_split_inflight_tail', '_recent_round_user_indexes', 'session_messages_to_langchain', 'compact_history_messages', '_extract_steps_from_messages', '_truncate_args', '_on_llm_idle_retry', '_astream_with_idle_timeout', 'RetryableLLM', 'is_rate_limit_error', 'llm_waiting', '_mark_llm_wait', '_llm_wait_ctx']
+__all__ = ['logger', '_extract_tool_name', '_extract_tool_args', '_truncate', '_sse', '_tool_signature', '_tool_call_label', '_loop_guard_message', '_SCENE_PROMPTS', '_detect_scene', '_get_nested', '_extract_usage_tokens', '_message_text', '_normalize_messages', '_dump_context_profile', '_is_recursion_limit_error', '_recursion_limit_message', '_synthesize_guard_summary', '_connection_diagnostic', '_human_content', '_synthetic_ocr_sse_steps', '_SCREENSHOT_URL_RE', '_strip_screenshot_urls_from_text', '_strip_image_content_from_message', '_strip_image_content_from_messages', '_tool_call_ids', '_tool_message_id', '_drop_dangling_tool_call_messages', '_split_inflight_tail', '_recent_round_user_indexes', 'session_messages_to_langchain', 'compact_history_messages', '_extract_steps_from_messages', '_truncate_args', '_on_llm_idle_retry', '_astream_with_idle_timeout', 'RetryableLLM', 'is_rate_limit_error', 'llm_waiting', '_mark_llm_wait', '_llm_wait_ctx', 'op_busy', 'OpBusy', '_op_busy_ctx', 'resolve_outer_idle_timeout']
 
 
 """桌面 AI 智能体核心"""
@@ -1148,6 +1148,59 @@ def llm_waiting() -> bool:
         return box is not None and time.time() < float(box[0])
     except Exception:
         return False
+
+
+# 无事件长任务的「忙」计数（每请求一个可变容器，跨 context 共享）。
+# 用计数而非截止时间：上下文压缩这类操作耗时不可预知，截止时间可能中途过期。
+# 它们会长时间 await 且不产生任何图事件，必须让外层空闲看门狗豁免，
+# 否则会被误判为「模型卡死」而强杀整轮（线上实测：压缩 87s 被误杀，final_len=0）。
+_op_busy_ctx: contextvars.ContextVar[list] = contextvars.ContextVar("op_busy_count", default=None)
+
+
+class OpBusy:
+    """with 语法标注「无事件的长任务进行中」，供 is_busy 豁免外层空闲超时。
+
+    以 with 语义承载 try/finally，保证异常路径也会减计数——不会把看门狗永久关掉。
+    """
+
+    def __enter__(self):
+        box = _op_busy_ctx.get()
+        if box is not None:
+            box[0] += 1
+        return self
+
+    def __exit__(self, *exc):
+        box = _op_busy_ctx.get()
+        if box is not None and box[0] > 0:
+            box[0] -= 1
+        return False
+
+
+def op_busy() -> bool:
+    """当前是否有「无事件的长任务」在进行（供 is_busy 跳过空闲超时检查）。"""
+    try:
+        box = _op_busy_ctx.get()
+        return bool(box) and box[0] > 0
+    except Exception:
+        return False
+
+
+# 外层空闲看门狗阈值的额外余量（秒）：盖住内层每次重试的退避 + 建连开销。
+_LLM_TIMEOUT_MARGIN_SECONDS = 30.0
+
+
+def resolve_outer_idle_timeout(config) -> float:
+    """解析外层空闲看门狗阈值：取「配置值」与「内层 idle 重试总预算 + 余量」的较大者。
+
+    ⚠️ 必须 ≥ 内层总预算，否则外层会抢在内层重试序列跑完前熔断，导致 RetryableLLM 的
+    空闲重试**实际永远不生效**（历史故障：外层硬编码 90s < 内层 120s 时就是这样）。
+    `llm_timeout_seconds` 为 0 或缺省表示「自动按内层预算推导」。
+    """
+    configured = float(getattr(config, "llm_timeout_seconds", 0.0) or 0.0)
+    idle = float(getattr(config, "llm_idle_timeout_seconds", 90.0) or 0.0)
+    retries = int(getattr(config, "llm_idle_max_retries", 0) or 0)
+    inner_budget = idle * (retries + 1) + _LLM_TIMEOUT_MARGIN_SECONDS
+    return max(configured, inner_budget)
 
 
 def _make_inbox_pre_hook(user_id: str):

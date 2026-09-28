@@ -71,6 +71,10 @@ class AgentConfig:
     # 单次 LLM 调用的硬墙钟上限（秒）：即便是有效进展也会刷新，作为兜底，
     # 必须明显大于 idle 重试总预算（idle × (retries+1) + 退避），否则会抢在重试序列结束前杀掉调用。
     llm_hard_timeout_seconds: float = 600.0
+    # 外层空闲看门狗阈值（秒）：图/工具之外「完全无事件」超过该值即熔断整轮（此层无重试）。
+    # 0 或未配置 = 自动按「内层 idle 重试总预算 + 余量」推导（agent_helpers.resolve_outer_idle_timeout）。
+    # ⚠️ 该值必须 ≥ 内层总预算，否则会抢在内层重试序列跑完前熔断，使空闲重试实际失效。
+    llm_timeout_seconds: float = 0.0
     # 限流(429)重试：上游回 rate limit 时不立即抛异常，固定等待该秒数后就地重试本次 LLM 调用
     llm_rate_limit_wait_seconds: float = 30.0
     # 限流重试的最大次数（0 表示不重试、直接抛）
@@ -196,6 +200,7 @@ class AgentConfig:
             "AGENT_LLM_IDLE_TIMEOUT_SECONDS": ("llm_idle_timeout_seconds", float),
             "AGENT_LLM_IDLE_MAX_RETRIES": ("llm_idle_max_retries", int),
             "AGENT_LLM_HARD_TIMEOUT_SECONDS": ("llm_hard_timeout_seconds", float),
+            "AGENT_LLM_TIMEOUT_SECONDS": ("llm_timeout_seconds", float),
             "AGENT_LLM_RATE_LIMIT_WAIT_SECONDS": ("llm_rate_limit_wait_seconds", float),
             "AGENT_LLM_RATE_LIMIT_MAX_RETRIES": ("llm_rate_limit_max_retries", int),
             "AGENT_API_HOST_IPS": ("api_host_ips", str),
@@ -402,6 +407,7 @@ class AgentConfig:
             "llm_idle_timeout_seconds": self.llm_idle_timeout_seconds,
             "llm_idle_max_retries": self.llm_idle_max_retries,
             "llm_hard_timeout_seconds": self.llm_hard_timeout_seconds,
+            "llm_timeout_seconds": self.llm_timeout_seconds,
             "llm_rate_limit_wait_seconds": self.llm_rate_limit_wait_seconds,
             "llm_rate_limit_max_retries": self.llm_rate_limit_max_retries,
             "api_host_ips": self.api_host_ips,
@@ -467,6 +473,7 @@ class AgentConfig:
             "llm_idle_timeout_seconds": self.llm_idle_timeout_seconds,
             "llm_idle_max_retries": self.llm_idle_max_retries,
             "llm_hard_timeout_seconds": self.llm_hard_timeout_seconds,
+            "llm_timeout_seconds": self.llm_timeout_seconds,
             "llm_rate_limit_wait_seconds": self.llm_rate_limit_wait_seconds,
             "llm_rate_limit_max_retries": self.llm_rate_limit_max_retries,
             "api_host_ips": self.api_host_ips,

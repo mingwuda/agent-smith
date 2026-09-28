@@ -45,7 +45,8 @@ from agent_helpers import (
     set_overflow_compact_handler,
     _tool_signature, _truncate, _ensure_no_image_for_non_vision,
     is_image_input_error, record_model_image_unsupported,
-    llm_waiting, _llm_wait_ctx,
+    llm_waiting, _llm_wait_ctx, op_busy, OpBusy, _op_busy_ctx,
+    resolve_outer_idle_timeout,
 )
 from loop_guard import _detect_tool_loop  # 原版 agent.py:169 的文件中间导入,拆分时需显式补回
 from tools.shell_tools import drain_shell_output  # run_shell 实时输出（心跳循环 drain 队列）
@@ -425,6 +426,8 @@ class AgentRunMixin:
         _retry_notif_token = _retry_notifications_ctx.set([])
         # 限流等待窗口同样按请求隔离：可变容器跨 context 共享，RetryableLLM 写、is_busy 读
         _llm_wait_ctx.set([0.0])
+        # 「无事件长任务」（如上下文压缩）的忙计数容器，同样按请求隔离
+        _op_busy_ctx.set([0])
         input_messages = []
         thread_key = self._thread_key(tid)
         await self._repair_checkpoint_tool_history(config, graph)
@@ -604,10 +607,11 @@ class AgentRunMixin:
                     # 超时检查：距上次任何事件已超过 timeout 秒 → 强制结束
                     if now - last_event_at > timeout:
                         if is_busy and is_busy():
-                            # ponytail: 有工具正在执行（如 600s 的 run_shell）时，
-                            # LangGraph 在工具返回前不产生事件，空闲超时不适用；
-                            # 继续心跳等待工具结束（工具自身有 timeout 兜底）。
-                            logger.debug("[stream_events] 工具执行中，跳过空闲超时检查")
+                            # 有工具/上下文压缩/限流等待在进行时，LangGraph 不产生事件，空闲超时不适用；
+                            # 顺带把计时基准推到当前 —— 否则「超长耗时操作刚结束」会被这段时间的旧账
+                            # 立刻判超时而误杀（操作本身合法，只是没有事件）。
+                            last_event_at = now
+                            logger.debug("[stream_events] 忙（工具/压缩/等待）中，跳过空闲超时并重置计时")
                         else:
                             logger.warning(
                                 "[stream_events] 超时: 距上次事件 %.1fs（阈值 %.1fs），强制结束",
@@ -678,6 +682,8 @@ class AgentRunMixin:
         _retry_notif_token = _retry_notifications_ctx.set(_retry_notif_list)
         # 限流等待窗口同理按请求隔离：RetryableLLM 写、is_busy 读（可变容器跨 context 共享）
         _llm_wait_ctx.set([0.0])
+        # 「无事件长任务」（如 in-loop 上下文压缩）的忙计数容器，同样按请求隔离
+        _op_busy_ctx.set([0])
         input_messages = []
         thread_key = self._thread_key(tid)
         await self._repair_checkpoint_tool_history(run_config, graph)
@@ -772,8 +778,16 @@ class AgentRunMixin:
             # 前端实时流与历史回放（collected_steps）都能渲染「调用工具: ocr_image」卡片。
             for _syn_ev in _synthetic_ocr_sse_steps(ocr_sink):
                 yield _sse(_syn_ev)
-            # 从配置读取超时，默认 90 秒
-            llm_timeout = getattr(self.config, "llm_timeout_seconds", 90)
+            # 外层空闲看门狗阈值：自动保证 ≥ 内层 idle 重试总预算，避免「外层抢跑使内层重试失效」
+            # （历史故障：外层硬编码 90s < 内层 120s → 上游完全静默时空闲重试永远跑不到）
+            llm_timeout = resolve_outer_idle_timeout(self.config)
+            logger.info(
+                "[stream_run] 外层空闲看门狗阈值=%.0fs（配置 llm_timeout_seconds=%s；内层预算=idle %.0fs×%d 次）",
+                llm_timeout,
+                getattr(self.config, "llm_timeout_seconds", 0.0) or "自动",
+                getattr(self.config, "llm_idle_timeout_seconds", 0.0),
+                int(getattr(self.config, "llm_idle_max_retries", 0) or 0) + 1,
+            )
             # fix #1: 单次 LLM 调用的硬墙钟上限（秒）。上游挂起（连接开着但无首 token/无结束）时，
             # 即便心跳与 RetryableLLM 重试不断刷新现有计时器，此墙钟也会强制终止该轮。
             llm_hard_timeout = getattr(self.config, "llm_hard_timeout_seconds", 600.0)
@@ -782,8 +796,8 @@ class AgentRunMixin:
                 # ponytail: 工具执行期间（on_tool_start→on_tool_end）LangGraph 不产生事件，
                 # 空闲超时会误杀长跑工具（如 600s 的 run_shell）。有工具在跑时跳过空闲超时，
                 # 工具时长由其自身 timeout 控制；无工具时仍按 llm_timeout 兜底防 LLM 挂起。
-                # 限流等待期间 LLM 在休眠（同样无图事件），一并豁免，避免被误判卡死强杀。
-                is_busy=lambda: bool(running_tools) or llm_waiting(),
+                # 限流等待期间 LLM 在休眠、上下文压缩期间同样零图事件，一并豁免，避免被误判卡死强杀。
+                is_busy=lambda: bool(running_tools) or llm_waiting() or op_busy(),
             ):
                 # ── 超时事件：LLM/工具长时间无响应 ──
                 if event.get("_timeout"):
@@ -980,7 +994,9 @@ class AgentRunMixin:
                         except Exception as exc:
                             logger.warning("[修复] 单轮内 tool 历史修复失败（已忽略，不影响主流程）: %s", exc)
                         try:
-                            _report = await self._compact_checkpoint_if_needed(run_config, model_override=model_override, provider_override=provider_override)
+                            # 压缩耗时不可预知且期间零图事件 → 标「忙」，避免被外层空闲看门狗误杀
+                            with OpBusy():
+                                _report = await self._compact_checkpoint_if_needed(run_config, model_override=model_override, provider_override=provider_override)
                             if _report:
                                 yield _sse({"type": "context_compacted", **_report})
                         except Exception as exc:
@@ -1099,7 +1115,9 @@ class AgentRunMixin:
                     # （结果文本即压缩报告），此处跳过避免同一轮压缩两次。
                     try:
                         if tool_name != "compress_context":
-                            _report = await self._compact_checkpoint_before_tool(run_config, model_override=model_override, provider_override=provider_override)
+                            # 压缩耗时不可预知且期间零图事件 → 标「忙」，避免被外层空闲看门狗误杀
+                            with OpBusy():
+                                _report = await self._compact_checkpoint_before_tool(run_config, model_override=model_override, provider_override=provider_override)
                             if _report:
                                 yield _sse({"type": "context_compacted", **_report})
                     except Exception as exc:
