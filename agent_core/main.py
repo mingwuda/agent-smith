@@ -355,6 +355,26 @@ def init_agent(caller: str = "unknown", force: bool = False):
     all_tools.extend(context_tools.TOOLS)
     all_tools.extend(ask_user_tools.TOOLS)
 
+    # 插件机制：加载已启用插件并收集其贡献的工具（参考 deepseek-harness 插件思想）。
+    # 单个插件加载失败会被隔离，绝不影响主流程启动。
+    from plugin_loader import get_registry as get_plugin_registry
+    from config import _split_path_list
+    plugin_registry = get_plugin_registry(
+        enabled_plugins=list(config.enabled_plugins or []),
+        plugin_dirs=_split_path_list(config.plugin_dirs),
+    )
+    plugin_records = plugin_registry.load_all()
+    plugin_tools = plugin_registry.collect_tools()
+    if plugin_tools:
+        all_tools.extend(plugin_tools)
+    loaded_plugins = [r.id for r in plugin_records if r.status == "loaded"]
+    failed_plugins = [(r.id, r.error) for r in plugin_records if r.status == "error"]
+    if loaded_plugins:
+        logger.info("  插件: 已加载 %d 个（%s），贡献工具 %d 个",
+                    len(loaded_plugins), ", ".join(loaded_plugins), len(plugin_tools))
+    for pid, err in failed_plugins:
+        logger.warning("  插件: %s 加载失败（已隔离）: %s", pid, err)
+
     subagents.manager.configure(config, all_tools, review_llm=None)
     
     # 先加载 Skills，再构建 Agent graph

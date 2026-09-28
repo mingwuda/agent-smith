@@ -648,6 +648,23 @@
           <div class="form-group" style="margin-top:8px;">
             <div class="hint" style="background:rgba(255,193,7,.08);border-left:3px solid #ffc107;padding:8px 10px;">修改后点击「保存设置」即生效，无需重启后端（Agent 会自动重新初始化）。</div>
           </div>
+
+          <!-- 插件管理 -->
+          <div class="form-group" style="margin-top:18px;">
+            <label style="display:flex;align-items:center;justify-content:space-between;">
+              <span>🧩 插件</span>
+              <button type="button" class="btn-secondary" onclick="loadPluginPanel()" data-i18n="pluginRefresh" style="padding:5px 12px;border:1px solid #ddd;border-radius:6px;background:#fff;cursor:pointer;font-size:12px;">刷新列表</button>
+            </label>
+            <div class="hint" data-i18n="pluginHint">插件可向 Agent 贡献工具与事件钩子。勾选后点「保存设置」生效；单个插件加载失败会被隔离，不影响其它插件与主流程。</div>
+            <div id="plugin-list" style="margin-top:8px;max-height:260px;overflow:auto;border:1px solid var(--border,#333);border-radius:6px;padding:8px;">
+              <div class="hint" data-i18n="pluginLoading">正在加载插件列表…</div>
+            </div>
+            <div class="form-group" style="margin-top:10px;">
+              <label for="s-plugin-dirs" data-i18n="pluginDirsLabel">自定义插件目录</label>
+              <input id="s-plugin-dirs" placeholder="多个目录用路径分隔符分隔（Linux 用 : ）" />
+              <div class="hint" data-i18n="pluginDirsHint">每个子目录（含 __init__.py）或单个 .py 文件即为一个插件；与内置插件同名时自定义目录优先。</div>
+            </div>
+          </div>
         </div>
 
         <!-- 更新设置 -->

@@ -25,6 +25,11 @@ def _env_bool(value: str) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on", "y"}
 
 
+def _env_list(value: str) -> list[str]:
+    """逗号/分号分隔的环境变量 → 列表（用于 enabled_plugins 等列表型配置）。"""
+    return [p.strip() for p in str(value).replace(";", ",").split(",") if p.strip()]
+
+
 DEFAULT_PROVIDERS: dict[str, dict[str, Any]] = {}
 
 
@@ -89,6 +94,12 @@ class AgentConfig:
     # Jev 判别式上下文压缩：默认关闭，需先在设置页配置 TypeSafe API Key 再开启。
     # 开启后 context_manager 压缩时先让 Jev 判定旧工具组是否可删，再走既有分层。
     jev_compaction_enabled: bool = False
+
+    # 插件：enabled_plugins = 已启用的插件 id 列表；plugin_dirs = 自定义插件目录
+    # （os.pathsep 分隔，可叠加多个，等同 deepseek-harness 的 profile 层插件目录）。
+    # 多个自定义目录与内置目录会做 id 去重（自定义目录优先于内置同名插件）。
+    enabled_plugins: list[str] = field(default_factory=list)
+    plugin_dirs: str = ""
     
     # 更新
     update_server: str = ""
@@ -195,6 +206,8 @@ class AgentConfig:
             "AGENT_SELF_HEALING": ("enable_self_healing", _env_bool),
             "AGENT_SELF_HEALING_INTERVAL": ("self_healing_interval_seconds", int),
             "AGENT_JEV_COMPACTION_ENABLED": ("jev_compaction_enabled", _env_bool),
+            "AGENT_ENABLED_PLUGINS": ("enabled_plugins", _env_list),
+            "AGENT_PLUGIN_DIRS": ("plugin_dirs", str),
             "AGENT_API_MAX_RETRIES": ("api_max_retries", int),
             "AGENT_API_TIMEOUT_SECONDS": ("api_timeout_seconds", float),
             "AGENT_LLM_IDLE_TIMEOUT_SECONDS": ("llm_idle_timeout_seconds", float),
@@ -418,6 +431,8 @@ class AgentConfig:
             "anysearch_api_key": self.anysearch_api_key,
             "typesafe_api_key": self.typesafe_api_key,
             "jev_compaction_enabled": self.jev_compaction_enabled,
+            "enabled_plugins": list(self.enabled_plugins or []),
+            "plugin_dirs": self.plugin_dirs,
             "review_provider_id": self.review_provider_id,
             "review_model": self.review_model,
             "update_server": self.update_server,
@@ -487,6 +502,8 @@ class AgentConfig:
             "typesafe_api_key_configured": bool(self.typesafe_api_key),
             "typesafe_api_key_preview": self.typesafe_api_key[:8] + "..." if len(self.typesafe_api_key) > 8 else ("已设置" if self.typesafe_api_key else "未设置"),
             "jev_compaction_enabled": bool(self.jev_compaction_enabled),
+            "enabled_plugins": list(self.enabled_plugins or []),
+            "plugin_dirs": self.plugin_dirs,
             "review_provider_id": self.review_provider_id,
             "review_model": self.review_model,
             "update_server": self.update_server,

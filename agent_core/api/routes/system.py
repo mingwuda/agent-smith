@@ -47,6 +47,8 @@ class SettingsRequest(BaseModel):
     anysearch_api_key: str = ""
     typesafe_api_key: str = ""
     jev_compaction_enabled: bool = False
+    enabled_plugins: list[str] = []
+    plugin_dirs: str = ""
     review_provider_id: str = ""
     review_model: str = ""
     update_server: str = ""
@@ -98,6 +100,34 @@ def get_settings(request: Request):
     _require_admin(request)
     cfg = AgentConfig.load()
     return cfg.to_api_dict()
+
+
+@router.get("/plugins")
+def list_plugins(request: Request):
+    """列出全部可发现的插件（含启用状态与加载状态），供设置页展示开关。
+
+    插件化机制参考 deepseek-harness 的 plugin-manager：贡献能力（工具/钩子）、
+    config 层启用、故障隔离。本端点仅作只读侦察，不触发加载。
+    """
+    _require_admin(request)
+    cfg = AgentConfig.load()
+    from plugin_loader import PluginRegistry
+    from config import _split_path_list
+    enabled = list(cfg.enabled_plugins or [])
+    reg = PluginRegistry(
+        enabled_plugins=enabled,
+        plugin_dirs=_split_path_list(cfg.plugin_dirs),
+    )
+    records = reg.discover()
+    result = []
+    for rec in records:
+        result.append(rec.to_dict())
+        result[-1]["enabled"] = rec.id in set(enabled)
+    return {
+        "plugins": result,
+        "enabled_plugins": enabled,
+        "plugin_dirs": cfg.plugin_dirs,
+    }
 
 
 @router.delete("/settings/provider/{provider_id}")
@@ -162,6 +192,9 @@ def save_settings(req: SettingsRequest, request: Request):
     if req.typesafe_api_key:
         cfg.typesafe_api_key = req.typesafe_api_key
     cfg.jev_compaction_enabled = bool(req.jev_compaction_enabled)
+    cfg.enabled_plugins = list(req.enabled_plugins or [])
+    if req.plugin_dirs:
+        cfg.plugin_dirs = req.plugin_dirs
     cfg.update_server = req.update_server or cfg.update_server
 
     # 保存排序
@@ -213,6 +246,7 @@ def save_settings(req: SettingsRequest, request: Request):
     else:
         os.environ.pop("TYPESAFE_API_KEY", None)
     os.environ["AGENT_JEV_COMPACTION_ENABLED"] = "1" if cfg.jev_compaction_enabled else "0"
+    os.environ["AGENT_PLUGIN_DIRS"] = cfg.plugin_dirs or ""
     if cfg.base_url:
         os.environ["LLM_BASE_URL"] = cfg.base_url
     else:

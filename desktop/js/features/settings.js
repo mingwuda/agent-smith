@@ -532,6 +532,8 @@ async function saveSettings() {
         anysearch_api_key: document.getElementById('s-anysearch-api-key').value,
         typesafe_api_key: document.getElementById('s-typesafe-api-key').value,
         jev_compaction_enabled: document.getElementById('s-jevecompaction-enabled').checked,
+        enabled_plugins: collectEnabledPlugins(),
+        plugin_dirs: (document.getElementById('s-plugin-dirs')?.value || '').trim(),
         review_provider_id: document.getElementById('s-review-provider').value,
         review_model: document.getElementById('s-review-model').value,
         update_server: document.getElementById('s-update-server') ? document.getElementById('s-update-server').value : '',
@@ -810,6 +812,11 @@ function renderParamsFields(data) {
   const jevCompaction = document.getElementById('s-jevecompaction-enabled');
   if (jevCompaction) jevCompaction.checked = data.jev_compaction_enabled === true;
 
+  // ── 插件 ──
+  const pluginDirs = document.getElementById('s-plugin-dirs');
+  if (pluginDirs) pluginDirs.value = data.plugin_dirs || '';
+  loadPluginPanel(data.enabled_plugins || []);
+
   // ── 搜索 ──
   const tavilyEnabled = document.getElementById('s-tavily-enabled');
   const tavilyKey = document.getElementById('s-tavily-api-key');
@@ -962,4 +969,53 @@ async function deleteModelFromProvider(modelName) {
   // 持久化
   await persistOrder();
   showToast('✅ ' + (currentLanguage === 'en' ? 'Model deleted' : '已删除模型'), 'success');
+}
+/* ── 插件管理 ─────────────────────────────────────────────────────────────
+   拉取 /system/plugins 渲染可发现的插件列表（勾选 = 启用），
+   保存时由 collectEnabledPlugins() 汇总进 enabled_plugins。
+   ──────────────────────────────────────────────────────────────────────── */
+
+async function loadPluginPanel(preselect) {
+  const box = document.getElementById('plugin-list');
+  if (!box) return;
+  box.innerHTML = '<div class="hint">正在加载插件列表…</div>';
+  try {
+    const res = await fetch('/system/plugins', { credentials: 'include' });
+    const data = await res.json();
+    const enabled = new Set(preselect || data.enabled_plugins || []);
+    const plugins = data.plugins || [];
+    if (!plugins.length) {
+      box.innerHTML = '<div class="hint">未发现插件。可在「自定义插件目录」指向一个包含 .py 插件文件的目录。</div>';
+      return;
+    }
+    box.innerHTML = plugins.map(p => {
+      const statusBadge = p.status === 'error'
+        ? `<span style="color:#e5534b;font-size:11px;">加载失败：${escapeHtml(p.error || '')}</span>`
+        : (p.status === 'loaded'
+          ? `<span style="color:#3fb950;font-size:11px;">已加载 · ${p.tool_count} 个工具</span>`
+          : `<span style="color:#8b949e;font-size:11px;">未启用</span>`);
+      const tools = (p.tool_names && p.tool_names.length)
+        ? `<div class="hint" style="margin:2px 0 0;">工具：${p.tool_names.map(escapeHtml).join('、')}</div>` : '';
+      return `
+        <label style="display:flex;gap:8px;align-items:flex-start;padding:6px 4px;cursor:pointer;">
+          <input type="checkbox" class="plugin-toggle" value="${escapeHtml(p.id)}"
+                 ${enabled.has(p.id) ? 'checked' : ''}
+                 style="width:auto;height:auto;margin-top:3px;" />
+          <span style="flex:1;">
+            <span style="font-weight:600;">${escapeHtml(p.name || p.id)}</span>
+            <span style="color:#8b949e;font-size:11px;"> v${escapeHtml(p.version || '-')}</span>
+            <div class="hint" style="margin:2px 0 0;">${escapeHtml(p.description || '')}</div>
+            ${tools}
+            ${statusBadge}
+          </span>
+        </label>`;
+    }).join('');
+  } catch (e) {
+    box.innerHTML = '<div class="hint">插件列表加载失败：' + escapeHtml(String(e)) + '</div>';
+  }
+}
+
+function collectEnabledPlugins() {
+  return Array.from(document.querySelectorAll('.plugin-toggle:checked'))
+    .map(el => el.value);
 }

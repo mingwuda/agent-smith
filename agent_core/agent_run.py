@@ -697,6 +697,15 @@ class AgentRunMixin:
         if thread_key not in self._hydrated_threads:
             input_messages = compact_history_messages(session_messages_to_langchain(history or [], ocr_fallback=_ocr_fallback), self.config, memory=get_memory(self._user_id))
         input_messages.append(HumanMessage(content=_human_content(message, attachments, ocr_fallback=_ocr_fallback, ocr_sink=ocr_sink)))
+        # 插件事件钩子：on_message（用户消息进入 agent 处理前广播）。
+        # 单个插件监听器异常已被 PluginHost.emit 隔离，绝不影响主流程。
+        try:
+            from plugin_loader import get_registry as _get_plugin_reg
+            _get_plugin_reg().emit("on_message", {
+                "text": message, "user_id": self._user_id, "session_id": tid,
+            })
+        except Exception:
+            pass
         # 兜底：模型不支持视觉时，清除任何残留 image_url（防御未来新路径漏图）
         input_messages = _ensure_no_image_for_non_vision(input_messages, self.config, provider_id=_run_pid, model=_run_mdl)
 
@@ -1271,6 +1280,21 @@ class AgentRunMixin:
                             })
                     is_error = bool(output_str.strip().startswith("❌"))
                     self._record_tool_call(tool_name, thread_id=tid)
+
+                    # 插件事件钩子：on_tool_end（工具调用结束后广播）。
+                    # 单个插件监听器异常已被 PluginHost.emit 隔离，绝不影响主流程。
+                    try:
+                        from plugin_loader import get_registry as _get_plugin_reg
+                        _get_plugin_reg().emit("on_tool_end", {
+                            "name": tool_name,
+                            "args": (tinfo or {}).get("input", {}),
+                            "result": output_str,
+                            "is_error": is_error,
+                            "user_id": self._user_id,
+                            "session_id": tid,
+                        })
+                    except Exception:
+                        pass
 
                     # ── Todo 清单事件：manage_todo 工具调用结束后推送 ──
                     if tool_name == "manage_todo":
