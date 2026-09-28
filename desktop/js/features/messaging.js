@@ -2,15 +2,19 @@
    依赖: state.js, util.js, i18n.js, artifacts.js(openArtifactPreview) */
 
 // ---------- 消息区域点击：制品预览链接委托 ----------
-messages.addEventListener('click', (event) => {
-  const link = event.target.closest('a');
-  if (!link) return;
-  const href = link.getAttribute('href') || '';
-  if (!href.startsWith('#artifact-preview:')) return;
-  event.preventDefault();
-  const path = decodeURIComponent(href.slice('#artifact-preview:'.length));
-  openArtifactPreview(path);
-});
+// 绑定在稳定祖先 #main 上（多页签下 #messages 是动态切换的激活面板，绑定面板会失效）
+(function () {
+  const host = document.getElementById('main') || document;
+  host.addEventListener('click', (event) => {
+    const link = event.target.closest('a');
+    if (!link) return;
+    const href = link.getAttribute('href') || '';
+    if (!href.startsWith('#artifact-preview:')) return;
+    event.preventDefault();
+    const path = decodeURIComponent(href.slice('#artifact-preview:'.length));
+    openArtifactPreview(path);
+  });
+})();
 
 // ---------- 消息渲染 ----------
 
@@ -43,8 +47,10 @@ function addMessage(text, role, index, meta) {
   attachCopyButton(div);
   // bot 历史消息挂 👍/👎 反馈条（流式最终输出在 streaming.js done 分支挂）
   if (role === 'bot') attachFeedbackBar(div);
-  messages.appendChild(div);
-  smartScroll(messages);
+  // 追加到「当前激活页签」消息容器（多页签下 #messages 是动态切换的激活面板）
+  const host = (window.ChatTabs && ChatTabs.activeEl()) || messages;
+  host.appendChild(div);
+  smartScroll(host);
   return div;
 }
 

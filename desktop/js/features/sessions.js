@@ -464,11 +464,36 @@ async function switchSession(sessionId, source, forceLoad = false) {
   const targetKey = sessionId + '_' + source;
   if (sessionId === currentSessionId && source === currentSessionSource && !forceLoad) return;
 
+  // ── 多页签：把目标会话放入/激活页签容器（DOM 常驻切换，内容与滚动不丢）──
+  // open() 返回 true=新打开（需走下方加载/重建），false=已在页签中（仅切激活，保留内容）。
+  // open 内部会确保当前激活的 .msg-panel 持有 id="messages"，并同步 currentSessionId/threadId。
+  let tabAlreadyOpen = false;
+  if (window.ChatTabs) {
+    const title = (sessionsCache.find(s => (s.id + '_' + (s.source || 'web')) === targetKey) || {})['title']
+      || ((sessionsCache.find(s => s.id === sessionId) || {})['title']) || sessionId;
+    if (forceLoad && window.ChatTabs.isOpen(targetKey)) {
+      // 强制刷新：仅激活（容器固定），但标记为需刷新，走下方全新加载分支
+      window.ChatTabs.open(targetKey, title);
+      tabAlreadyOpen = false;
+    } else {
+      tabAlreadyOpen = !window.ChatTabs.open(targetKey, title);
+    }
+  }
+
   // 记录旧可见会话 key（setVisibleSessionKey 会覆盖它）
   const prevVisibleKey = visibleSessionKey;
 
   // 先把「之前可见会话」的 live 关掉（它仍在后台跑的话继续累积事件，只是不再渲染到可见区）
   setVisibleSessionKey(targetKey);
+
+  // ── 多页签：若目标会话已在页签中（非强制刷新），仅切激活、同步状态后直接返回，不重载 ──
+  if (window.ChatTabs && tabAlreadyOpen) {
+    if (typeof syncStreamingActive === 'function') syncStreamingActive();
+    if (typeof updateRunIndicators === 'function') updateRunIndicators();
+    if (typeof refreshStats === 'function') refreshStats();
+    return;
+  }
+
   currentSessionId = sessionId;
   currentSessionSource = source;
   threadId = sessionId;
@@ -783,6 +808,10 @@ async function newSession() {
     threadId = data.id;
     // 标记新会话为可见渲染目标（同时把之前可见会话的 live 关掉，使其后台继续运行不渲染）
     setVisibleSessionKey(data.id + '_web');
+    // 多页签：新会话打开一个页签
+    if (window.ChatTabs) {
+      window.ChatTabs.open(data.id + '_web', t('newChat') || '新对话');
+    }
     // 作废任何仍在途的旧会话加载请求(防止其晚到回写上一会话内容)
     ++_sessionLoadToken;
     // 重置分页状态, 防止滚动监听器用旧会话的 sessionId 继续往上翻页加载旧消息
@@ -803,6 +832,12 @@ async function deleteSession(sessionId) {
       for (const key of [...sessionRuntimes.keys()]) {
         if (key.startsWith(sessionId + '_')) sessionRuntimes.delete(key);
       }
+    }
+    // 多页签：关闭该会话的所有页签
+    if (window.ChatTabs) {
+      window.ChatTabs.all().forEach(function (t) {
+        if (t.key.split('_')[0] === sessionId) window.ChatTabs.close(t.key);
+      });
     }
     if (sessionId === currentSessionId) {
       // 当前会话被删除，切到第一个或新建
@@ -1105,7 +1140,9 @@ function deleteMessageByIndex(index) {
     });
 }
 
-messages.addEventListener('touchstart', (e) => {
+// 多页签：消息删除菜单的长按/右键触发绑定到稳定祖先 #main（激活面板动态切换，直接绑面板会失效）
+const _msgHost = document.getElementById('main') || messages;
+_msgHost.addEventListener('touchstart', (e) => {
   const msgEl = e.target.closest('.msg, .agent-response');
   if (!msgEl) return;
   if (msgEl.dataset.index === undefined || msgEl.dataset.index === null || msgEl.dataset.index === '') return;
@@ -1123,7 +1160,7 @@ messages.addEventListener('touchstart', (e) => {
   }, 1000);  // 3000→1000ms：长按 1 秒即触发删除菜单（原 3s 偏久，1s 更顺手且仍区别于普通点击/滚动）
 }, { passive: true });
 
-messages.addEventListener('touchmove', (e) => {
+_msgHost.addEventListener('touchmove', (e) => {
   if (!_msgDeletePressStart || !_msgDeletePressTimer) return;
   const dx = Math.abs((e.touches[0].clientX || 0) - _msgDeletePressStart.x);
   const dy = Math.abs((e.touches[0].clientY || 0) - _msgDeletePressStart.y);
@@ -1134,7 +1171,7 @@ messages.addEventListener('touchmove', (e) => {
   }
 }, { passive: true });
 
-messages.addEventListener('touchend', () => {
+_msgHost.addEventListener('touchend', () => {
   if (_msgDeletePressTimer) {
     clearTimeout(_msgDeletePressTimer);
     _msgDeletePressTimer = null;
@@ -1153,7 +1190,7 @@ messages.addEventListener('touchend', () => {
   }
 });
 
-messages.addEventListener('contextmenu', (e) => {
+_msgHost.addEventListener('contextmenu', (e) => {
   const msgEl = e.target.closest('.msg, .agent-response');
   if (!msgEl) return;
   if (msgEl.dataset.index === undefined || msgEl.dataset.index === null || msgEl.dataset.index === '') return;

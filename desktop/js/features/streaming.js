@@ -61,7 +61,7 @@ function showTyping() {
   const label = bar.querySelector('.label');
   if (label) label.textContent = t('thinking');
   bar.classList.add('show');
-  smartScroll(messages);
+  smartScroll(activeMessages());
 }
 
 function hideTyping() {
@@ -78,7 +78,7 @@ function showGeneratingBadge(text = t('generating')) {
   if (existing) {
     existing.innerHTML = `<span class="spin"></span> ${escapeHtml(unescapeDisplay(text))}`;
     generatingBadgeEl = existing;
-    smartScroll(messages);
+    smartScroll(activeMessages());
     return;
   }
   generatingBadgeEl = document.createElement('div');
@@ -89,9 +89,9 @@ function showGeneratingBadge(text = t('generating')) {
   } else if (currentStepsEl) {
     currentStepsEl.after(generatingBadgeEl);
   } else {
-    messages.appendChild(generatingBadgeEl);
+    activeMessages().appendChild(generatingBadgeEl);
   }
-  smartScroll(messages);
+  smartScroll(activeMessages());
 }
 
 function removeGeneratingBadge() {
@@ -136,7 +136,9 @@ function initScrollToBottomBtn() {
   const messages = document.getElementById('messages');
   const btn = document.getElementById('scroll-to-bottom-btn');
   if (!messages || !btn) return;
-
+  // 幂等：同一元素只绑一次 scroll 监听（多页签下 activate 会重复调用本函数）
+  if (messages.__scrollBtnBound) return;
+  messages.__scrollBtnBound = true;
   messages.addEventListener('scroll', function() {
     const distFromBottom = messages.scrollHeight - messages.scrollTop - messages.clientHeight;
     const shouldShow = distFromBottom > _scrollBtnThreshold;

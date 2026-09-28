@@ -45,7 +45,11 @@ let _msgHistoryIndex = -1;         // -1 = 当前输入（空/新消息）
 const sessionRuntimes = new Map(); // key(sessionId_source) -> runtime 对象
 let visibleSessionKey = null;      // 当前在 #messages 中显示的会话 key
 let _isReconstructing = false;     // 切回后台运行中的会话时回放缓冲事件（放开 token 渲染、但禁止开启实时子连接）
-
+// 全局解析器：返回当前激活页签的消息容器（多页签下持有 id="messages" 的元素）
+  function activeMessages() {
+    return document.getElementById('messages') || messages;
+  }
+  window.activeMessages = activeMessages;
 function getOrCreateRuntime(sessionId, source) {
   const key = (sessionId || '') + '_' + (source || 'web');
   let rt = sessionRuntimes.get(key);

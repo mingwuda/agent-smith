@@ -220,6 +220,9 @@
       </div>
     </div>
   </div>
+  
+  <div id="chat-tabs-container" style="flex:0 0 auto;min-height:0;display:none;border-bottom:1px solid var(--border2,#e5e5ea);">
+    <div id="chat-tabs" style="display:flex;align-items:stretch;overflow-x:auto;padding:0 8px;gap:2px;background:rgba(0,0,0,.02);"></div>
   </div>
   
   <div id="messages"></div>
@@ -738,6 +741,7 @@
 
 <!-- 本地脚本（按依赖顺序加载） -->
 <script src="/static/js/core/state.js"></script>
+<script src="/static/js/core/chat-tabs.js"></script>
 <script src="/static/js/core/util.js"></script>
 <script src="/static/js/core/i18n.js"></script>
 <script src="/static/js/core/plugin-ui.js"></script>
