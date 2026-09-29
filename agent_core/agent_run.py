@@ -706,7 +706,7 @@ class AgentRunMixin:
             _plug.emit("on_message", {
                 "text": message, "user_id": self._user_id, "session_id": tid,
             })
-            for _ev_name, _ev_payload in _plug.drain_sse():
+            for _ev_name, _ev_payload in _plug.drain_sse(tid):
                 yield _sse({"type": "plugin_event", "event": _ev_name, "payload": _ev_payload})
         except Exception:
             pass
@@ -1299,7 +1299,7 @@ class AgentRunMixin:
                             "user_id": self._user_id,
                             "session_id": tid,
                         })
-                        for _ev_name, _ev_payload in _plug.drain_sse():
+                        for _ev_name, _ev_payload in _plug.drain_sse(tid):
                             yield _sse({"type": "plugin_event", "event": _ev_name, "payload": _ev_payload})
                     except Exception:
                         pass

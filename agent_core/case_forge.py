@@ -15,12 +15,15 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 import time
 from pathlib import Path
 from typing import Any, Optional
 
 from memory.local_memory import get_memory
+
+logger = logging.getLogger(__name__)
 
 # 同一 topic 的 technique 出现多少次才晋升为候选技能（防单次偶发即生成低质技能）
 CASE_PROMOTE_THRESHOLD = 3
@@ -118,6 +121,43 @@ def _safe_skill_name(v: str) -> str:
     return name or "case-skill"
 
 
+# 合法技能名：由 _safe_skill_name 产出，恒为小写字母数字与 '-'（开头非 '-'）。
+# 审批/拒绝接口的 skill_name 直接来自请求体，**必须**先过这里再拼路径。
+_SKILL_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+
+
+def _checked_skill_name(skill_name: str) -> Optional[str]:
+    """校验来自请求体的技能名；非法返回 None。
+
+    安全背景（2026-09-29 实证复现）：approve_skill / reject_skill 会把 skill_name
+    直接拼成 `Path(skills_dir)/.../skill_name` 后 rmtree / 写文件：
+      - `".."`   → 命中 `skills_dir/pending/..`（即 skills_dir 本身）→ **递归清空整个技能目录**
+      - `"../.."`→ 生产环境（skills_dir=/opt/desktop-agent/agent_core/samples）
+                   → **清空 /opt/desktop-agent/agent_core 整棵源码树**
+    注意顶层目录名会因 rmdir 对末段为 `..` 返回 EINVAL 而残留，容易误判成"没事"。
+    因此这里拒绝：空名、含路径分隔符、`.` / `..`、隐藏名、非字母数字开头、超长。
+    """
+    name = (skill_name or "").strip()
+    if not name or not _SKILL_NAME_RE.match(name):
+        return None
+    # 双保险：规范化后必须仍是单层名字（防未知平台的路径语义差异）
+    if name in (".", "..") or Path(name).name != name:
+        return None
+    return name
+
+
+def _within(target: Path, root: Path) -> bool:
+    """target 解析后是否仍在 root 之内（防符号链接等绕过）。
+
+    注意 rmdir/rmtree 的最终解析目标：必须先 resolve 再比较。
+    """
+    try:
+        Path(target).resolve().relative_to(Path(root).resolve())
+        return True
+    except (ValueError, OSError):
+        return False
+
+
 def draft_skill(uid: str, case_key: str, skills_dir: Path,
                 supersede: bool = True) -> Optional[dict]:
     """为已达阈值的 Case 起草候选 SKILL.md 到待审批目录。
@@ -187,10 +227,19 @@ def approve_skill(uid: str, skill_name: str, skills_dir: Path) -> str:
 
     返回操作文案。
     """
-    pending = Path(skills_dir) / PENDING_DIR / skill_name / "SKILL.md"
+    # 安全：skill_name 来自请求体，必须先严格校验（否则可写到 skills_dir 之外）
+    name = _checked_skill_name(skill_name)
+    if name is None:
+        logger.warning("[case_forge] 拒绝非法技能名: %r", skill_name)
+        return f"❌ 非法技能名 '{skill_name}'"
+    root = Path(skills_dir).resolve()
+    pending = root / PENDING_DIR / name / "SKILL.md"
+    dest = root / name / "SKILL.md"
+    if not (_within(pending, root) and _within(dest, root)):
+        logger.warning("[case_forge] 技能名解析后越出技能目录: %r", skill_name)
+        return f"❌ 非法技能名 '{skill_name}'"
     if not pending.exists():
-        return f"❌ 未找到待审批技能 '{skill_name}'"
-    dest = Path(skills_dir) / skill_name / "SKILL.md"
+        return f"❌ 未找到待审批技能 '{name}'"
     dest.parent.mkdir(parents=True, exist_ok=True)
     if dest.exists():
         pending.unlink()
@@ -202,26 +251,36 @@ def approve_skill(uid: str, skill_name: str, skills_dir: Path) -> str:
     except OSError:
         pass
     mem = get_memory(uid)
-    mem.set(f"_skill_{skill_name}", {
+    mem.set(f"_skill_{name}", {
         "status": "active",
-        "skill_name": skill_name,
+        "skill_name": name,
         "created_at": time.time(),
     })
     # 通知外层 reload 技能（由调用方在业务层执行 registry.reload()）
-    return f"✅ 技能 '{skill_name}' 已生效"
+    return f"✅ 技能 '{name}' 已生效"
 
 
 def reject_skill(uid: str, skill_name: str, skills_dir: Path) -> str:
     """用户拒绝：丢弃候选 SKILL.md 与 _skill_ 指针。"""
-    pending = Path(skills_dir) / PENDING_DIR / skill_name
+    # 安全：这里是 rmtree，skill_name 绝不可直接拼接（`..` 可清空任意祖先目录内容）
+    name = _checked_skill_name(skill_name)
+    if name is None:
+        logger.warning("[case_forge] 拒绝非法技能名（reject）: %r", skill_name)
+        return f"❌ 非法技能名 '{skill_name}'"
+    root = Path(skills_dir).resolve()
+    pending = root / PENDING_DIR / name
+    # 双保险：必须严格位于 skills_dir 之内，且绝不能等于 skills_dir 本身
+    if pending == root or not _within(pending, root):
+        logger.warning("[case_forge] 技能名解析后越出技能目录（reject）: %r", skill_name)
+        return f"❌ 非法技能名 '{skill_name}'"
     if pending.exists():
         import shutil
         shutil.rmtree(pending, ignore_errors=True)
+    key = f"_skill_{name}"
     mem = get_memory(uid)
-    key = f"_skill_{skill_name}"
     if mem.get(key) is not None:
         mem.delete(key)
-    return f"🗑 已舍弃技能候选 '{skill_name}'"
+    return f"🗑 已舍弃技能候选 '{name}'"
 
 
 def list_pending_skills(uid: str, skills_dir: Path) -> list[dict]:

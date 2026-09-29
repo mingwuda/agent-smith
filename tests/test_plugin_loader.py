@@ -389,3 +389,51 @@ def test_broken_push_sse_isolated(plugin_dir):
     # 不抛异常，只是队列为空
     reg.emit("on_tool_end", {"name": "x"})
     assert reg.drain_sse() == []
+
+
+# ── SSE 队列的会话隔离（2026-09-29 修复）──
+# 队列挂在**进程级单例** registry 上，此前不带会话过滤：A 会话（或其工具线程）
+# push 的事件会被 B 会话的 drain 取走 → 插件事件推到错误的前端会话。
+def test_drain_sse_isolates_sessions(plugin_dir):
+    p = '''
+        INFO = {"id": "pusher2", "name": "p"}
+        _host = None
+        def _on_tool_end(payload):
+            _host.push_sse("my.event", {"sid": payload.get("session_id")})
+        HOOKS = {"on_tool_end": _on_tool_end}
+        def on_load(host):
+            global _host
+            _host = host
+    '''
+    _write_plugin(plugin_dir, "pusher2", p)
+    reg = _registry(plugin_dir, ["pusher2"])
+    reg.discover()
+    reg.load_all()
+
+    # A 会话广播 → 事件归属 A（emit 期间由 ContextVar 打戳）
+    reg.emit("on_tool_end", {"name": "t", "session_id": "sessA"})
+    # B 会话先来 drain：拿不到 A 的事件（且不能把它吃掉）
+    assert reg.drain_sse("sessB") == []
+    # A 来 drain：拿到自己的
+    assert reg.drain_sse("sessA") == [("my.event", {"sid": "sessA"})]
+    assert reg.drain_sse("sessA") == []
+
+
+def test_drain_sse_sessionless_events_are_broadcast(plugin_dir):
+    """未打戳的事件（emit 未带 session_id）对任何会话可见 —— 保持旧语义。"""
+    reg = _registry(plugin_dir, [])
+    reg.queue_sse("ev", {"x": 1})  # 无 session_id
+    assert reg.drain_sse("sessA") == [("ev", {"x": 1})]
+    reg.queue_sse("ev", {"x": 2})
+    assert reg.drain_sse() == [("ev", {"x": 2})]  # 不带参数取全部
+
+
+def test_sse_queue_is_capped(plugin_dir):
+    """插件异常刷事件时有上限，丢最旧的，避免内存无上限增长。"""
+    reg = _registry(plugin_dir, [])
+    for i in range(600):
+        reg.queue_sse("ev", {"i": i}, session_id="s")
+    out = reg.drain_sse()
+    assert len(out) == 500, len(out)
+    assert out[0] == ("ev", {"i": 100}), "应丢弃最旧的"
+    assert out[-1] == ("ev", {"i": 599}), "应保留最新的"

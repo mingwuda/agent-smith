@@ -841,8 +841,16 @@ async function deleteSession(sessionId) {
     }
     // 多页签：关闭该会话的所有页签
     if (window.ChatTabs) {
+      // 页签 key = sessionId + '_' + source，必须用 lastIndexOf 切分（与 chat-tabs.splitKey 同约定）：
+      // 旧写法 key.split('_')[0] 取的是首个下划线前的内容，sessionId 自身含下划线时
+      // （如 cron 生成的 `cron_sess_xxx`）会切错 id → 删除会话后页签关不掉。
       window.ChatTabs.all().forEach(function (t) {
-        if (t.key.split('_')[0] === sessionId) window.ChatTabs.close(t.key);
+        const sk = (typeof window.ChatTabs.splitKey === 'function')
+          ? window.ChatTabs.splitKey(t.key)
+          : null;
+        const sameSession = sk ? (sk.id === sessionId)
+                               : (t.key === sessionId || t.key.startsWith(sessionId + '_'));
+        if (sameSession) window.ChatTabs.close(t.key);
       });
     }
     if (sessionId === currentSessionId) {

@@ -31,12 +31,19 @@ class PendingSkillItem(BaseModel):
 
 
 def _resolve_skills_dir() -> Path:
+    """技能根目录（与加载/蒸馏共用 config.skills_root 这一唯一解析入口）。
+
+    旧写法 `base = Path(config.skills_dir); if base: return base` 有隐患：
+    `Path("") == Path(".")` 恒为真 → 空配置会被解析成进程 CWD，
+    "兜底"分支永远不会执行（2026-09-29 修）。
+    """
     from app_state import get_app_base_dir
     config = AgentConfig.load()
-    base = Path(config.skills_dir)
-    if base:
-        return base
-    return get_app_base_dir() / "skills"
+    try:
+        return config.skills_root()
+    except Exception:
+        # 极端兜底：配置对象异常时退回应用目录，绝不用 Path("") 变成 CWD
+        return get_app_base_dir() / "skills"
 
 
 class SkillFileEntry(BaseModel):
@@ -252,10 +259,17 @@ class _ApproveBody(BaseModel):
 
 @router.post("/skills/pending/approve", response_model=ReloadResponse)
 def approve_pending_skill(request: Request, body: _ApproveBody):
-    """批准候选技能：移入生效目录并热加载。"""
+    """批准候选技能：移入生效目录并热加载。
+
+    安全：审批会**全局**改变技能集合（批准后的 SKILL.md 注入所有用户的系统提示），
+    且候选目录非按 uid 隔离，因此必须限管理员——与 system.py 的 /settings、/plugins
+    等敏感接口一致。此前遗漏了 _require_admin（模块顶部已 import 却从未调用），
+    任何登录用户都能批准/删除候选（2026-09-29 修复）。
+    """
     from app_state import get_agent
     from api.deps import _get_current_user
     from case_forge import approve_skill
+    _require_admin(request)
     agent = get_agent()
     if not agent:
         raise HTTPException(503, "Agent 尚未初始化")
@@ -268,9 +282,15 @@ def approve_pending_skill(request: Request, body: _ApproveBody):
 
 @router.post("/skills/pending/reject", response_model=ReloadResponse)
 def reject_pending_skill(request: Request, body: _ApproveBody):
-    """拒绝候选技能：删除待审批文件与指针。"""
+    """拒绝候选技能：删除待审批文件与指针。
+
+    安全：同 approve——必须限管理员。该接口会按 skill_name 拼路径后 rmtree，
+    此前既无 admin 校验也无名字校验，普通用户传 `skill_name=".."` 即可清空
+    整个技能目录（`../..` 在生产环境可清空 agent_core 源码树）。
+    """
     from api.deps import _get_current_user
     from case_forge import reject_skill
+    _require_admin(request)
     uid = _get_current_user(request)
     skills_dir = _resolve_skills_dir()
     msg = reject_skill(uid, body.skill_name, skills_dir)

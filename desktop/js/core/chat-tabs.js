@@ -15,6 +15,8 @@
   let tabs = [];
   // 每个页签的滚动位置缓存：key -> scrollTop
   const scrollCache = {};
+  // 正在重建实时画面的页签（防重入）：key -> true
+  const _resuming = {};
 
   function safeId(key) {
     return (key || '').replace(/[^a-zA-Z0-9_-]/g, '_') || 'tab';
@@ -54,7 +56,9 @@
   }
 
   // —— 激活指定页签（只切显隐与 id，不重新加载）——
-  function activate(key) {
+  // opts.bootstrap=true 表示调用方（open()）刚为本 key 建好新面板、紧接着还会走
+  // switchSession 的完整加载路径；此时不要在这里触发实时画面重建，否则会重复加载/重复回放。
+  function activate(key, opts) {
     const panel = panelEl(key);
     if (!panel) return;
     document.querySelectorAll('#' + TABS_CONTAINER_ID + ' .chat-tab').forEach(function (t) {
@@ -100,6 +104,25 @@
     if (window.initScrollToBottomBtn) initScrollToBottomBtn();
     if (window.updateRunIndicators) updateRunIndicators();
     if (window.syncStreamingActive) syncStreamingActive();
+
+    // ── 切回「仍在后台流式运行」的会话：必须恢复 live 并重建实时画面 ──
+    // 此前只调了 setVisibleSessionKey，而它只把**旧**会话置 live=false、不会点亮新会话
+    // （live=true 全仓仅 3 处：streaming.js 的 send、sessions.js 的 reconstruct/resume）。
+    // 于是切回时 rt.live 仍为 false → streaming.js 的 `if (rt.live)` 渲染分支不成立，
+    // 事件只推进 rt.events 不渲染 → 画面永久冻结在切走那一帧；本轮结束后再点回
+    // 仍走同一路径，导致永远看不到完整回答（刷新页面才能恢复）。
+    // bootstrap 场景由 switchSession 的完整路径负责（见函数头注释）。
+    if (!(opts && opts.bootstrap) && window.sessionRuntimes && sessionRuntimes.has(key)) {
+      const rt = sessionRuntimes.get(key);
+      if (rt && rt.status === 'streaming' && !rt.live && !_resuming[key]
+          && typeof reconstructStreamingSession === 'function') {
+        // 防重入：同一会话的重建会先清空容器再回放，连点页签并发跑两次会互相踩踏
+        _resuming[key] = true;
+        reconstructStreamingSession(rt)
+          .catch(function (e) { console.warn('[chat-tabs] 重建实时画面失败:', e); })
+          .then(function () { delete _resuming[key]; });
+      }
+    }
   }
 
   // 打开（或激活）一个页签。title 用于页签名。
@@ -142,8 +165,10 @@
     tabs.push({ key: key, title: title || key });
     _setActiveKey(key);
     renderTabBar();
-    // 激活新页签（让新 panel 持有 id=messages）
-    activate(key);
+    // 激活新页签（让新 panel 持有 id=messages）。
+    // bootstrap=true：紧接着由调用方（switchSession）走完整加载路径，
+    // 这里不要触发实时画面重建，否则会重复 loadSessionMessages + 重复回放。
+    activate(key, { bootstrap: true });
     return true;
   }
 
@@ -167,8 +192,24 @@
         activate(next.key);
       } else {
         _setActiveKey(null);
-        const holder = document.getElementById('messages');
-        if (holder) { holder.removeAttribute('id'); holder.style.display = 'none'; holder.innerHTML = ''; }
+        // 关掉最后一个页签后必须补一个可写的消息容器：
+        // 页签体系建立时原 #messages 的 id 已被摘掉（见 open()），若不补，
+        // document.getElementById('messages') 会返回 null，之后 addMessage /
+        // beginRoundRender 取到 null → appendChild 抛 TypeError（且调用点在 try 之外），
+        // 表现为「发送按钮卡红、消息发不出去」。
+        let holder = document.getElementById('messages');
+        if (!holder) {
+          holder = document.createElement('div');
+          const ref = containerEl();
+          if (ref && ref.parentNode) ref.parentNode.insertBefore(holder, ref.nextSibling);
+          else document.body.appendChild(holder);
+        }
+        holder.id = 'messages';
+        holder.style.display = '';
+        holder.innerHTML = '';
+        // 同时清掉可见会话：该会话已无可见容器，留着会让 streaming.js 收尾时
+        // 误判「它还是可见会话」而不回收 runtime（visibleSessionKey !== rt.key 才 delete）。
+        if (window.setVisibleSessionKey) setVisibleSessionKey(null);
       }
     }
     renderTabBar();
@@ -215,6 +256,9 @@
     isOpen: function (key) { return !!panelEl(key); },
     activeKey: activeKey,
     activeEl: activeEl,
+    // 页签 key = sessionId + '_' + source。切分必须用 lastIndexOf（sessionId 自身可能含下划线，
+    // 如 cron 生成的 `cron_sess_xxx`），否则会切错 id。对外暴露供 sessions.js 等处复用同一约定。
+    splitKey: splitKey,
     all: function () { return tabs.slice(); }
   };
 })();

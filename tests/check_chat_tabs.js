@@ -79,7 +79,8 @@ global.window = { _activeTabKey: null, ChatTabs: null };
 global.escapeHtml = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 global.t = (k, params) => k;
 // activate() 依赖的全局函数桩
-global.setVisibleSessionKey = () => {};
+const visibleCalls = [];
+global.setVisibleSessionKey = (k) => { visibleCalls.push(k); };
 global.updateRunIndicators = () => {};
 global.syncStreamingActive = () => {};
 global.initScrollToBottomBtn = () => {};
@@ -103,7 +104,16 @@ main.appendChildrenPlus = true;
 
 // ---------- 载入源码并执行 ----------
 const src = fs.readFileSync(path.join(__dirname, '..', 'desktop', 'js', 'core', 'chat-tabs.js'), 'utf8');
-global.window = {};
+// 保真：浏览器里 state.js / streaming.js 的顶层函数与 sessionRuntimes 都是 window 的属性，
+// 而 chat-tabs.js 用 `window.X` 判空后调用。此前桩只挂在 Node global 上，
+// 导致 `window.setVisibleSessionKey` / `window.sessionRuntimes` 恒为 undefined、整段逻辑被静默跳过。
+global.window = {
+  sessionRuntimes: global.sessionRuntimes,
+  setVisibleSessionKey: global.setVisibleSessionKey,
+  updateRunIndicators: global.updateRunIndicators,
+  syncStreamingActive: global.syncStreamingActive,
+  initScrollToBottomBtn: global.initScrollToBottomBtn,
+};
 new Function('window', 'document', src + '\nreturn window.ChatTabs;')(global.window, global.document);
 
 let failures = 0;
@@ -160,5 +170,37 @@ ensureEl('messages');
 T.open('sess3_web', '会话3');
 assert(T.activeEl() === panelByKey('sess3_web'), 'activeEl 返回持有 #messages 的面板');
 
-if (failures === 0) { console.log('\nALL PASS ✔ (' + '6 groups)'); process.exit(0); }
+// ── 回归守卫（2026-09-29 修的两处缺陷）──
+console.log('[7] 关闭最后一个页签后必须留下可写的 #messages 容器');
+T.all().slice().forEach(function (t) { T.close(t.key); });
+assert(T.all().length === 0, '所有页签已清空');
+const holderAfter = getEl('messages');
+assert(!!holderAfter, '关闭最后一个页签后 document.getElementById("messages") 仍存在');
+if (holderAfter) {
+  // 复刻 addMessage / beginRoundRender 的写入路径：容器为 null 时这里会抛 TypeError
+  holderAfter.appendChild(makeEl('div'));
+  assert(holderAfter.children.length >= 1, '该容器可正常 appendChild（发送不再抛 null）');
+}
+assert(visibleCalls.length > 0 && visibleCalls[visibleCalls.length - 1] === null,
+  'visibleSessionKey 被清空（否则 runtime 收尾时不被回收 → 泄漏）');
+
+console.log('[8] 切回 streaming 且 live=false 的会话 → 必须触发实时画面重建');
+const reconRts = [];
+global.reconstructStreamingSession = function (rt) { reconRts.push(rt); return Promise.resolve(); };
+T.open('sessA_web', 'A');
+T.open('sessB_web', 'B');
+const rtA = { key: 'sessA_web', sessionId: 'sessA', source: 'web', status: 'streaming', live: false };
+sessionRuntimes.set('sessA_web', rtA);
+T.activate('sessA_web'); // 模拟点击页签切回
+assert(reconRts.length === 1 && reconRts[0] === rtA,
+  'rt.status=streaming 且 rt.live=false 时触发重建（否则画面永久冻结）');
+rtA.live = true; // 重建会置 live=true
+T.activate('sessA_web');
+assert(reconRts.length === 1, 'rt.live 已为 true 时不重复重建');
+const rtB = { key: 'sessB_web', sessionId: 'sessB', source: 'web', status: 'done', live: false };
+sessionRuntimes.set('sessB_web', rtB);
+T.activate('sessB_web');
+assert(reconRts.length === 1, '非 streaming 会话不触发重建');
+
+if (failures === 0) { console.log('\nALL PASS ✔ (' + '8 groups)'); process.exit(0); }
 else { console.error('\nFAILURES: ' + failures); process.exit(1); }

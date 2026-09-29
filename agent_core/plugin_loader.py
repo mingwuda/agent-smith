@@ -46,6 +46,7 @@ FRONTEND 是 dict，支持的字段（全部可选）：
 """
 from __future__ import annotations
 
+import contextvars
 import importlib
 import importlib.util
 import logging
@@ -54,6 +55,17 @@ from pathlib import Path
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
+
+# ── 待发 SSE 队列的会话隔离 ──
+# 队列挂在进程级单例 registry 上，但事件必须只送给「触发它的那个会话」：
+# 此前 emit 与 drain 相邻且无 await，单线程下恰好不串；但插件若从工具线程 / 后台任务
+# push_sse（工具的同步实现就跑在线程池里），事件会被别的会话 drain 走 → 串会话。
+# 这里用 ContextVar 在 emit 期间记录当前会话，push_sse 据此打戳，drain 只取本会话（+未打戳的）。
+_sse_session_ctx: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "plugin_sse_session", default=None
+)
+# 队列上限：插件异常刷事件时不至于把内存吃满（超出丢最旧的）
+_MAX_QUEUED_SSE = 500
 
 
 def _tool_name(t: Any) -> str:
@@ -124,12 +136,15 @@ class PluginHost:
     def push_sse(self, event: str, payload: dict = None):
         """插件向前端推送自定义 SSE 事件（注入点 E 的后端侧）。
 
-        事件不会立即发出：记入注册表全局待发队列，由 agent_run 在每次插件事件
+        事件不会立即发出：记入注册表待发队列，由 agent_run 在每次插件事件
         （on_message / on_tool_end）广播之后 drain_sse() 取出并 yield 成 SSE 帧，
         前端 handleStreamEvent 的 default 分支按 event 名 dispatch 给插件注册的
         前端 listener。payload 异常不影响主流程。
+
+        事件按「触发它的会话」打戳（取 emit 期间设置的 ContextVar），
+        drain_sse(session_id) 只取该会话的 — 防止插件从工具线程/后台任务推送时串会话。
         """
-        self.registry.queue_sse(event, payload or {})
+        self.registry.queue_sse(event, payload or {}, session_id=_sse_session_ctx.get())
 
     def emit(self, event: str, payload: Any = None) -> int:
         """向所有已加载插件的 HOOKS[event] 监听器广播事件。
@@ -142,23 +157,32 @@ class PluginHost:
                      每条用户消息进入 agent 处理前。
           on_tool_end payload={"name": str, "args": dict, "result": str}
                      每次工具调用结束后。
+
+        广播期间会把 payload 里的 session_id 写进 _sse_session_ctx，
+        使监听器内的 host.push_sse 自动归属到该会话（见 push_sse）。
         """
         called = 0
-        for rec in self.registry.plugins.values():
-            if not (rec.enabled and rec.injectable) or rec.module is None:
-                continue
-            hooks = getattr(rec.module, "HOOKS", None)
-            if not isinstance(hooks, dict):
-                continue
-            listener = hooks.get(event)
-            if not callable(listener):
-                continue
-            try:
-                listener(payload)
-                called += 1
-            except Exception as e:
-                logger.warning("[插件] %s 的事件 %s 监听器执行失败: %s，"
-                               "已隔离，不影响主流程", rec.id, event, e)
+        sid = payload.get("session_id") if isinstance(payload, dict) else None
+        _token = _sse_session_ctx.set(sid) if sid else None
+        try:
+            for rec in self.registry.plugins.values():
+                if not (rec.enabled and rec.injectable) or rec.module is None:
+                    continue
+                hooks = getattr(rec.module, "HOOKS", None)
+                if not isinstance(hooks, dict):
+                    continue
+                listener = hooks.get(event)
+                if not callable(listener):
+                    continue
+                try:
+                    listener(payload)
+                    called += 1
+                except Exception as e:
+                    logger.warning("[插件] %s 的事件 %s 监听器执行失败: %s，"
+                                   "已隔离，不影响主流程", rec.id, event, e)
+        finally:
+            if _token is not None:
+                _sse_session_ctx.reset(_token)
         return called
 
 
@@ -180,7 +204,8 @@ class PluginRegistry:
         self.external_tools: list = []       # 插件通过 host.register_tools 追加的工具
         self.current_plugin_id: str = ""
         self._plugin_modules: dict[str, Any] = {}  # id -> module（供卸载用）
-        self._queued_sse: list[tuple[str, dict]] = []  # 插件推送的前端 SSE 事件（E 注入点）
+        # 插件推送的前端 SSE 事件（E 注入点）：(session_id | None, event, payload)
+        self._queued_sse: list[tuple[Optional[str], str, dict]] = []
 
     # ── 前端资源（FRONTEND 注入点 A/C/F 的后端侧）──
     def collect_frontend(self) -> list[dict]:
@@ -208,14 +233,37 @@ class PluginRegistry:
         return out
 
     # ── SSE 待发队列（E 注入点）──
-    def queue_sse(self, event: str, payload: dict):
-        self._queued_sse.append((event, payload))
+    def queue_sse(self, event: str, payload: dict, session_id: Optional[str] = None):
+        """入队一条待发前端事件（带会话戳，用于按会话隔离）。"""
+        self._queued_sse.append((session_id, event, payload))
+        if len(self._queued_sse) > _MAX_QUEUED_SSE:
+            # 正常流程每个事件都会被立刻 drain，堆积说明有插件在异常刷事件或
+            # 会话已丢失（无人来取）→ 丢最旧的，避免内存无上限增长。
+            dropped = len(self._queued_sse) - _MAX_QUEUED_SSE
+            del self._queued_sse[:dropped]
+            logger.warning("[插件] SSE 待发队列超过 %d，已丢弃最旧的 %d 条",
+                           _MAX_QUEUED_SSE, dropped)
 
-    def drain_sse(self) -> list:
-        """取走并清空全局待发 SSE 队列。"""
-        pending = self._queued_sse
-        self._queued_sse = []
-        return pending
+    def drain_sse(self, session_id: Optional[str] = None) -> list:
+        """取走并清空待发队列（返回 [(event, payload)]）。
+
+        session_id 给定时只取「该会话的」与「未打戳的」事件，其余留在队列里
+        等它自己的会话来取 —— 防止并发会话互相 drain 到对方的事件。
+        不传 session_id 则取全部（保留旧语义，供兼容调用/测试）。
+        """
+        if session_id is None:
+            pending = self._queued_sse
+            self._queued_sse = []
+            return [(ev, pl) for _sid, ev, pl in pending]
+
+        taken, rest = [], []
+        for sid, ev, pl in self._queued_sse:
+            if sid is None or sid == session_id:
+                taken.append((ev, pl))
+            else:
+                rest.append((sid, ev, pl))
+        self._queued_sse = rest
+        return taken
 
     # ── 插件目录扫描 ──
     def discover(self) -> list[PluginRecord]:

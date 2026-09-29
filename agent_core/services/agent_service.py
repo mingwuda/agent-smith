@@ -276,13 +276,19 @@ async def _async_reflect(uid: str, user_message: str, steps: list[dict], result:
         #    达到阈值后由 maybe_generate_skill 起草候选技能（半自动：待用户确认再生效）──
         if t == "technique":
             try:
-                agent._last_user_message = user_message
-                agent._last_tool_steps = [
-                    {"tool": s.get("tool"), "step": s.get("step")}
-                    for s in (steps or [])
-                    if isinstance(s, dict) and s.get("type") == "tool_start"
-                ]
-                agent.maybe_generate_skill(reflection)
+                # 显式传入 uid 与本轮轨迹：反思跑在 asyncio 后台任务里，
+                # 不能依赖全局单例 agent 上的 self._user_id / self._last_*（会被并发请求的
+                # set_user() 覆盖 → Case 与 _skill_ 指针写进别的用户记忆，2026-09-29 修复）。
+                agent.maybe_generate_skill(
+                    uid,
+                    reflection,
+                    user_message=user_message,
+                    tool_steps=[
+                        {"tool": s.get("tool"), "step": s.get("step")}
+                        for s in (steps or [])
+                        if isinstance(s, dict) and s.get("type") == "tool_start"
+                    ],
+                )
             except Exception:
                 pass  # 蒸馏失败绝不阻塞主流程
     except Exception:

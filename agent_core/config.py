@@ -256,6 +256,22 @@ class AgentConfig:
         
         return config
 
+    def skills_root(self) -> Path:
+        """技能根目录（唯一解析入口，供加载 / 审批 / 蒸馏写入共用）。
+
+        ⚠️ 不要写成 `Path(self.skills_dir)` 再判真值：`Path("") == Path(".")`，它恒为真、
+        且 `.exists()` 也恒为真 → 空配置会被当成进程 CWD（蒸馏产物会写进运行时工作目录），
+        而"兜底"分支永远不会执行。必须**先判断原始字符串**。
+        另：skills_dir 支持 os.pathsep 分隔的多路径（见 _split_path_list），
+        写入目标取第一个（加载仍会遍历全部）。
+        """
+        raw = (self.skills_dir or "").strip()
+        if raw:
+            first = next((p for p in raw.split(os.pathsep) if p.strip()), "")
+            if first:
+                return Path(first).expanduser()
+        return _bundled_samples_dir()
+
     def _normalize_providers(self, apply_legacy: bool = False):
         providers = deepcopy(DEFAULT_PROVIDERS)
         if isinstance(self.providers, dict):
