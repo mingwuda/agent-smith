@@ -47,10 +47,28 @@ setInterval(loadSessions, 60000);
     await loadSessions();
     // 如果有历史会话，加载当前高亮会话的消息
     if (sessionsCache.length > 0) {
-      const initialSession = currentSessionId && sessionsCache.find(s => s.id === currentSessionId)
-        ? { id: currentSessionId, source: (sessionsCache.find(s => s.id === currentSessionId) || {}).source || 'web' }
-        : sessionsCache[0];
-      await switchSession(initialSession.id, initialSession.source, true);
+      // 先尝试还原上次刷新前的多页签打开状态
+      const restored = (window.ChatTabs && window.ChatTabs.restore) ? window.ChatTabs.restore() : null;
+      if (restored && restored.tabs && restored.tabs.length) {
+        // 重新打开所有页签（逐个 switchSession 走完整加载），激活项放到最后处理保证其为最终可见页签
+        const ordered = restored.tabs.slice().sort(function (a, b) {
+          const aAct = a.key === restored.active ? 1 : 0;
+          const bAct = b.key === restored.active ? 1 : 0;
+          return aAct - bAct;
+        });
+        let first = true;
+        for (const tab of ordered) {
+          const s = window.ChatTabs.splitKey(tab.key);
+          // 首个还原页签用 forceLoad；后续页签首次打开正常加载（保留该页签滚动/流式画面）
+          await switchSession(s.id, s.source, first ? true : false);
+          first = false;
+        }
+      } else {
+        const initialSession = currentSessionId && sessionsCache.find(s => s.id === currentSessionId)
+          ? { id: currentSessionId, source: (sessionsCache.find(s => s.id === currentSessionId) || {}).source || 'web' }
+          : sessionsCache[0];
+        await switchSession(initialSession.id, initialSession.source, true);
+      }
     } else {
       addMessage(t('welcome'), 'bot');
       addMessage(t('welcomeCapabilities'), 'bot');

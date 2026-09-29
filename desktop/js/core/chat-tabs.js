@@ -11,6 +11,8 @@
 (function () {
   const TABS_CONTAINER_ID = 'chat-tabs';
   const PANEL_CLASS = 'msg-panel';
+  // localStorage 持久化打开的页签（刷新浏览器后可还原）
+  const STORAGE_KEY = 'desktop_chat_tabs_v1';
   // 当前打开的页签（保序）。{ key, title }
   let tabs = [];
   // 每个页签的滚动位置缓存：key -> scrollTop
@@ -35,6 +37,17 @@
 
   function containerEl() {
     return document.getElementById('chat-tabs-container');
+  }
+
+  // —— 持久化当前页签状态（打开的页签 + 激活项）到 localStorage ——
+  // 用于刷新浏览器后还原页签打开状态。
+  function persist() {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        tabs: tabs.map(function (tb) { return { key: tb.key, title: tb.title }; }),
+        active: activeKey()
+      }));
+    } catch (e) { /* 存储不可用时静默降级，不影响页签本体功能 */ }
   }
 
   // —— 页签栏渲染 ——
@@ -81,6 +94,7 @@
     // 恢复该页签滚动位置
     if (scrollCache[key] != null) panel.scrollTop = scrollCache[key];
     _setActiveKey(key);
+    persist();
     // ponytail: 同步侧边栏会话选中高亮（.session-item / .psession-item）。
     // 点击页签栏或点击「已在页签中」的侧边栏会话，都只走 activate() 而不经过
     // switchSession() 末尾的高亮代码（后者在 tabAlreadyOpen 早退分支会被跳过），
@@ -165,6 +179,7 @@
     tabs.push({ key: key, title: title || key });
     _setActiveKey(key);
     renderTabBar();
+    persist();
     // 激活新页签（让新 panel 持有 id=messages）。
     // bootstrap=true：紧接着由调用方（switchSession）走完整加载路径，
     // 这里不要触发实时画面重建，否则会重复 loadSessionMessages + 重复回放。
@@ -213,6 +228,7 @@
       }
     }
     renderTabBar();
+    persist();
   }
 
   // 供 session 切换复用：确认页签打开。
@@ -256,6 +272,18 @@
     isOpen: function (key) { return !!panelEl(key); },
     activeKey: activeKey,
     activeEl: activeEl,
+    // 读取 localStorage 中保存的页签状态（冷启动还原用）。
+    // 返回 { tabs:[{key,title}], active }，无效/不存在返回 null。
+    // 仅负责读数据，不触碰 tabs/DOM —— 由 main.js 据此遍历 switchSession 重建。
+    restore: function () {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (!raw) return null;
+        const data = JSON.parse(raw);
+        if (!data || !Array.isArray(data.tabs) || !data.tabs.length) return null;
+        return data;
+      } catch (e) { return null; }
+    },
     // 页签 key = sessionId + '_' + source。切分必须用 lastIndexOf（sessionId 自身可能含下划线，
     // 如 cron 生成的 `cron_sess_xxx`），否则会切错 id。对外暴露供 sessions.js 等处复用同一约定。
     splitKey: splitKey,
