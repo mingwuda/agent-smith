@@ -24,6 +24,21 @@ class SkillInfo(BaseModel):
     mcp_declared: bool = False
 
 
+class PendingSkillItem(BaseModel):
+    skill_name: str
+    occurrences: int = 0
+    pending_path: str = ""
+
+
+def _resolve_skills_dir() -> Path:
+    from app_state import get_app_base_dir
+    config = AgentConfig.load()
+    base = Path(config.skills_dir)
+    if base:
+        return base
+    return get_app_base_dir() / "skills"
+
+
 class SkillFileEntry(BaseModel):
     path: str
     size: int = 0
@@ -130,6 +145,21 @@ def list_skills():
     ]
 
 
+@router.get("/skills/pending", response_model=list[PendingSkillItem])
+def list_pending_skills(request: Request):
+    """列出待用户确认的蒸馏技能候选（半自动审批入口）。
+
+    注意：本路由必须声明在 @router.get("/skills/{name}") 之前，
+    否则会被动态参数路由吞掉（FastAPI 按注册顺序匹配）。
+    """
+    from case_forge import list_pending_skills as _list
+    from api.deps import _get_current_user
+    uid = _get_current_user(request)
+    items = _list(uid, _resolve_skills_dir())
+    return [PendingSkillItem(skill_name=i["skill_name"], occurrences=i["occurrences"],
+                             pending_path=i["pending_path"]) for i in items]
+
+
 @router.post("/skills/reload", response_model=ReloadResponse)
 def reload_skills():
     """热加载所有技能"""
@@ -212,3 +242,36 @@ def get_skill_file(name: str, path: str = ""):
         size=file_size,
         truncated=truncated,
     )
+# ── Case → Skill 半自动审批（需求1）──
+# 蒸馏出的候选技能 SKILL.md 写入待审批目录，用户通过这里确认/拒绝后才真正生效。
+# PendingSkillItem / _resolve_skills_dir 定义见文件顶部（供 /skills/pending 列表路由使用）。
+
+class _ApproveBody(BaseModel):
+    skill_name: str
+
+
+@router.post("/skills/pending/approve", response_model=ReloadResponse)
+def approve_pending_skill(request: Request, body: _ApproveBody):
+    """批准候选技能：移入生效目录并热加载。"""
+    from app_state import get_agent
+    from api.deps import _get_current_user
+    from case_forge import approve_skill
+    agent = get_agent()
+    if not agent:
+        raise HTTPException(503, "Agent 尚未初始化")
+    uid = _get_current_user(request)
+    skills_dir = _resolve_skills_dir()
+    msg = approve_skill(uid, body.skill_name, skills_dir)
+    count = agent.reload_skills() if "已生效" in msg else 0
+    return ReloadResponse(message=msg, count=count)
+
+
+@router.post("/skills/pending/reject", response_model=ReloadResponse)
+def reject_pending_skill(request: Request, body: _ApproveBody):
+    """拒绝候选技能：删除待审批文件与指针。"""
+    from api.deps import _get_current_user
+    from case_forge import reject_skill
+    uid = _get_current_user(request)
+    skills_dir = _resolve_skills_dir()
+    msg = reject_skill(uid, body.skill_name, skills_dir)
+    return ReloadResponse(message=msg, count=0)
