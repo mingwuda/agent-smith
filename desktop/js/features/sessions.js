@@ -559,6 +559,10 @@ function updateRunIndicators() {
     const rt = sessionRuntimes.get(el.dataset.key);
     el.classList.toggle('running', !!(rt && rt.status === 'streaming'));
   });
+  // 同步多页签的 loading 态（正在请求中的页签标题加扫光效果）
+  if (window.ChatTabs && window.ChatTabs.syncStreamingTabs) {
+    window.ChatTabs.syncStreamingTabs();
+  }
 }
 
 // 切回一个「正在后台运行」的会话：

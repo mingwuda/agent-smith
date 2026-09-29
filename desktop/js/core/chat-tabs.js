@@ -56,8 +56,11 @@
     if (!el) return;
     el.innerHTML = tabs.map(function (tb) {
       const active = tb.key === activeKey();
+      // 该页签会话正在请求中（streaming）→ 标题加 loading 扫光效果
+      const streaming = (typeof sessionRuntimes !== 'undefined' && sessionRuntimes.has(tb.key)
+        && sessionRuntimes.get(tb.key).status === 'streaming');
       return (
-        '<div class="chat-tab ' + (active ? 'active' : '') + '" data-key="' + escapeHtml(tb.key) + '"' +
+        '<div class="chat-tab ' + (active ? 'active' : '') + (streaming ? ' loading' : '') + '" data-key="' + escapeHtml(tb.key) + '"' +
         ' onclick="window.ChatTabs && ChatTabs.activate(\'' + tb.key.replace(/'/g, "\\'") + '\')">' +
         '<span class="chat-tab-title" title="' + escapeHtml(tb.title) + '">' + escapeHtml(tb.title) + '</span>' +
         '<button class="chat-tab-close" onclick="event.stopPropagation();window.ChatTabs && ChatTabs.close(\'' + tb.key.replace(/'/g, "\\'") + '\')" title="关闭">✕</button>' +
@@ -283,6 +286,17 @@
         if (!data || !Array.isArray(data.tabs) || !data.tabs.length) return null;
         return data;
       } catch (e) { return null; }
+    },
+    // 轻量同步各页签的 loading 态（依据各会话 runtime 是否 streaming）。
+    // 不重建 DOM，只 toggle 每个 .chat-tab 的 loading 类 —— 供 streaming 状态变化时
+    // （updateRunIndicators）高频调用，避免反复 innerHTML。含下划线 sessionId 直接用 tb.key 查 map。
+    syncStreamingTabs: function () {
+      document.querySelectorAll('#' + TABS_CONTAINER_ID + ' .chat-tab').forEach(function (el) {
+        const key = el ? el.dataset.key : null;
+        const streaming = !!key && typeof sessionRuntimes !== 'undefined'
+          && sessionRuntimes.has(key) && sessionRuntimes.get(key).status === 'streaming';
+        el.classList.toggle('loading', streaming);
+      });
     },
     // 页签 key = sessionId + '_' + source。切分必须用 lastIndexOf（sessionId 自身可能含下划线，
     // 如 cron 生成的 `cron_sess_xxx`），否则会切错 id。对外暴露供 sessions.js 等处复用同一约定。

@@ -155,6 +155,34 @@
 .chat-tab:hover { background:rgba(0,0,0,.04); }
 .chat-tab.active { background:#fff; border-color:#e5e5ea; color:#111; font-weight:600; box-shadow:0 -1px 3px rgba(0,0,0,.04); }
 .chat-tab-title { overflow:hidden; text-overflow:ellipsis; }
+/* 正在请求中的页签标题：参考 deepseek-harness 的 shimmer 扫光 loading——
+   深蓝品牌色文字上，一道浅蓝高光底色自左向右扫过（1.8s 循环）。
+   不改变文字内容，只是给标题叠加一个流动高光，视觉即"正在生成/请求中"。 */
+.chat-tab.loading .chat-tab-title {
+  background: linear-gradient(
+    90deg,
+    rgb(65,118,230) 0%,
+    rgb(65,118,230) 40%,
+    rgb(211,226,255) 50%,
+    rgb(65,118,230) 60%,
+    rgb(65,118,230) 100%
+  );
+  background-size: 250% 100%;
+  background-position: 100% 0;
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: chat-tab-shimmer 1.8s linear infinite;
+}
+@keyframes chat-tab-shimmer {
+  to { background-position: 0 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-tab.loading .chat-tab-title {
+    background: rgb(65,118,230);
+    animation: none;
+  }
+}
 .chat-tab-close {
   border:none; background:transparent; color:#999; cursor:pointer; font-size:11px; line-height:1;
   width:16px; height:16px; border-radius:50%; display:inline-flex; align-items:center; justify-content:center;
