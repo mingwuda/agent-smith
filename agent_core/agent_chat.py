@@ -231,9 +231,37 @@ class AgentChatMixin:
 
 
     def maybe_generate_skill(self, pattern: dict) -> Optional[str]:
-        # ponytail: P3 占位——高价值 technique 起草 SKILL.md 并 reload_skills()。
-        # 当前不激活：需 enable_self_evolution + 审批闸 + 沙箱验证才允许写技能。
-        return None
+        """Case → Skill 蒸馏入口（半自动）：把多次成功的同类 technique 累积为 Case，
+        达到阈值后起草候选 SKILL.md 到待审批目录，待用户确认后生效。
+
+        仅在 enable_self_evolution 开启时激活；否则只做无副作用的行为记录。
+
+        pattern: reflect_on_task 产出的反思 dict {t, v}（仅 technique 参与蒸馏）。
+        """
+        # 仅 technique 类型的经验才值得蒸馏成技能；preference/pitfall 走原负向/偏好路径
+        if not pattern or pattern.get("t") != "technique":
+            return None
+        # 自进化开关关闭时不自动起草技能（保持默认保守行为）
+        if not getattr(self.config, "enable_self_evolution", False):
+            self._case_buffer = getattr(self, "_case_buffer", [])
+            return None
+        try:
+            from case_forge import accumulate_case, find_promotable_cases, draft_skill
+            # 采集当前会话工具轨迹（从 tool_call_history 的最近一次归纳）
+            actions = getattr(self, "_last_tool_steps", None) or []
+            accumulate_case(self._user_id, getattr(self, "_last_user_message", "") or "",
+                            pattern, actions=actions)
+            # 达到阈值 → 起草候选技能（半自动：写 pending，不直接生效）
+            skills_dir = Path(getattr(self.config, "skills_dir", ""))
+            if not skills_dir or not skills_dir.exists():
+                skills_dir = Path(__file__).parent / "sample_skills"  # 兜底
+            promotable = find_promotable_cases(self._user_id)
+            for case in promotable:
+                draft_skill(self._user_id, case["key"], skills_dir)
+            return "case-accumulated"
+        except Exception as exc:
+            logger.warning("[蒸馏] Case 累积/起草失败（已忽略）: %s", exc)
+            return None
 
 
     def _approval_gate(self, candidate: Any) -> bool:

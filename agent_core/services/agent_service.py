@@ -272,6 +272,19 @@ async def _async_reflect(uid: str, user_message: str, steps: list[dict], result:
         mem = get_memory(uid)
         if mem.get(key) is None:  # 不覆盖已有记录
             mem.set(key, reflection)
+        # ── Case → Skill 馏（需求1/4）：成功 technique 经验累积为 Case，
+        #    达到阈值后由 maybe_generate_skill 起草候选技能（半自动：待用户确认再生效）──
+        if t == "technique":
+            try:
+                agent._last_user_message = user_message
+                agent._last_tool_steps = [
+                    {"tool": s.get("tool"), "step": s.get("step")}
+                    for s in (steps or [])
+                    if isinstance(s, dict) and s.get("type") == "tool_start"
+                ]
+                agent.maybe_generate_skill(reflection)
+            except Exception:
+                pass  # 蒸馏失败绝不阻塞主流程
     except Exception:
         pass
 

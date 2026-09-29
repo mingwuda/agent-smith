@@ -371,9 +371,33 @@ class AgentInitMixin:
         learned = _shorten(learned, MAX_LEARNED)
         avoid = _shorten(avoid, MAX_AVOID)
 
+        # ── Case → Skill 蒸馏的可复用工作流注入（需求4）──
+        # 仅注入达到晋升阈值（多次成功）的 Case，作为「已验证可行路径」提示，
+        # 让 agent 遇到同类任务时优先采用，而非从头摸索。同样有数量/长度上限。
+        case_lines = []
+        try:
+            from case_forge import find_promotable_cases
+            for c in find_promotable_cases(self._user_id):
+                val = c.get("value") or {}
+                v = str(val.get("v", "")).strip()
+                actions = [str(a) for a in (val.get("actions") or []) if a]
+                if not v:
+                    continue
+                if actions:
+                    case_lines.append(f"- {v}（已验证 {val.get('occurrences', 0)} 次，路径: {' → '.join(actions)}）")
+                else:
+                    case_lines.append(f"- {v}（已验证 {val.get('occurrences', 0)} 次）")
+        except Exception:
+            pass  # Case 注入失败不影响基础经验注入
+        case_lines = _shorten(case_lines, MAX_LEARNED)
+
         sections = []
         if learned:
             sections.append("## 从过往任务中学到的经验\n" + "\n".join(learned))
         if avoid:
             sections.append("## 历史踩坑与用户纠正（务必避免）\n" + "\n".join(avoid))
+        if case_lines:
+            sections.append("## 已验证的可复用工作流（Case 蒸馏）\n"
+                            "遇到相同类型任务时，可直接复用以下已验证成功的处理路径：\n"
+                            + "\n".join(case_lines))
         return "\n\n".join(sections)
