@@ -28,9 +28,22 @@ def remember(key: str, value: str, ttl: int = 0) -> str:
 
 
 @tool
-def recall_memory(query: str) -> str:
-    """搜索长期记忆。需要查找用户偏好、长期约定、项目事实或常用环境信息时使用。"""
-    return get_memory().search(query.strip())
+def recall_memory(query: str, project: str = "", track: str = "") -> str:
+    """搜索长期记忆。需要查找用户偏好、长期约定、项目事实或常用环境信息时使用。
+
+    可选正交维度（不传则全局搜索）：
+    - project: 仅在某项目下检索（agent 调用时传当前 project_id，实现「按项目精准命中」）
+    - track: "user"（用户偏好/经验）或 "agent"（agent 完成任务沉淀的 Case/技能）；默认全局
+    """
+    query = (query or "").strip()
+    track = (track or "").strip().lower()
+    if not project and track not in ("user", "agent"):
+        return get_memory().search(query)
+    return get_memory().search_scoped(
+        query,
+        track=track if track in ("user", "agent") else None,
+        project=project or None,
+    )
 
 
 @tool

@@ -29,6 +29,27 @@ _K_EXPIRES = "__expires_at__"
 _EVOLUTION_PREFIXES = ("_learned_", "_avoid_")
 MAX_EVOLUTION_ENTRIES_PER_KIND = 50
 
+# 需要 Markdown 可读镜像的关键前缀（经验/Case/技能：这些才值得用户审阅/编辑；
+# 普通工具性临时记忆不写 md，避免噪音）。不同前缀代表不同记忆轨道：
+#   _learned_ / _avoid_ : user 轨道经验（从做过的事学到/别踩坑）
+#   _case_              : agent 轨道结构化 Case（多条同类 technique 累积的完整执行轨迹）
+#   _skill_*            : agent 轨道已蒸馏出候选/已批准的技能指针（值指向待审批 SKILL.md）
+_READABLE_PREFIXES = ("_learned_", "_avoid_", "_case_", "_skill_")
+# 预设的记忆轨道（正交维度之一，对应 EverOS 的 user/agent 双轨思想）
+TRACK_USER = "user"    # 用户偏好、经验、踩坑
+TRACK_AGENT = "agent"  # agent 完成任务的轨迹/Case/技能
+# 正交检索维度（除 track 外的可选 scope），供按项目/会话/用户精准命中
+_SCOPE_FIELDS = ("track", "project", "session")
+
+
+def _track_for_key(key: str) -> str:
+    """根据 key 前缀推断记忆轨道。"""
+    if key.startswith("_case_") or key.startswith("_skill_"):
+        return TRACK_AGENT
+    if key.startswith("_learned_") or key.startswith("_avoid_"):
+        return TRACK_USER
+    return TRACK_USER
+
 
 class LocalMemory:
     """基于文件的键值记忆存储"""
@@ -216,6 +237,55 @@ class LocalMemory:
         rows = self._fts.search(FtsIndex.escape_match(q))
         return [key for key, _, _ in rows]
 
+    def search_scoped(self, query: str, track: Optional[str] = None,
+                      project: Optional[str] = None, session: Optional[str] = None) -> str:
+        """正交维度检索：在关键词检索之上，按 track(轨道)/project/session 过滤，
+        实现「按项目/按用户/按会话」精准命中（需求2），而非全局模糊搜。
+
+        过滤在内存缓存上做（缓存内容含 scope 字段），再投放极短的线性扫描打分；
+        由于先缩后搜，命中噪声远低于全库搜索。返回格式与 search() 一致。
+        """
+        if track is None and project is None and session is None:
+            return self.search(query)
+        self._purge_expired()
+        # 预过滤：命中 track/project/session 的候选 key
+        candidates = []
+        for key, value in self._cache.items():
+            if track is not None and _track_for_key(key) != track:
+                continue
+            if any(dim is not None for dim in (project, session)) and isinstance(value, dict):
+                if project is not None and str(value.get("project", "")) != str(project):
+                    continue
+                if session is not None and str(value.get("session", "")) != str(session):
+                    continue
+            candidates.append(key)
+        if not candidates:
+            return "该维度下暂无匹配的记忆"
+        q = query.strip().lower()
+        if not q:
+            return "\n".join(f"  {k}: {self._summarize(self._cache[k])}" for k in candidates) or "该维度下暂无匹配的记忆"
+        # 对候选做相关性打分
+        results = []
+        for key in candidates:
+            value = self._cache[key]
+            key_l = key.lower()
+            str_val = json.dumps(value, ensure_ascii=False).lower() if not isinstance(value, str) else value.lower()
+            score = 0
+            if q == key_l:
+                score += 100
+            elif key_l.startswith(q):
+                score += 60
+            elif q in key_l:
+                score += 40
+            if q in str_val:
+                score += 30
+            if score > 0:
+                results.append((score, key))
+        results.sort(key=lambda x: -x[0])
+        if not results:
+            return f"该维度下未找到包含 '{query}' 的记忆"
+        return "\n".join(f"  {k}: {self._summarize(self._cache[k])}" for _, k in results)
+
     def _linear_search(self, q: str) -> str:
         """线性扫描 + 相关性打分（key 完全匹配 > 前缀 > 包含 > value 包含）。"""
         results = []
@@ -257,6 +327,39 @@ class LocalMemory:
         }
         f = self.data_dir / f"{key}.json"
         f.write_text(json.dumps(payload, ensure_ascii=False, default=str), encoding="utf-8")
+        # Markdown 可读镜像（需求3）：仅对经验/Case/技能类 key 写一份可读 .md，
+        # 作为「用户拥有数据」的可读事实源，可直接在文件浏览器/编辑器中审阅/编辑。
+        if any(key.startswith(p) for p in _READABLE_PREFIXES):
+            try:
+                self._save_markdown(key)
+            except Exception:
+                pass  # md 镜像失败不影响 KV 主存储
+
+    def _save_markdown(self, key: str):
+        """把一条记忆渲染成可读 Markdown 镜像（`<key>.md`），供用户直接审阅/编辑。
+
+        value 若是 dict，按字段渲染成结构化行；若是字符串，直接作为正文。
+        """
+        value = self._cache.get(key)
+        md = [f"# {key}", ""]
+        if isinstance(value, dict) and not any(isinstance(v, (dict, list)) for v in value.values() if v is not None):
+            # 扁平 dict（如 {"t":..., "v":..., "context":...}）→ 键值列表
+            for k, v in value.items():
+                if v is None or v == "" or v == []:
+                    continue
+                md.append(f"- **{k}**: {v}")
+        else:
+            # 复杂 dict / 字符串 → 直接落正文（保持可读，必要时 JSON 展示）
+            md.append(self._render_value_text(value))
+        md.append("")
+        f = self.data_dir / f"{key}.md"
+        f.write_text("\n".join(md), encoding="utf-8")
+
+    @staticmethod
+    def _render_value_text(value: Any) -> str:
+        if isinstance(value, str):
+            return value
+        return json.dumps(value, ensure_ascii=False, default=str, indent=2)
 
     @staticmethod
     def _ensure_serializable(value: Any) -> Any:
