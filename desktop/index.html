@@ -113,6 +113,11 @@
       <div id="skills-list">
         <div class="skill-item" style="color:#8e8e93;font-style:italic;" data-i18n="loading">加载中...</div>
       </div>
+      <!-- Case→Skill 蒸馏候选（半自动审批入口） -->
+      <div id="skill-pending-section" style="display:none;margin-top:4px;border-top:1px solid var(--border2,#e5e5ea);padding-top:6px;">
+        <div class="skill-pending-label" data-i18n="pendingSkillsTitle">⏳ 待确认技能</div>
+        <div id="skill-pending-list"></div>
+      </div>
     </div>
   </div>
 </div>
@@ -748,6 +753,7 @@
 <script src="/static/js/features/artifacts.js"></script>
 <script src="/static/js/features/memory.js"></script>
 <script src="/static/js/features/skills.js"></script>
+<script src="/static/js/features/skill-pending.js"></script>
 <script src="/static/js/features/stats.js"></script>
 <script src="/static/js/features/messaging.js"></script>
 <script src="/static/js/features/streaming.js"></script>

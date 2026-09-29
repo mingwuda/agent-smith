@@ -57,6 +57,8 @@ setInterval(loadSessions, 60000);
     }
     refreshSkills();
     refreshStats();
+    // 加载 Case→Skill 蒸馏候选（待确认技能）
+    if (typeof loadPendingSkills === 'function') loadPendingSkills();
   } else {
     addMessage(t('agentUnavailable'), 'system');
     addMessage('cd agent_core\npython main.py', 'system');
