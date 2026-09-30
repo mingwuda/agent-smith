@@ -305,8 +305,8 @@ class AgentInitMixin:
 
         now = time.time()
         ttl_seconds = 10 * 24 * 3600  # 10 天
-        learned = []
-        avoid = []
+        learned = []   # (updated_at, text)
+        avoid = []     # (updated_at, text)
         deleted_count = 0
 
         def extract_value(val) -> str:
@@ -345,13 +345,22 @@ class AgentInitMixin:
             text = extract_value(val)
             if not text:
                 continue
+            # 记录更新时间（P0-1：旧实现按 key 字典序注入，与相关性无关；
+            # 改为按 updated_at 倒序，让「最新经验」优先进入 system prompt ——
+            # system prompt 在 agent 构建时静态生成、没有当轮 user query，
+            # 无法做 query 相关召回，这里用"时效优先"作为务实的相关性代理）。）
+            ua = entry.get("updated_at") or 0
             if key.startswith("_avoid_"):
-                avoid.append(f"- 不要 {text}")
+                avoid.append((ua, f"- 不要 {text}"))
             else:
-                learned.append(f"- {text}")
+                learned.append((ua, f"- {text}"))
 
         if deleted_count:
             logger.info("[记忆] 自动清理了 %d 条过期学习经验", deleted_count)
+
+        # 按更新时间倒序（最新优先），再按时效取前 N；避免旧经验长期霸占注入位
+        learned.sort(key=lambda x: x[0], reverse=True)
+        avoid.sort(key=lambda x: x[0], reverse=True)
 
         # ── 限制 learnings 数量与长度，避免 system prompt 膨胀 ──
         MAX_LEARNED = 3
@@ -361,6 +370,9 @@ class AgentInitMixin:
         def _shorten(items: list[str], limit: int) -> list[str]:
             out = []
             for text in items:
+                # 支持 (updated_at, text) 元组：取末尾文本，按时间排序后传回时已是字符串
+                if isinstance(text, (list, tuple)) and len(text) >= 1:
+                    text = text[-1]
                 if len(text) > MAX_ITEM_CHARS:
                     text = text[:MAX_ITEM_CHARS] + "..."
                 out.append(text)
@@ -374,10 +386,25 @@ class AgentInitMixin:
         # ── Case → Skill 蒸馏的可复用工作流注入（需求4）──
         # 仅注入达到晋升阈值（多次成功）的 Case，作为「已验证可行路径」提示，
         # 让 agent 遇到同类任务时优先采用，而非从头摸索。同样有数量/长度上限。
+        # P1-3+P1-6：按「时效×次数」混合排序——最近更新 + 验证次数多的优先注入，
+        # 避免 90 天前 occ=10 的旧 Case 永远压过今天 occ=3 的新 Case（旧经验霸占注入位）。
+        # 保留次数权重但仍让新近案例有机会进入注入位。
         case_lines = []
         try:
             from case_forge import find_promotable_cases
-            for c in find_promotable_cases(self._user_id):
+            import time as _time
+            _now = _time.time()
+            case_list = find_promotable_cases(self._user_id)
+            def _recency_score(c):
+                val = c.get("value") or {}
+                occ = int(val.get("occurrences") or 0)
+                upd = float(val.get("updated_at") or c.get("updated_at") or 0)
+                # 时效衰减：距上次更新每过 1 天，一次性衰减；30 天以上归零
+                age_days = max(0, (_now - upd) / 86400)
+                recency = max(0.0, 1.0 - age_days / 30.0)
+                return (occ * recency) + occ * 0.1
+            case_list.sort(key=_recency_score, reverse=True)
+            for c in case_list:
                 val = c.get("value") or {}
                 v = str(val.get("v", "")).strip()
                 actions = [str(a) for a in (val.get("actions") or []) if a]
