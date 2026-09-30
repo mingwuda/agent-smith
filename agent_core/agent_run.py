@@ -335,9 +335,19 @@ class AgentRunMixin:
             await graph.aupdate_state(run_config, {"messages": checkpoint_replacement(repaired)})
 
 
-    async def _strip_checkpoint_images(self, run_config: dict, graph=None):
+    async def _strip_checkpoint_images(self, run_config, graph=None, model_override="", provider_override=""):
         graph = graph or self._graph
         if not graph:
+            return
+        # 基于「本次请求实际解析的 provider/model」判断 checkpoint 历史图片是否剥离：
+        #  - 视觉模型：保留历史图片（模型能看），不剥离；
+        #  - 非视觉模型：剥离全部历史图片，否则图片残留在 checkpoint，发给纯文本模型
+        #    → 400 "Model only support text input" / image input not supported。
+        # ponytail: 必须用 _resolve_provider_config 解析实际模型，不能读全局 config.model——
+        # 切换厂商后实际模型是该厂商自己的 model（如 step-5-preview），全局 model 可能是被
+        # 标视觉的 agnes，误判为视觉 → 不剥离 → 纯文本模型收到 image_url → 400。
+        pid, mdl, *_ = self._resolve_provider_config(model_override, provider_override)
+        if _model_supports_vision(self.config, provider_id=pid, model=mdl):
             return
         try:
             snapshot = await graph.aget_state(run_config)
@@ -347,16 +357,15 @@ class AgentRunMixin:
         messages = list(values.get("messages") or [])
         if not messages:
             return
-        
-        # 只扫描最近 20 条消息，更老的直接跳过（不清理，也不扫描）
-        # 避免长会话中每次请求都全量遍历，导致越来越慢
-        recent = messages[-20:]
-        stripped, changed = _strip_image_content_from_messages(recent)
+        # 全量扫描：原实现只扫 messages[-20:]，长会话早期图片残留 → 非视觉模型请求即 400。
+        # 遍历数百条消息开销（毫秒级）远小于一次 LLM 调用，故不再截断到最近 N 条。
+        stripped, changed = _strip_image_content_from_messages(messages)
         if changed:
-            # 只回写最近的消息部分，保留完整历史
-            new_messages = messages[:-20] + stripped if len(messages) > 20 else stripped
-            logger.info("[_strip_checkpoint_images] 已从最近 %d 条消息中移除图片/截图引用（共 %d 条）", len(recent), len(messages))
-            await graph.aupdate_state(run_config, {"messages": checkpoint_replacement(new_messages)})
+            logger.info(
+                "[_strip_checkpoint_images] 已从 checkpoint 移除 %d 条消息中的图片（非视觉模型 %s/%s，防 400）",
+                len(messages), pid, mdl,
+            )
+            await graph.aupdate_state(run_config, {"messages": checkpoint_replacement(stripped)})
 
 
     def _thread_key(self, thread_id: str = "") -> str:
@@ -431,7 +440,7 @@ class AgentRunMixin:
         input_messages = []
         thread_key = self._thread_key(tid)
         await self._repair_checkpoint_tool_history(config, graph)
-        await self._strip_checkpoint_images(config, graph)
+        await self._strip_checkpoint_images(config, graph, model_override, provider_override)
         # ponytail: 用"本次解析出的 provider/model"判断视觉能力，而非全局 config.model——
         # 切换厂商发送时，实际模型是该厂商自己的 model（如 step-router-v1），否则会误判为
         # 支持视觉、图片原样直发非视觉模型 → 400 image input not supported。
@@ -549,8 +558,7 @@ class AgentRunMixin:
                 tid, thread_key, elapsed,
             )
             self._hydrated_threads.add(thread_key)
-            if attachments:
-                await self._strip_checkpoint_images(config, graph)
+            await self._strip_checkpoint_images(config, graph, model_override, provider_override)
             # 释放该会话的浏览器页面，避免跨会话页面状态串扰
             # 注意：必须使用 thread_key（"default:abc"）而非 tid（"abc"），
             # 因为工具函数从 RunnableConfig 中读取的 thread_id 是完整 key
@@ -687,7 +695,7 @@ class AgentRunMixin:
         input_messages = []
         thread_key = self._thread_key(tid)
         await self._repair_checkpoint_tool_history(run_config, graph)
-        await self._strip_checkpoint_images(run_config, graph)
+        await self._strip_checkpoint_images(run_config, graph, model_override, provider_override)
         ocr_sink: list = []
         # ponytail: 用"本次解析出的 provider/model"判断视觉能力，而非全局 config.model——
         # 切换厂商发送时，实际模型是该厂商自己的 model（如 step-router-v1），否则会误判为
@@ -1612,7 +1620,7 @@ class AgentRunMixin:
             self._hydrated_threads.add(thread_key)
             # 始终清理 checkpoint 中的图片/截图引用，避免跨请求残留
             try:
-                await self._strip_checkpoint_images(run_config, graph)
+                await self._strip_checkpoint_images(run_config, graph, model_override, provider_override)
             except Exception:
                 pass
             # 清理 todo 清单缓存（按完整 thread_key 清理，保留磁盘文件供恢复）。

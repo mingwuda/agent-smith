@@ -690,6 +690,8 @@ def is_image_input_error(exc: BaseException) -> bool:
         "does not support vision",
         "does not support multimodal",
         "model_incompatible",            # OpenAI 兼容网关的 type 字段
+        "only support text",             # stepfun 等网关：Model only support text input
+        "support text input",            # 同上变体（model only supports text input）
         "不支持图片",                      # 中文：不支持图片输入/识别
         "不支持图像",                      # 中文：图像
         "不支持视觉",
