@@ -5,6 +5,7 @@
 
 let projectsCache = [];
 let activeProjectId = null;       // 当前展开的项目
+let unassignedExpanded = false;   // 「其他会话」分组是否展开（默认折叠）
 let currentProjectDir = '';       // 当前文件浏览器根目录
 let currentProjectId = '';        // 当前文件浏览器所属项目
 let currentBrowsePath = '';       // 当前浏览路径
@@ -83,26 +84,29 @@ async function renderWorkspace() {
   // 未归属任何项目的会话
   const unassigned = (sessionsCache || []).filter(s => !s.project_id);
   if (unassigned.length > 0) {
-    html += '<div class="project-item">';
-    html += '  <div class="project-row" style="cursor:default;">';
+    html += '<div class="project-item' + (unassignedExpanded ? ' expanded' : '') + '">';
+    html += '  <div class="project-row" onclick="toggleUnassigned()">';
+    html += '    <span class="proj-toggle">▶</span>';
     html += '    <span class="proj-icon">💬</span>';
     html += '    <div class="proj-main"><div class="proj-name">' +
       escapeHtml((t('unassignedSessions') || '其他会话') + ' (' + unassigned.length + ')') + '</div></div>';
-    html += '    <span class="project-new-session-inline" onclick="newSession()" title="' +
+    html += '    <span class="project-new-session-inline" onclick="event.stopPropagation(); newSession()" title="' +
       escapeHtml(t('newSessionInProject') || '新建会话') + '">＋</span>';
     html += '  </div>';
-    html += '  <div class="project-sessions">';
-    unassigned.forEach(s => {
-      const isActive = s.id === currentSessionId && s.source === currentSessionSource;
-      html += '<div class="psession-item ' + (isActive ? 'active' : '') + '" data-key="' + _sessionKey(s) + '" ' +
-        'onclick="switchSession(\'' + s.id + '\',\'' + (s.source || 'web') + '\')">';
-      html += '  <span class="psi-icon">' + ((s.source === 'wechat') ? '📱' : '💬') + '</span>';
-      html += '  <span class="psi-title">' + escapeHtml(s.title || t('unnamed') || '未命名') + '</span>';
-      html += '  <span class="psi-meta">' + escapeHtml(t('messagesCount', { count: s.message_count || 0 })) + '</span>';
-      html += '  <span class="psi-del" onclick="event.stopPropagation(); deleteSession(\'' + s.id + '\')">✕</span>';
-      html += '</div>';
-    });
-    html += '  </div>';
+    if (unassignedExpanded) {
+      html += '  <div class="project-sessions">';
+      unassigned.forEach(s => {
+        const isActive = s.id === currentSessionId && s.source === currentSessionSource;
+        html += '<div class="psession-item ' + (isActive ? 'active' : '') + '" data-key="' + _sessionKey(s) + '" ' +
+          'onclick="switchSession(\'' + s.id + '\',\'' + (s.source || 'web') + '\')">';
+        html += '  <span class="psi-icon">' + ((s.source === 'wechat') ? '📱' : '💬') + '</span>';
+        html += '  <span class="psi-title">' + escapeHtml(s.title || t('unnamed') || '未命名') + '</span>';
+        html += '  <span class="psi-meta">' + escapeHtml(t('messagesCount', { count: s.message_count || 0 })) + '</span>';
+        html += '  <span class="psi-del" onclick="event.stopPropagation(); deleteSession(\'' + s.id + '\')">✕</span>';
+        html += '</div>';
+      });
+      html += '  </div>';
+    }
     html += '</div>';
   }
 
@@ -113,6 +117,12 @@ async function renderWorkspace() {
 
 function toggleProject(id) {
   activeProjectId = (activeProjectId === id) ? null : id;
+  if (typeof renderWorkspace === 'function') renderWorkspace();
+}
+
+// 「其他会话」分组折叠/展开（默认折叠，与项目分组一致）
+function toggleUnassigned() {
+  unassignedExpanded = !unassignedExpanded;
   if (typeof renderWorkspace === 'function') renderWorkspace();
 }
 
