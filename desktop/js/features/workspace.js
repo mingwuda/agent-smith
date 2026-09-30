@@ -6,6 +6,7 @@
 let projectsCache = [];
 let activeProjectId = null;       // 当前展开的项目
 let unassignedExpanded = false;   // 「其他会话」分组是否展开（默认折叠）
+let focusMode = false;            // 聚焦模式：只显示当前会话所在工作区（localStorage 持久化）
 let currentProjectDir = '';       // 当前文件浏览器根目录
 let currentProjectId = '';        // 当前文件浏览器所属项目
 let currentBrowsePath = '';       // 当前浏览路径
@@ -29,11 +30,19 @@ async function renderWorkspace() {
 
   await loadProjects();
 
+  // 聚焦模式：只显示当前会话所在的「一个工作区/项目」。
+  // curS = 当前激活会话（以 currentSessionId/source 为准，页签激活时会同步）。
+  const curS = (sessionsCache || []).find(s => s.id === currentSessionId
+    && (s.source || 'web') === (currentSessionSource || 'web'));
+  const focusProjectId = focusMode
+    ? (curS && curS.project_id ? String(curS.project_id) : '')
+    : null; // '' = 当前会话无项目（聚焦到「其他会话」）；null = 非聚焦模式
+
   let html = '';
 
   if (!projectsCache || projectsCache.length === 0) {
     const unassigned = (sessionsCache || []).filter(s => !s.project_id);
-    if (unassigned.length === 0) {
+    if (!focusMode && unassigned.length === 0) {
       listEl.innerHTML = '<div style="padding:16px;color:#8e8e93;font-size:13px;font-style:italic;">' +
         escapeHtml(t('noProjects') || '暂无项目，点击右上角 ＋ 新建') + '</div>';
       return;
@@ -41,7 +50,12 @@ async function renderWorkspace() {
   }
 
   for (const p of projectsCache) {
-    const expanded = (p.id === activeProjectId);
+    // 聚焦模式下，跳过不属于当前会话的项目
+    if (focusMode && focusProjectId !== null && String(p.id) !== focusProjectId) continue;
+
+    // 聚焦模式下强制将目标项目展开
+    const forceExpanded = focusMode && focusProjectId !== null && String(p.id) === focusProjectId;
+    const expanded = forceExpanded ? true : (p.id === activeProjectId);
     const projSessions = (sessionsCache || []).filter(s => s.project_id === p.id);
 
     html += '<div class="project-item ' + (expanded ? 'expanded active' : '') + '" data-pid="' + p.id + '">';
@@ -83,7 +97,9 @@ async function renderWorkspace() {
 
   // 未归属任何项目的会话
   const unassigned = (sessionsCache || []).filter(s => !s.project_id);
-  if (unassigned.length > 0) {
+  // 聚焦模式：仅当当前会话无项目时才显示「其他会话」分组
+  const showUnassigned = (!focusMode || focusProjectId === '') && unassigned.length > 0;
+  if (showUnassigned) {
     html += '<div class="project-item' + (unassignedExpanded ? ' expanded' : '') + '">';
     html += '  <div class="project-row" onclick="toggleUnassigned()">';
     html += '    <span class="proj-toggle">▶</span>';
@@ -93,7 +109,7 @@ async function renderWorkspace() {
     html += '    <span class="project-new-session-inline" onclick="event.stopPropagation(); newSession()" title="' +
       escapeHtml(t('newSessionInProject') || '新建会话') + '">＋</span>';
     html += '  </div>';
-    if (unassignedExpanded) {
+    if (unassignedExpanded || (focusMode && focusProjectId === '')) {
       html += '  <div class="project-sessions">';
       unassigned.forEach(s => {
         const isActive = s.id === currentSessionId && s.source === currentSessionSource;
@@ -111,6 +127,32 @@ async function renderWorkspace() {
   }
 
   listEl.innerHTML = html;
+}
+
+// ---------- 聚焦模式 ----------
+
+// 初始化：从 localStorage 恢复聚焦模式偏好（刷新后保持）
+function initFocusMode() {
+  try {
+    focusMode = localStorage.getItem('desktop_focus_mode') === '1';
+  } catch (e) { focusMode = false; }
+  _syncFocusBtn();
+}
+
+// 切换聚焦模式开关
+function toggleFocusMode() {
+  focusMode = !focusMode;
+  try {
+    localStorage.setItem('desktop_focus_mode', focusMode ? '1' : '0');
+  } catch (e) { /* 忽略 */ }
+  _syncFocusBtn();
+  if (typeof renderWorkspace === 'function') renderWorkspace();
+}
+
+// 同步聚焦按钮的激活态样式
+function _syncFocusBtn() {
+  const btn = document.getElementById('focus-mode-btn');
+  if (btn) btn.classList.toggle('active', focusMode);
 }
 
 // ---------- 项目交互 ----------

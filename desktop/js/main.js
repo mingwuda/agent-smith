@@ -35,6 +35,8 @@ setInterval(loadSessions, 60000);
 (async () => {
   applyI18n();
   resetBlockingOverlays();
+  // 恢复聚焦模式偏好（localStorage），须在首次渲染工作区前完成
+  if (typeof initFocusMode === 'function') initFocusMode();
   // 初始化悬浮「滚动到底部」按钮
   if (typeof initScrollToBottomBtn === 'function') initScrollToBottomBtn();
   // 初始化前端 fetch 超时（从后端读取硬超时配置）

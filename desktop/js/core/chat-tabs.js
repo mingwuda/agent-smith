@@ -117,6 +117,13 @@
       if (typeof currentSessionSource !== 'undefined') currentSessionSource = s.source;
       if (typeof threadId !== 'undefined') threadId = s.id;
     }
+    // 聚焦模式激活时，切换页签后同步侧边栏（只显示新会话所在工作区）
+    if (typeof renderWorkspace === 'function') {
+      // 读取聚焦开关（workspace.js 暴露 focusMode；用 localStorage 兜底）
+      const fm = (typeof focusMode !== 'undefined') ? focusMode
+        : (typeof window !== 'undefined' && localStorage.getItem('desktop_focus_mode') === '1');
+      if (fm) renderWorkspace();
+    }
     // 重建悬浮「滚动到底部」按钮绑定（只绑到当前 #messages）
     if (window.initScrollToBottomBtn) initScrollToBottomBtn();
     if (window.updateRunIndicators) updateRunIndicators();
