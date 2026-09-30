@@ -129,3 +129,36 @@ def test_markdown_mirror_written_for_case(isolated):
     md = mem.data_dir / f"{cases[0]['key']}.md"
     assert md.exists(), "应生成 Markdown 可读镜像"
     assert "occurrences" in md.read_text(encoding="utf-8")
+
+
+def test_actions_dedup_consecutive_tools(isolated):
+    """P1-4：Case 的 actions 去除连续重复的相同工具，保留真实顺序。"""
+    uid = "u1"
+    dup_actions = [
+        {"tool": "git_status"}, {"tool": "git_status"},  # 连续重复
+        {"tool": "git_diff"}, {"tool": "edit_file"},
+        {"tool": "git_status"},  # 间隔出现不合并
+    ]
+    accumulate_case(uid, "处理冲突", TECH, actions=dup_actions)
+    from memory.local_memory import get_memory
+    mem = get_memory(uid)
+    case = next(it for it in mem.list_items() if it["key"].startswith("_case_"))
+    actions = case["value"]["actions"]
+    assert actions == ["git_status", "git_diff", "edit_file", "git_status"], \
+        f"连续重复应合并，间隔应保留，实际={actions}"
+
+
+def test_topic_key_no_prefix_collision(isolated):
+    """P1-5：topic 用完整 hash，前 20 字相同但方法不同不合并。"""
+    uid = "u1"
+    # 前 20 字相同，方法不同 —— 旧实现会合并，现在应各自成 Case
+    v1 = "git 冲突|先追踪冲突文件再逐个手动合并"
+    v2 = "git 冲突|先追踪冲突文件再逐个自动合并"
+    accumulate_case(uid, "问1", {"t": "technique", "v": v1}, actions=ACTIONS)
+    accumulate_case(uid, "问2", {"t": "technique", "v": v2}, actions=ACTIONS)
+    from memory.local_memory import get_memory
+    mem = get_memory(uid)
+    cases = [it for it in mem.list_items() if it["key"].startswith("_case_")]
+    assert len(cases) == 2, "方法不同的 Case 不应合并，实际=%d" % len(cases)
+    vs = sorted(it["value"]["v"] for it in cases)
+    assert vs == sorted([v1, v2]), "两条不同方法都应完整保留"

@@ -38,10 +38,13 @@ PENDING_DIR = "pending"
 def _topic_key(technique_text: str) -> str:
     """从 technique 反思文本提炼稳定话题键（md5），用于聚合同类 Case。
 
-    取反思文本的前 20 字符作为话题指纹；同一话题的不同表述因前缀相近会落到同一键。
+    用完整反思文本做指纹（P1-5）：避免 v[:20] 只取前 20 字造成的碰撞——
+    前 20 字相同但方法不同的反思（如「git 冲突|逐个手动合并」vs
+    「git 冲突|逐个自动合并」）会被误合并，导致后一种方法丢失。
+    完整 hash 让不同方法各自成 Case，主题相关但路径不同的可复用 skill 分开记录。
     """
-    head = technique_text.strip()[:20]
-    return hashlib.md5(("case:" + head).encode("utf-8")).hexdigest()[:12]
+    text = technique_text.strip()
+    return hashlib.md5(("case:" + text).encode("utf-8")).hexdigest()[:12]
 
 
 def _case_key(topic_hash: str) -> str:
@@ -72,11 +75,12 @@ def accumulate_case(uid: str, user_message: str, reflection: dict,
         existing["occurrences"] = int(existing.get("occurrences", 1)) + 1
         existing["updated_at"] = now
         existing["result"] = "多次成功"  # 多次重复出现说明路径可靠
-        # 追加本次动作序列（截断防膨胀）
+        # 追加本次动作序列（P1-4：去除连续重复的相同工具——同一工具反复调用
+        # 是噪音，让工作流步骤可读；保留跨步骤的顺序去重前的整体轨迹）
         seq = existing.get("actions", []) or []
         if actions:
-            seq = seq + [a.get("tool", "?") for a in actions if isinstance(a, dict)]
-            existing["actions"] = seq[-MAX_CASE_ACTIONS:]
+            new_acts = [a.get("tool", "?") for a in actions if isinstance(a, dict)]
+            existing["actions"] = _dedupe_tool_seq((seq + new_acts)[-MAX_CASE_ACTIONS:])
         # 追加背景（去重，最多保留 5 条）
         ctx = existing.get("contexts", []) or []
         if user_message and user_message[:40] not in ctx:
@@ -89,13 +93,30 @@ def accumulate_case(uid: str, user_message: str, reflection: dict,
             "topic": v[:20],
             "occurrences": 1,
             "contexts": [user_message[:100]] if user_message else [],
-            "actions": [a.get("tool", "?") for a in actions if isinstance(a, dict)][-MAX_CASE_ACTIONS:] if actions else [],
+            "actions": _dedupe_tool_seq(
+                [a.get("tool", "?") for a in actions if isinstance(a, dict)][-MAX_CASE_ACTIONS:]
+            ) if actions else [],
             "result": "成功",
             "created_at": now,
             "updated_at": now,
         }
     mem.set(key, existing)
     return existing
+
+
+def _dedupe_tool_seq(tools: list[str]) -> list[str]:
+    """P1-4：去除连续重复的相同工具名（git_status,git_status → git_status）。
+
+    同一工具紧邻反复调用是噪音，会让 SKILL.md 指令显得重复冗长；合并后工作流可读。
+    仅合并「连续相同」，不改变不同工具间的真实顺序。
+    """
+    out = []
+    for t in tools:
+        if not t:
+            continue
+        if not out or out[-1] != t:
+            out.append(t)
+    return out
 
 
 def find_promotable_cases(uid: str, threshold: Optional[int] = None) -> list[dict]:
