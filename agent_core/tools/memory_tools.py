@@ -28,21 +28,28 @@ def remember(key: str, value: str, ttl: int = 0) -> str:
 
 
 @tool
-def recall_memory(query: str, project: str = "", track: str = "") -> str:
+def recall_memory(query: str, project: str = "", track: str = "", min_score: int = 0) -> str:
     """搜索长期记忆。需要查找用户偏好、长期约定、项目事实或常用环境信息时使用。
 
     可选正交维度（不传则全局搜索）：
     - project: 仅在某项目下检索（agent 调用时传当前 project_id，实现「按项目精准命中」）
     - track: "user"（用户偏好/经验）或 "agent"（agent 完成任务沉淀的 Case/技能）；默认全局
+    - min_score: 相关性阈值（>=0）。>0 时过滤掉仅因「子串偶然重合」命中的弱相关项，降低噪音。
+      默认 0 表示不过滤（返回全部命中，由 LLM 自行判断）。建议在有大量弱命中时调大（如 30）。
+
+    本工具默认排除压缩归档（_ctx_old_）——那些是上下文压缩暂存的早期用户指令，
+    不是经验/偏好/技能，避免模糊回忆时与真实记忆并列、淹没 agent 判断（P0-2）。
     """
     query = (query or "").strip()
     track = (track or "").strip().lower()
     if not project and track not in ("user", "agent"):
-        return get_memory().search(query)
+        return get_memory().search(query, min_score=min_score, exclude_archive=True)
     return get_memory().search_scoped(
         query,
         track=track if track in ("user", "agent") else None,
         project=project or None,
+        min_score=min_score,
+        exclude_archive=True,
     )
 
 
