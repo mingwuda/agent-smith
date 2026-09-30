@@ -2257,6 +2257,8 @@ function handleStreamEvent(data) {
         // ponytail: 流式最终输出附上复制按钮（仅在还没有时挂一次）
         if (!currentBotMsgEl.querySelector('.msg-copy-btn')) attachCopyButton(currentBotMsgEl);
         attachFeedbackBar(currentBotMsgEl);
+        // 模型名 + 完成时间示例在 👍/👎 反馈条之后（仅实时流式挂；回放由历史渲染带 meta）
+        if (!_isReplaying) appendMetaLine(currentBotMsgEl, data.model || '', Date.now());
         finalOutputEl = currentBotMsgEl;
       } else if (!_isReplaying) {
         finalOutputEl = document.createElement('div');
@@ -2264,6 +2266,8 @@ function handleStreamEvent(data) {
         finalOutputEl.innerHTML = finalHtml;
         attachCopyButton(finalOutputEl);
         attachFeedbackBar(finalOutputEl);
+        // 模型名 + 完成时间示例在 👍/👎 反馈条之后
+        appendMetaLine(finalOutputEl, data.model || '', Date.now());
         if (_answerBodyEl) {
           _answerBodyEl.appendChild(finalOutputEl);
         } else if (responseCard) {

@@ -635,13 +635,13 @@ async def _drive_agent_stream(
                 final_content = _strip_screenshot_urls(final_content)
                 final_content = _append_artifact_links(final_content, uid, artifact_paths)
                 _save_assistant_result(uid, session_id, req.message, final_content, collected_steps, collected_todo_list, model=effective_model)
-                hub.publish(f"data: {json.dumps({'type': 'done', 'content': final_content}, ensure_ascii=False)}\n\n")
+                hub.publish(f"data: {json.dumps({'type': 'done', 'content': final_content, 'model': effective_model}, ensure_ascii=False)}\n\n")
             elif error_content:
                 _save_assistant_result(uid, session_id, req.message, "❌ " + error_content, collected_steps, collected_todo_list, model=effective_model)
             elif artifact_paths:
                 summary = _append_artifact_links("任务已完成，文件已保存。", uid, artifact_paths)
                 _save_assistant_result(uid, session_id, req.message, summary, collected_steps, collected_todo_list, model=effective_model)
-                hub.publish(f"data: {json.dumps({'type': 'done', 'content': summary}, ensure_ascii=False)}\n\n")
+                hub.publish(f"data: {json.dumps({'type': 'done', 'content': summary, 'model': effective_model}, ensure_ascii=False)}\n\n")
             elif not forwarded_terminal_event:
                 fallback = (
                     "任务已结束，但模型没有生成最终回答"
@@ -650,14 +650,14 @@ async def _drive_agent_stream(
                     "若任务较复杂，可提高该值或把任务拆小后再试。"
                 )
                 _save_assistant_result(uid, session_id, req.message, fallback, collected_steps, collected_todo_list, model=effective_model)
-                hub.publish(f"data: {json.dumps({'type': 'done', 'content': fallback}, ensure_ascii=False)}\n\n")
+                hub.publish(f"data: {json.dumps({'type': 'done', 'content': fallback, 'model': effective_model}, ensure_ascii=False)}\n\n")
             else:
                 note = "（本轮已结束，但未生成正文；已记录以下工作步骤。）"
                 _save_assistant_result(uid, session_id, req.message, note, collected_steps, collected_todo_list, model=effective_model)
-                hub.publish(f"data: {json.dumps({'type': 'done', 'content': note}, ensure_ascii=False)}\n\n")
+                hub.publish(f"data: {json.dumps({'type': 'done', 'content': note, 'model': effective_model}, ensure_ascii=False)}\n\n")
         except Exception as e:
             logger.exception("[driver] finalize error")
-            hub.publish(f"data: {json.dumps({'type': 'done', 'content': '服务内部错误: ' + str(e)}, ensure_ascii=False)}\n\n")
+            hub.publish(f"data: {json.dumps({'type': 'done', 'content': '服务内部错误: ' + str(e), 'model': effective_model}, ensure_ascii=False)}\n\n")
         # ── 实时干预收尾：本轮结束，标记 inactive；把 next_turn 桶（排队到下轮）归还给前端 ──
         # next_turn 消息不在本轮 LLM 边界注入（本轮已结束），交由前端在 done 后按序发起新一轮，
         # 与 send() 的 interventionQueue 行为一致（一次一条）。

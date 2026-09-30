@@ -31,22 +31,22 @@ function addMessage(text, role, index, meta) {
   } else {
     div.textContent = text;
   }
-  // ponytail: 回放消息末尾追加「模型名 + 回复时间」元信息行（复用 .msg-time 样式）。
+  // ponytail: 回放消息末尾追加「模型名 + 回复时间」元信息（复用 .msg-time 样式）。
   // 仅回放路径传 meta；实时流式消息不传（时间/模型由流式卡片自己展示）。
+  // meta 在 attachFeedbackBar 之后追加，使其紧贴 👍/👎 同一行（不单独开一行）。
   if (meta && (meta.model || meta.timestamp)) {
-    const metaEl = document.createElement('div');
-    metaEl.className = 'msg-time';
-    const parts = [];
-    if (meta.model) parts.push(escapeHtml(String(meta.model)));
-    const ts = _formatMsgTime(meta.timestamp);
-    if (ts) parts.push(escapeHtml(ts));
-    if (parts.length) metaEl.textContent = parts.join(' · ');
-    div.appendChild(metaEl);
+    // 记录待显示内容，待反馈条挂完后统一追加（见下方）
+    div._pendingMeta = { model: meta.model || '', ts: meta.timestamp || '' };
   }
   // ponytail: 右下角一键复制按钮（用户消息与最终输出都挂）
   attachCopyButton(div);
   // bot 历史消息挂 👍/👎 反馈条（流式最终输出在 streaming.js done 分支挂）
   if (role === 'bot') attachFeedbackBar(div);
+  // meta 在反馈条之后追加（顺序：内容 → 复制 → 👍/👎 → 模型·时间，模型和时间与 👍/👎 同一行）
+  if (div._pendingMeta) {
+    appendMetaLine(div, div._pendingMeta.model, div._pendingMeta.ts);
+    div._pendingMeta = null;
+  }
   // 追加到「当前激活页签」消息容器（多页签下 #messages 是动态切换的激活面板）
   const host = (window.ChatTabs && ChatTabs.activeEl()) || messages;
   host.appendChild(div);
@@ -61,6 +61,34 @@ function _formatMsgTime(ts) {
   if (isNaN(d.getTime())) return '';
   const pad = n => String(n).padStart(2, '0');
   return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+// ponytail: 在元素内追加「模型名 · 完成时间」元信息（复用 .msg-time 样式）。
+// 模型名要紧贴 👍/👎 同一行显示（不单独开一行）：插到反馈条最后一个赞/踩按钮后面，
+// 作为 .msg-feedback（flex 容器）的行内子项；找不到反馈条时退回消息末尾。
+// 调用方须先挂 attachFeedbackBar 再调本函数。
+function appendMetaLine(el, model = '', timestamp = '') {
+  if (!el) return;
+  if (!model && !timestamp) return;
+  const metaEl = document.createElement('span');
+  metaEl.className = 'msg-time';
+  const parts = [];
+  if (model) parts.push(escapeHtml(String(model)));
+  const ts = _formatMsgTime(timestamp);
+  if (ts) parts.push(escapeHtml(ts));
+  if (parts.length) metaEl.textContent = parts.join(' · ');
+  const bar = el.querySelector('.msg-feedback');
+  // ponytail: 用 `querySelectorAll('.fb-btn')` 取【最后一个】fb-btn（👎）作锚点，after 到它后面。
+  // 不能直接 `.fb-btn:last-child` —— fb-btn 后面还有隐藏的 fb-correct/fb-thanks 兄弟，
+  // 单个按钮永远不是 last-child（取到 null 会退回 el.appendChild，导致单独开一行）。
+  // 目标顺序：内容 → 👍 → 👎 → 模型名 · 时间（同一行，模型名称显示在👍👎之后）。
+  const fbBtns = bar && bar.querySelectorAll('.fb-btn');
+  const anchorBtn = fbBtns && fbBtns.length ? fbBtns[fbBtns.length - 1] : null;
+  if (anchorBtn) {
+    anchorBtn.after(metaEl);
+  } else {
+    el.appendChild(metaEl);
+  }
 }
 
 // ponytail: 给任意消息元素挂右下角复制按钮，复制消息纯文本（bot 用 textContent 避免带 HTML 标签）。

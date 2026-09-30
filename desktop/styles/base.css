@@ -289,7 +289,7 @@ body[data-theme="dark"] .chat-tab:hover { background:rgba(255,255,255,.05); }
   .msg.bot .katex-error { color:#ff453a; font-style:italic; background:#fff0f0; padding:2px 8px; border-radius:4px; }
   .msg.bot .katex-plain { font-style:italic; color:#555; padding:1px 4px; background:#f0f0f3; border-radius:3px; }
   .msg.system { background:transparent; color:#8e8e93; font-size:12px; text-align:center; max-width:100%; }
-  .msg .msg-time { font-size:10px; opacity:0.6; margin-top:4px; }
+  .msg .msg-time, .agent-final-output .msg-time { font-size:10px; opacity:0.6; margin-left:8px; white-space:nowrap; }
 
   /* 消息长按/右键删除菜单 */
   .msg-delete-menu {

@@ -133,7 +133,7 @@ async function loadSessionMessages(sessionId, source, options = {}) {
           if (msg.timestamp && lastUserTs > 0) {
             try { botElapsed = new Date(msg.timestamp).getTime() - lastUserTs; } catch(e){}
           }
-          var placeholderEl = addBotMessagePlaceholder(content, msg.content_preview, botElapsed, sessionId, msgIndex, msg.model);
+          var placeholderEl = addBotMessagePlaceholder(content, msg.content_preview, botElapsed, sessionId, msgIndex, msg.model, msg.timestamp);
           if (placeholderEl) container.appendChild(placeholderEl);
         } else if (role === 'bot') {
           addMessage(content || msg.content_preview || '', 'bot', msgIndex, { model: msg.model, timestamp: msg.timestamp });
@@ -168,7 +168,7 @@ async function loadSessionMessages(sessionId, source, options = {}) {
 }
 
 // 历史消息占位卡片（带步骤但尚未展开详情）
-function addBotMessagePlaceholder(content, contentPreview, elapsedMs, sessionId, messageIndex, model) {
+function addBotMessagePlaceholder(content, contentPreview, elapsedMs, sessionId, messageIndex, model, timestamp) {
   const container = document.getElementById('messages');
   _lastToolImageHtml = null;
   if (_currentTodoPanel && _currentTodoPanel.parentNode) {
@@ -190,13 +190,11 @@ function addBotMessagePlaceholder(content, contentPreview, elapsedMs, sessionId,
   var timeVal = (elapsedMs && elapsedMs > 0) ? formatElapsed(elapsedMs) : '\u2014';
   var headerEl = document.createElement('div');
   headerEl.className = 'agent-header';
-  // ponytail: header 除「工作耗时」外，回放时还展示该条回复使用的模型名（旧消息无此字段则不显示）。
-  var modelHtml = model ? '<span class="agent-model" title="' + escapeHtml(String(model)) + '">' + escapeHtml(String(model)) + '</span>' : '';
+  // ponytail: 模型名只在消息底部 👍👎 之后显示（appendMetaLine），头部不再展示，避免与底部重复。
   headerEl.innerHTML =
     '<div class="agent-avatar">\uD83E\uDD16</div>' +
     '<span class="agent-toggle-arrow">\u25B6</span>' +
-    '<span class="agent-time"><span class="agent-time-label">' + (t('workElapsed') || '工作耗时') + ': </span> <span class="agent-time-val">' + timeVal + '</span></span>' +
-    modelHtml;
+    '<span class="agent-time"><span class="agent-time-label">' + (t('workElapsed') || '工作耗时') + ': </span> <span class="agent-time-val">' + timeVal + '</span></span>';
   headerEl.onclick = function() {
     if (responseCard.classList.contains('collapsed')) {
       expandBotMessagePlaceholder(responseCard, sessionId, messageIndex);
@@ -216,6 +214,9 @@ function addBotMessagePlaceholder(content, contentPreview, elapsedMs, sessionId,
     ans.innerHTML = renderMarkdown(content || contentPreview || '');
     attachCopyButton(ans);
     attachFeedbackBar(ans);
+    // ponytail: 折叠态占位创建时就附加模型名+回复时间到 👍👎 之后，
+    // 否则刷新后（默认折叠）👍👎 后面是空的（此前只有展开时才补 meta）。
+    if (model || timestamp) appendMetaLine(ans, model || '', timestamp || '');
     responseCard.appendChild(ans);
     currentBotMsgEl = ans;
   }
@@ -323,6 +324,10 @@ async function expandBotMessagePlaceholder(responseCard, sessionId, messageIndex
     ans.innerHTML = renderMarkdown(content);
     attachCopyButton(ans);
     attachFeedbackBar(ans);
+    // ponytail: 回放 has_steps 卡片的模型名+回复时间与 ✓/✗（👍/👎）同行显示。
+    // streaming.js done 分支在回放（_isReplaying）时会跳过 appendMetaLine，故在此手动补挂，
+    // 与无 steps 回放消息、实时流式的行为保持一致。
+    if (msg.model || msg.timestamp) appendMetaLine(ans, msg.model || '', msg.timestamp || '');
     currentBotMsgEl = ans;
     responseCard.appendChild(ans);
 
@@ -1049,7 +1054,7 @@ async function _loadOlderMessages() {
           const prevUser = _msgHistory.length > 0 ? new Date(_msgHistory[_msgHistory.length - 1]).getTime() : 0;
           try { botElapsed = new Date(msg.timestamp).getTime() - prevUser; } catch(e){}
         }
-        newEl = addBotMessagePlaceholder(content, msg.content_preview, botElapsed, sessionId, msgIndex);
+        newEl = addBotMessagePlaceholder(content, msg.content_preview, botElapsed, sessionId, msgIndex, msg.model, msg.timestamp);
       } else if (role === 'bot') {
         newEl = addMessage(content || msg.content_preview || '', 'bot', msgIndex);
       } else {
