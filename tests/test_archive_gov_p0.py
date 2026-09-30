@@ -80,3 +80,38 @@ def test_recall_memory_tool_excludes_archive(tmp_path):
     result = m.search("git", exclude_archive=True)
     assert "_ctx_old_aaa" not in result
     assert "_learned_bbb" in result
+
+
+def test_md_mirror_structured_and_frontmatter(tmp_path):
+    """P2-8/9：含 list 字段的 dict 渲染为结构化 Markdown（非裸 JSON）+ 带 YAML front-matter。"""
+    m = LocalMemory(tmp_path / "mem")
+    m.set("_case_real", {"t": "technique", "v": "git冲突", "occurrences": 3,
+                         "actions": ["git_status", "git_diff"], "contexts": ["用户问冲突"]})
+    md = m.data_dir / "_case_real.md"
+    content = md.read_text(encoding="utf-8")
+    assert content.startswith("---\n"), "应含 YAML front-matter"
+    assert "## actions" in content and "- git_status" in content, "list 字段应渲染为 Markdown 小节"
+    assert "## contexts" in content and "- 用户问冲突" in content
+    assert "\n  {" not in content, "不应退化成裸 JSON"
+
+
+def test_delete_removes_md_mirror(tmp_path):
+    """P2-10：delete() 同步清理 .md 镜像，不留孤儿文件。"""
+    m = LocalMemory(tmp_path / "mem")
+    m.set("_case_del", {"t": "technique", "v": "将被删"})
+    assert (m.data_dir / "_case_del.md").exists()
+    m.delete("_case_del")
+    assert not (m.data_dir / "_case_del.md").exists(), "删除后 md 应被清理"
+    assert not (m.data_dir / "_case_del.json").exists()
+
+
+def test_purge_expired_removes_md_mirror(tmp_path):
+    """P2-10：TTL 过期时 _purge_expired 同步删除 .md 镜像。"""
+    import time
+    m = LocalMemory(tmp_path / "mem")
+    m.set("_case_ttl", {"t": "technique", "v": "ttl"}, ttl=1)
+    assert (m.data_dir / "_case_ttl.md").exists()
+    time.sleep(1.2)
+    m._purge_expired()
+    assert not (m.data_dir / "_case_ttl.md").exists(), "TTL 过期后 md 应被清理"
+    assert not (m.data_dir / "_case_ttl.json").exists()

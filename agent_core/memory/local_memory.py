@@ -161,6 +161,13 @@ class LocalMemory:
                         f.unlink()
                     except OSError:
                         pass
+                # P2-10：过期清理同步删除 Markdown 镜像，避免孤儿 .md 残留
+                md = self.data_dir / f"{key}.md"
+                if md.exists():
+                    try:
+                        md.unlink()
+                    except OSError:
+                        pass
                 removed = True
         if removed:
             self._fts_dirty = True
@@ -248,6 +255,13 @@ class LocalMemory:
         f = self.data_dir / f"{key}.json"
         if f.exists():
             f.unlink()
+        # P2-10：同步清理 Markdown 镜像，避免删除后残留孤儿 .md
+        md = self.data_dir / f"{key}.md"
+        if md.exists():
+            try:
+                md.unlink()
+            except OSError:
+                pass
         return f"✅ 已删除记忆 '{key}'"
 
     def list_keys(self) -> list[str]:
@@ -480,18 +494,43 @@ class LocalMemory:
     def _save_markdown(self, key: str):
         """把一条记忆渲染成可读 Markdown 镜像（`<key>.md`），供用户直接审阅/编辑。
 
-        value 若是 dict，按字段渲染成结构化行；若是字符串，直接作为正文。
+        P2-9 加入 YAML front-matter（kind/key/updated_at），便于无头与人工识别、分类；
+        输出可被 Markdown 工具与版本管理友好处理。
+        类型与 `_render_value_text` 一致：扁平 dict → 键值列表；含 list/dict 的复杂
+        结构也逐标量字段 + 列表项渲染（P2-8，不再把整个 dict 退化成裸 JSON）。
         """
+        import time as _time
         value = self._cache.get(key)
-        md = [f"# {key}", ""]
-        if isinstance(value, dict) and not any(isinstance(v, (dict, list)) for v in value.values() if v is not None):
-            # 扁平 dict（如 {"t":..., "v":..., "context":...}）→ 键值列表
+        meta = self._meta.get(key, {})
+        md = [
+            "---",
+            f"kind: memory",
+            f"key: {key}",
+            f"updated_at: {meta.get('updated_at') or _time.time():.0f}",
+            "---",
+            "",
+            f"# {key}",
+            "",
+        ]
+        if isinstance(value, dict):
+            # 标量字段 → 键值列表（None/空已剔除）
             for k, v in value.items():
-                if v is None or v == "" or v == []:
+                if isinstance(v, (dict, list)) or v is None or v == "":
                     continue
                 md.append(f"- **{k}**: {v}")
+            # 列表字段 → 独立小节，逐项渲染（P2-8：不退化裸 JSON）
+            for k, v in value.items():
+                if isinstance(v, list) and v:
+                    md.append(f"\n## {k}")
+                    for item in v:
+                        if isinstance(item, dict):
+                            md.append(f"- {self._render_value_text(item)}")
+                        else:
+                            md.append(f"- {item}")
+                elif isinstance(v, dict) and v:
+                    md.append(f"\n## {k}")
+                    md.append(self._render_value_text(v))
         else:
-            # 复杂 dict / 字符串 → 直接落正文（保持可读，必要时 JSON 展示）
             md.append(self._render_value_text(value))
         md.append("")
         f = self.data_dir / f"{key}.md"
