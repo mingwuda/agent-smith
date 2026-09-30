@@ -1,8 +1,8 @@
-"""方案A：OCR 降级 synthetic 工具步骤 —— 让纯文本模型的图片会话在历史回放中
+"""方案A：视觉模型描述降级 synthetic 工具步骤 —— 让纯文本模型的图片会话在历史回放中
 也能看到「调用工具: ocr_image」工作卡片。
 
 覆盖：
-  - _human_content 带 ocr_sink：收集降级记录（tool/args/result），文本含 OCR 结果
+  - _human_content 带 ocr_sink：收集降级记录（tool/args/result），文本含视觉模型描述
   - _human_content 不传 ocr_sink（默认 None）：行为不变，兼容旧调用
   - _human_content 视觉模型（ocr_fallback=False）：返回 multimodal，不写 sink
   - _synthetic_ocr_sse_steps：生成成对的 tool_start/tool_result 事件
@@ -24,14 +24,11 @@ def _img_data_url() -> str:
 
 
 @pytest.fixture(autouse=True)
-def _fake_ocr(monkeypatch):
-    """把 ocr_data_url 替换为确定性假实现，避免依赖系统 tesseract"""
-    import tools.ocr_tools as ocr_tools
+def _fake_vision(monkeypatch):
+    """把视觉模型描述替换为确定性假实现，避免依赖真实视觉模型 / 网络。"""
+    import tools.vision_router as vr
 
-    def fake_ocr(data_url: str) -> str:
-        return f"OCR文本({len(data_url)}字节)"
-
-    monkeypatch.setattr(ocr_tools, "ocr_data_url", fake_ocr)
+    monkeypatch.setattr(vr, "describe_image_data_url", lambda data_url: f"视觉描述({len(data_url)}字节)")
 
 
 def _attachments(n: int = 1) -> list:
@@ -42,26 +39,26 @@ def _attachments(n: int = 1) -> list:
 
 
 def test_human_content_ocr_sink_collects_records():
-    """降级发生时，ocr_sink 按图片逐条收集工具记录，返回文本含 OCR 结果"""
+    """降级发生时，ocr_sink 按图片逐条收集工具记录，返回文本含视觉模型描述"""
     sink: list = []
     text = _human_content("看看这张图", _attachments(2), ocr_fallback=True, ocr_sink=sink)
 
-    # 返回纯文本（OCR 降级），绝不包含 image_url
+    # 返回纯文本（视觉模型描述降级），绝不包含 image_url
     assert isinstance(text, str)
-    # ponytail: 2026-09 视觉路由重构后文案统一为「图片 N 描述（OCR|视觉模型）」，
-    # 测试环境无视觉模型标记，必然走 OCR 兜底（via == "ocr"）。
-    assert "[图片 1 描述（OCR）]" in text
-    assert "[图片 2 描述（OCR）]" in text
-    assert "OCR文本" in text
+    # 2026-09 重构后文案统一为「图片 N 描述」，via 恒为 vision。
+    assert "[图片 1 描述]" in text
+    assert "[图片 2 描述]" in text
+    assert "视觉描述" in text
 
     # sink 按图片逐条记录
     assert len(sink) == 2
     for idx, rec in enumerate(sink, 1):
         assert rec["tool"] == "ocr_image"
         assert rec["args"]["index"] == idx
-        assert rec["args"]["via"] == "ocr"
-        assert "OCR文本" in rec["result"]
+        assert rec["args"]["via"] == "vision"
+        assert "视觉描述" in rec["result"]
         assert "不支持视觉" in rec["args"]["reason"]
+
 
 
 def test_human_content_ocr_sink_default_none_unchanged():

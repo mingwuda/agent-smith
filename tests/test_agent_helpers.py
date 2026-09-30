@@ -97,8 +97,10 @@ def _img_data_url() -> str:
     return f"data:image/png;base64,{_PNG_1PX}"
 
 
-def test_session_messages_to_langchain_ocr_fallback():
-    """模型不支持视觉时，历史图片转 OCR 文本而不是 image_url"""
+def test_session_messages_to_langchain_ocr_fallback(monkeypatch):
+    """模型不支持视觉时，历史图片转视觉模型描述文本而不是 image_url"""
+    import tools.vision_router as vr
+    monkeypatch.setattr(vr, "describe_image_data_url", lambda data_url: "视觉描述文本")
     msgs = [
         {"role": "user", "content": "图里写的什么", "images": [_img_data_url()]},
         {"role": "assistant", "content": "好的"},
@@ -106,9 +108,9 @@ def test_session_messages_to_langchain_ocr_fallback():
     converted = session_messages_to_langchain(msgs, ocr_fallback=True)
     assert len(converted) == 2
     content = converted[0].content
-    # 必须是纯文本（OCR 结果），绝不能是 image_url 列表
+    # 必须是纯文本（视觉模型描述结果），绝不能是 image_url 列表
     assert isinstance(content, str)
-    assert "OCR" in content
+    assert "视觉描述文本" in content
     assert "[图片" in content
     # 不注入任何 image_url
     assert "image_url" not in content
@@ -125,8 +127,10 @@ def test_session_messages_to_langchain_keeps_image_for_vision():
     assert any(isinstance(i, dict) and i.get("type") == "image_url" for i in content)
 
 
-def test_ensure_no_image_for_non_vision():
-    """兜底函数：非视觉模型下把残留 image_url 转 OCR 文本"""
+def test_ensure_no_image_for_non_vision(monkeypatch):
+    """兜底函数：非视觉模型下把残留 image_url 转视觉模型描述文本"""
+    import tools.vision_router as vr
+    monkeypatch.setattr(vr, "describe_image_data_url", lambda data_url: "视觉描述文本")
     from agent_core.agent_helpers import _ensure_no_image_for_non_vision, _model_supports_vision
     from agent_core.config import AgentConfig
 
@@ -144,7 +148,7 @@ def test_ensure_no_image_for_non_vision():
     content = out[0].content
     assert isinstance(content, str)
     assert "这是说明文字" in content
-    assert "OCR" in content
+    assert "视觉描述文本" in content
     assert "image_url" not in content
 
 

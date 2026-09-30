@@ -487,37 +487,25 @@ def _human_content(message: str, attachments: Optional[list[dict]] = None, ocr_f
         return message
 
     # 图片路由（ponytail：用户要求"非视觉模型不要直接失败，先给视觉模型描述再发文本"）：
-    #   1) 若 active_provider 下用户标记了视觉模型 → 调视觉模型生成中文描述（不暴露 OCR 失败细节）
-    #   2) 否则回退 tesseract OCR
-    #   3) 视觉模型 / OCR 都失败时，保留图片降级文本中带 ❌ 让用户/agent 看到原因
+    #   当前模型不支持视觉时，把图片交给视觉模型生成中文描述，再把文本喂给当前模型。
+    #   视觉模型调用失败 / 未配置时，保留一条友好降级文本（不再依赖 tesseract OCR）。
     # ocr_sink 非 None 时，把每次降级动作记录进列表，供上层注入 synthetic 工具卡片
     # （纯文本模型收图时模型不会真的调用 ocr_image 工具，历史里就看不到
     # "识别图片"这个步骤；把降级动作补成工具卡片后，实时流与历史回放都能显示）。
     if ocr_fallback:
-        from tools.ocr_tools import ocr_data_url
-        from tools.vision_router import describe_image_data_url
+        from tools.vision_router import image_to_text
         parts = [message] if message else []
         for idx, item in enumerate(valid_images, 1):
-            # 优先级 1：视觉模型描述
-            desc = describe_image_data_url(item["data_url"])
-            via = "vision"
-            if not desc:
-                # 优先级 2：OCR 兜底
-                desc = ocr_data_url(item["data_url"])
-                via = "ocr"
-            parts.append(f"[图片 {idx} 描述（{'视觉模型' if via == 'vision' else 'OCR'}）]\n{desc}")
+            desc = image_to_text(item["data_url"])
+            parts.append(f"[图片 {idx} 描述]\n{desc}")
             if ocr_sink is not None:
                 ocr_sink.append({
                     "tool": "ocr_image",
                     "args": {
                         "index": idx,
                         "mime": str(item.get("mime_type") or ""),
-                        "reason": (
-                            "当前模型不支持视觉，已自动路由至视觉模型描述"
-                            if via == "vision"
-                            else "当前模型不支持视觉，已自动 OCR 降级"
-                        ),
-                        "via": via,
+                        "reason": "当前模型不支持视觉，已自动路由至视觉模型描述",
+                        "via": "vision",
                     },
                     "result": desc,
                 })
@@ -560,9 +548,9 @@ def _synthetic_ocr_sse_steps(ocr_sink: list) -> list:
     return steps
 
 
-# ── 模型视觉能力判断（用于图片 OCR 自动降级）──
+# ── 模型视觉能力判断（用于图片 → 视觉模型描述降级）──
 # 显式已知支持/不支持图片输入的模型关键词。
-# 未知模型默认按「不支持视觉」处理（走 OCR 降级）：宁可多一次 OCR，
+# 未知模型默认按「不支持视觉」处理（走视觉模型描述降级）：宁可多调一次视觉模型，
 # 也绝不让纯文本模型收到 image_url 导致 400 中断回复。
 # 需要保留图片输入的模型请加入 _VISION_MODEL_KEYWORDS，
 # 或用 AGENT_OCR_FALLBACK=0 环境变量强制关闭降级。
@@ -602,9 +590,9 @@ def _model_supports_vision(config: AgentConfig, provider_id: str = "", model: st
     """
     env_flag = os.getenv("AGENT_OCR_FALLBACK", "").strip().lower()
     if env_flag in ("1", "true", "on", "force"):
-        return False  # 强制 OCR 降级
+        return False  # 强制视觉模型描述降级
     if env_flag in ("0", "false", "off", "no"):
-        return True   # 强制关闭 OCR 降级
+        return True   # 强制关闭降级
 
     pid = (provider_id or config.active_provider or "").strip()
     mdl = (model or config.model or "").strip()
@@ -627,7 +615,7 @@ def _model_supports_vision(config: AgentConfig, provider_id: str = "", model: st
         return True
     if any(k in combined for k in _NON_VISION_MODEL_KEYWORDS):
         return False
-    return False  # 未知模型默认不支持视觉（走 OCR 降级），绝不让纯文本模型收到 image_url
+    return False  # 未知模型默认不支持视觉（走视觉模型描述降级），绝不让纯文本模型收到 image_url
 
 
 # ── 自适应缓存：API 拒绝图片后把 provider/model 标为"实际不支持视觉"，让下次自动走路由 ──
@@ -968,9 +956,9 @@ def session_messages_to_langchain(messages: list[dict], ocr_fallback: bool = Fal
     保留用户消息中的图片，让 LLM 能在后续轮次中看到历史图片。
 
     ocr_fallback=True（当前模型不支持图片输入）时，历史图片不注入 image_url，
-    而是转成 OCR 文本随消息一起发送——否则纯文本模型会收到 image_url 并报
+    而是交给视觉模型生成描述文本随消息一起发送——否则纯文本模型会收到 image_url 并报
     400（unknown variant `image_url`, expected `text`）。此时所有带图历史轮
-    统一走 OCR（不再区分最近 N 轮，因为对不支持视觉的模型保留 image_url 无意义）。
+    统一走视觉模型描述（不再区分最近 N 轮，因为对不支持视觉的模型保留 image_url 无意义）。
     """
     converted = []
     keep_image_user_indexes = _recent_round_user_indexes(messages, round_count=5)
@@ -985,11 +973,11 @@ def session_messages_to_langchain(messages: list[dict], ocr_fallback: bool = Fal
             ]
             if valid_data_urls and (ocr_fallback or idx in keep_image_user_indexes):
                 if ocr_fallback:
-                    # OCR 降级：图片转纯文本
-                    from tools.ocr_tools import ocr_data_url
+                    # 视觉模型描述：图片转纯文本
+                    from tools.vision_router import image_to_text
                     parts = [content] if content else []
                     for url in valid_data_urls:
-                        parts.append(f"[图片 OCR 识别结果]\n{ocr_data_url(url)}")
+                        parts.append(f"[图片描述]\n{image_to_text(url)}")
                     converted.append(HumanMessage(content="\n\n".join(parts)))
                     continue
                 # 多模态：图片 + 文本（仅最近 N 轮保留图片）
@@ -1017,10 +1005,10 @@ def session_messages_to_langchain(messages: list[dict], ocr_fallback: bool = Fal
 
 
 def _ensure_no_image_for_non_vision(messages: list, config: AgentConfig, provider_id: str = "", model: str = "") -> list:
-    """兜底：模型不支持图片输入时，把消息列表中残留的 image_url 一律转成 OCR 文本。
+    """兜底：模型不支持图片输入时，把消息列表中残留的 image_url 交给视觉模型转成描述文本。
 
     正常情况下图片应在组装消息时（_human_content / session_messages_to_langchain）
-    就完成 OCR 降级；此函数用于防御未来任何新路径把 image_url 漏进来（例如
+    就完成视觉模型描述降级；此函数用于防御未来任何新路径把 image_url 漏进来（例如
     某些工具/注入块直接向消息追加图片），避免纯文本模型再次收到 400
     unknown variant `image_url`。命中非视觉模型且无图片时原样返回。
 
@@ -1030,7 +1018,7 @@ def _ensure_no_image_for_non_vision(messages: list, config: AgentConfig, provide
     if _model_supports_vision(config, provider_id=provider_id, model=model):
         return messages
 
-    from tools.ocr_tools import ocr_data_url
+    from tools.vision_router import image_to_text
 
     out = []
     changed = False
@@ -1060,14 +1048,14 @@ def _ensure_no_image_for_non_vision(messages: list, config: AgentConfig, provide
             continue
         text_parts = [str(p.get("text") or "") for p in parts if p.get("type") == "text" and p.get("text")]
         text = "\n".join(text_parts).strip() or "请分析这些图片。"
-        ocr_sections = [f"[图片 OCR 识别结果]\n{ocr_data_url(url)}" for url in images]
+        ocr_sections = [f"[图片描述]\n{image_to_text(url)}" for url in images]
         new_text = text + "\n\n" + "\n\n".join(ocr_sections)
         if hasattr(message, "model_copy"):
             out.append(message.model_copy(update={"content": new_text}))
         else:
             out.append(message.copy(update={"content": new_text}))
     if changed:
-        logger.info("[ocr_fallback] 兜底：已将 %d 条消息中的图片转为 OCR 文本（模型不支持视觉）", sum(1 for m in messages if isinstance(getattr(m, "content", None), list) and any(isinstance(i, dict) and i.get("type") == "image_url" for i in m.content)))
+        logger.info("[ocr_fallback] 兜底：已将 %d 条消息中的图片转为视觉模型描述文本（模型不支持视觉）", sum(1 for m in messages if isinstance(getattr(m, "content", None), list) and any(isinstance(i, dict) and i.get("type") == "image_url" for i in m.content)))
     return out
 
 
