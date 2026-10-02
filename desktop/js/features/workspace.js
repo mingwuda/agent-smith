@@ -401,6 +401,157 @@ function toggleWorkspaceView() {
   }
 }
 
+// ---------- 提交清单视图（项目 ⋯ 菜单「查看提交清单」） ----------
+
+let commitProjectId = '';   // 当前查看提交清单的项目
+let selectedCommit = '';    // 当前选中的提交短哈希
+let _commitLoading = false;
+
+async function openCommitsPanel(projectId) {
+  const panel = document.getElementById('commits-panel');
+  if (!panel) return;
+  commitProjectId = projectId || '';
+  selectedCommit = '';
+
+  if (typeof loadProjects === 'function') {
+    try { await loadProjects(); } catch (e) { /* ignore */ }
+  }
+  const proj = ((typeof projectsCache !== 'undefined' ? projectsCache : []) || [])
+    .find(p => String(p.id) === String(commitProjectId));
+  const title = document.getElementById('commits-panel-title');
+  if (title) title.textContent = '🕘 ' + (proj ? proj.name : '');
+
+  const listEl = document.getElementById('project-list');
+  if (listEl) listEl.style.display = 'none';
+  // 隐藏其他侧边栏面板（文件浏览器 / 定时任务）
+  ['file-browser-panel', 'cron-panel'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = 'none';
+  });
+  panel.style.display = 'flex';
+  document.querySelectorAll('.sidebar-accordion').forEach(a => a.style.display = 'none');
+  loadCommitList();
+}
+
+function exitCommitsPanel() {
+  const panel = document.getElementById('commits-panel');
+  const listEl = document.getElementById('project-list');
+  if (panel) panel.style.display = 'none';
+  if (listEl) listEl.style.display = '';
+  document.querySelectorAll('.sidebar-accordion').forEach(a => a.style.display = '');
+  selectedCommit = '';
+}
+
+async function loadCommitList() {
+  const list = document.getElementById('commit-list');
+  if (!list) return;
+  list.innerHTML = '<div class="fb-empty">加载中…</div>';
+  const filesEl = document.getElementById('commit-files');
+  if (filesEl) filesEl.style.display = 'none';
+  try {
+    const qs = new URLSearchParams({ limit: '50' });
+    if (commitProjectId) qs.set('project_id', commitProjectId);
+    const res = await fetch('/files/commits?' + qs.toString());
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      list.innerHTML = '<div class="fb-empty">' + escapeHtml(d.detail || '加载失败') + '</div>';
+      return;
+    }
+    const data = await res.json();
+    renderCommitList(list, data.commits || []);
+  } catch (e) {
+    list.innerHTML = '<div class="fb-empty">' + escapeHtml(t('loadFailed') || '加载失败') + '</div>';
+  }
+}
+
+function renderCommitList(list, commits) {
+  if (!commits.length) {
+    list.innerHTML = '<div class="fb-empty">本仓库还没有提交记录</div>';
+    return;
+  }
+  let html = '';
+  commits.forEach(c => {
+    const active = c.hash === selectedCommit ? ' active' : '';
+    html += '<div class="commit-item' + active + '" data-hash="' + escAttr(c.hash) + '" onclick="selectCommit(\'' + escAttr(c.hash) + '\')">';
+    html += '  <div class="cmt-subject">' + escapeHtml(c.subject || c.hash) + '</div>';
+    html += '  <div class="cmt-meta">' +
+      '<span class="cmt-hash">' + escapeHtml(c.hash) + '</span>' +
+      '<span class="cmt-author">' + escapeHtml(c.author || '') + '</span>' +
+      '<span class="cmt-time">' + escapeHtml(c.time_relative || '') + '</span>' +
+    '</div>';
+    html += '</div>';
+  });
+  list.innerHTML = html;
+}
+
+async function selectCommit(hash) {
+  selectedCommit = hash;
+  // 高亮选中项
+  document.querySelectorAll('#commit-list .commit-item').forEach(el => {
+    const on = el.getAttribute('data-hash') === hash;
+    el.classList.toggle('active', on);
+  });
+
+  const filesEl = document.getElementById('commit-files');
+  const filesList = document.getElementById('commit-files-list');
+  if (!filesEl || !filesList) return;
+  filesEl.style.display = '';
+  filesList.innerHTML = '<div class="fb-empty">加载中…</div>';
+  try {
+    const qs = new URLSearchParams({ commit: hash });
+    if (commitProjectId) qs.set('project_id', commitProjectId);
+    const res = await fetch('/files/commit-files?' + qs.toString());
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      filesList.innerHTML = '<div class="fb-empty">' + escapeHtml(d.detail || '加载失败') + '</div>';
+      return;
+    }
+    const data = await res.json();
+    renderCommitFiles(filesList, data.files || [], hash);
+  } catch (e) {
+    filesList.innerHTML = '<div class="fb-empty">' + escapeHtml(t('loadFailed') || '加载失败') + '</div>';
+  }
+}
+
+function renderCommitFiles(filesList, files, hash) {
+  if (!files.length) {
+    filesList.innerHTML = '<div class="fb-empty">该提交没有文件变更</div>';
+    return;
+  }
+  let html = '<div class="changes-summary"><span>该提交共 <strong>' + files.length + '</strong> 个文件变更</span></div>';
+  files.forEach(f => {
+    const label = _STATUS_LABELS[f.status] || f.status || 'modified';
+    const icon = _STATUS_ICONS[f.status] || '📄';
+    const displayName = f.path.split('/').pop();
+    const dirPart = f.path.includes('/') ? ('<span class="cf-dir">' + escapeHtml(f.path.replace(/\/[^/]+$/, '')) + '/</span>') : '';
+    html += '<div class="change-item" data-path="' + escapeHtml(f.path) + '" onclick="showCommitFileDiff(\'' + escAttr(hash) + '\',\'' + escAttr(f.path) + '\')">';
+    html += '  <span class="cf-icon">' + icon + '</span>';
+    html += '  <span class="cf-info">';
+    html += '    <span class="cf-name">' + dirPart + escapeHtml(displayName) + '</span>';
+    html += '    <span class="cf-status ' + (f.status || 'modified') + '">' + label + '</span>';
+    html += '  </span>';
+    html += '</div>';
+  });
+  filesList.innerHTML = html;
+}
+
+async function showCommitFileDiff(hash, filePath) {
+  try {
+    const qs = new URLSearchParams({ commit: hash, file_path: filePath });
+    if (commitProjectId) qs.set('project_id', commitProjectId);
+    const res = await fetch('/files/commit-diff?' + qs.toString());
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      alert(d.detail || '获取 diff 失败');
+      return;
+    }
+    const data = await res.json();
+    openFileDiffPreview(data);
+  } catch (e) {
+    alert(t('readFileFailed') || '读取失败');
+  }
+}
+
 // ---------- 文件浏览器 ----------
 
 async function openFileBrowser(projectId) {
@@ -466,6 +617,7 @@ function toggleProjectMenu(btn, projectId) {
   menu.className = 'proj-more-menu';
   const items = [
     { icon: '📂', label: t('viewFiles') || '查看文件', fn: () => openFileBrowser(projectId) },
+    { icon: '🕘', label: t('viewCommits') || '查看提交清单', fn: () => openCommitsPanel(projectId) },
     { icon: '✎', label: t('editProject') || '编辑', fn: () => editProject(projectId) },
     { icon: '⏰', label: t('cronTasks') || '定时任务', fn: () => openCronPanel(projectId) },
     { icon: '🗑', label: t('deleteProject') || '删除', danger: true, fn: () => deleteProject(projectId) },

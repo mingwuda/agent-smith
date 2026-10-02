@@ -497,6 +497,105 @@ def _parse_status(status_out: str) -> str | None:
     return None
 
 
+@router.get("/files/commits")
+async def git_commits(
+    request: Request,
+    project_id: str = Query("", description="项目 ID"),
+    limit: int = Query(30, description="返回提交条数上限"),
+):
+    """获取当前 Git 仓库近期的提交清单（倒序），每项含提交人/短哈希/提交信息/相对时间。"""
+    base = _resolve_repo_root(request, project_id)
+    limit = max(1, min(limit or 30, 100))
+    fmt = r"%h|%an|%ae|%ar|%s"
+    stdout, err, code = _git_rc(str(base), "log", f"-{limit}", f"--pretty=format:{fmt}")
+    if code != 0:
+        raise HTTPException(status_code=400, detail=err or "获取提交清单失败（可能仓库无提交）")
+    commits = []
+    for line in (stdout or "").splitlines():
+        if not line.strip():
+            continue
+        parts = line.split("|", 4)
+        if len(parts) < 5:
+            continue
+        short_hash, author, email, rel_time, subject = [p.strip() for p in parts]
+        commits.append({
+            "hash": short_hash,
+            "full_hash": "",
+            "author": author,
+            "email": email,
+            "time_relative": rel_time,
+            "subject": subject,
+        })
+    return {"repo_root": str(base), "commits": commits}
+
+
+@router.get("/files/commit-diff")
+async def get_commit_diff(
+    request: Request,
+    commit: str = Query(..., description="提交短哈希或完整哈希"),
+    file_path: str = Query("", description="限定查看的单个文件路径（可选）；为空返回该提交的全部 diff"),
+    project_id: str = Query("", description="项目 ID"),
+):
+    """获取指定提交的 diff。传 file_path 时只看该文件的 diff；否则返回该提交全部变更的 diff。"""
+    base = _resolve_repo_root(request, project_id)
+    # 校验提交存在
+    _, err, code = _git_rc(str(base), "rev-parse", "--verify", f"{commit}^{{commit}}")
+    if code != 0:
+        raise HTTPException(status_code=400, detail=f"提交 {commit} 不存在")
+    args = ["show", "--format=fuller", "--no-ext-diff", commit]
+    if file_path and file_path.strip():
+        args.append("--")
+        args.append(file_path.strip())
+    stdout, err, code = _git_rc(str(base), *args)
+    if code != 0:
+        raise HTTPException(status_code=400, detail=err or "获取提交 diff 失败")
+
+    # 统计增删行
+    stats = {"additions": 0, "deletions": 0}
+    for line in (stdout or "").splitlines():
+        if line.startswith("+") and not line.startswith("+++"):
+            stats["additions"] += 1
+        elif line.startswith("-") and not line.startswith("---"):
+            stats["deletions"] += 1
+
+    return {
+        "commit": commit,
+        "file_path": file_path,
+        "diff_text": stdout,
+        "stats": stats,
+        "line_count": len((stdout or "").splitlines()),
+    }
+
+
+@router.get("/files/commit-files")
+async def get_commit_files(
+    request: Request,
+    commit: str = Query(..., description="提交短哈希或完整哈希"),
+    project_id: str = Query("", description="项目 ID"),
+):
+    """获取指定提交变更的文件清单（含变更状态），供点击提交后展示。"""
+    base = _resolve_repo_root(request, project_id)
+    _, err, code = _git_rc(str(base), "rev-parse", "--verify", f"{commit}^{{commit}}")
+    if code != 0:
+        raise HTTPException(status_code=400, detail=f"提交 {commit} 不存在")
+    # --name-status: 逐文件输出状态+路径（新增/删除/修改/重命名），排除空行和目录项
+    stdout, err, code = _git_rc(str(base), "diff-tree", "-r", "--no-commit-id", "--name-status", commit)
+    if code != 0:
+        raise HTTPException(status_code=400, detail=err or "获取提交文件清单失败")
+
+    files = []
+    for line in (stdout or "").splitlines():
+        if not line.strip():
+            continue
+        parts = line.split("\t")
+        status = parts[0][0] if parts else "M"
+        path = parts[-1].strip() if parts else ""
+        if not path:
+            continue
+        files.append({"path": path, "status": status})
+    return {"commit": commit, "files": files}
+
+
 @router.get("/files/diff")
 async def get_file_diff(
     request: Request,

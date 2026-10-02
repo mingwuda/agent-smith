@@ -82,6 +82,23 @@
     <div id="cron-list" class="cron-list"></div>
   </div>
 
+  <!-- 提交清单面板（从项目 ⋯ 菜单「查看提交清单」进入，类似文件浏览器） -->
+  <div id="commits-panel" class="commits-panel" style="display:none;">
+    <div class="fb-header">
+      <button class="fb-back" onclick="exitCommitsPanel()" title="返回项目列表">←</button>
+      <div class="fb-path" id="commits-panel-title">🕘 提交清单</div>
+      <button class="fb-refresh" onclick="loadCommitList()" title="刷新">⟳</button>
+    </div>
+    <div id="commit-list" class="commit-list">
+      <div class="fb-empty">加载中…</div>
+    </div>
+    <!-- 选中提交后的文件变更清单（侧边栏下方区块） -->
+    <div id="commit-files" class="commit-files" style="display:none;">
+      <div class="commit-files-header">📄 文件变更</div>
+      <div id="commit-files-list" class="commit-files-list"></div>
+    </div>
+  </div>
+
   <!-- 监控手风琴 -->
   <div class="sidebar-accordion" id="monitoring-accordion">
     <button class="accordion-toggle" type="button" aria-expanded="false" aria-controls="monitoring-body" onclick="toggleSidebarAccordion('monitoring-accordion')">

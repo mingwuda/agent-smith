@@ -1241,3 +1241,23 @@ body[data-theme="dark"] .chat-tab:hover { background:rgba(255,255,255,.05); }
 }
 .cron-editor-modal textarea { width: 100%; background: #2c2c2e; color: #e5e5ea; border: 1px solid #3a3a3c; border-radius: 8px; padding: 8px 10px; font-size: 13px; font-family: inherit; box-sizing: border-box; }
 .cron-editor-modal input, .cron-editor-modal select { width: 100%; box-sizing: border-box; }
+/* ===== 提交清单面板（项目 ⋯ 菜单「查看提交清单」） ===== */
+.commits-panel { flex: 1; display: none; flex-direction: column; min-height: 0; background: #161618; }
+.commit-list { flex: 1; overflow-y: auto; padding: 10px 12px; min-height: 0; scrollbar-width: thin; scrollbar-color: #4a4a4d transparent; }
+.commit-list::-webkit-scrollbar { width: 6px; }
+.commit-list::-webkit-scrollbar-thumb { background: #4a4a4d; border-radius: 999px; }
+.commit-list::-webkit-scrollbar-track { background: transparent; }
+.commit-item { padding: 9px 11px; margin-bottom: 7px; background: #26262a; border: 1px solid #3a3a3c; border-radius: 9px; cursor: pointer; transition: background .12s, border-color .12s; }
+.commit-item:hover { background: #2c2c2e; }
+.commit-item.active { background: rgba(10,132,255,.12); border-color: #0a84ff; }
+.commit-item .cmt-subject { font-size: 12.5px; font-weight: 600; color: #f5f5f7; margin-bottom: 4px; word-break: break-word; }
+.commit-item .cmt-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 10.5px; color: #8e8e93; }
+.commit-item .cmt-meta .cmt-hash { font-family: "SF Mono", Menlo, monospace; color: #0a84ff; }
+.commit-item .cmt-meta .cmt-author { color: #d5d5da; }
+.commit-item .cmt-meta .cmt-time { color: #8e8e93; margin-left: auto; }
+/* 侧边栏下方：选中提交的文件变更清单 */
+.commit-files { flex: 0 0 auto; max-height: 45%; display: flex; flex-direction: column; border-top: 1px solid #2c2c2e; background: #1c1c1e; min-height: 0; }
+.commit-files-header { padding: 8px 12px; font-size: 11.5px; font-weight: 600; color: #aeb0b5; background: #232326; border-bottom: 1px solid #2c2c2e; flex: 0 0 auto; }
+.commit-files-list { flex: 1; overflow-y: auto; padding: 6px 8px; min-height: 0; scrollbar-width: thin; scrollbar-color: #4a4a4d transparent; }
+.commit-files-list::-webkit-scrollbar { width: 6px; }
+.commit-files-list::-webkit-scrollbar-thumb { background: #4a4a4d; border-radius: 999px; }
