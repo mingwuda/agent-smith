@@ -33,6 +33,7 @@ _ALLOWED_SUBCOMMANDS = {
     "worktree",
     "merge",
     "checkout",
+    "fetch",
 }
 _BLOCKED_ARGS = {"--output", "--output=", "-o", "--exec", "--ext-diff"}
 _MAX_OUTPUT_CHARS = 20000
@@ -192,6 +193,54 @@ def _validate_args(args: list[str]) -> Optional[str]:
         if len(args) == 3 and args[1] == "-b" and _is_safe_git_ref(args[2]):
             return None
         return "❌ git checkout 仅允许: git checkout <branch> 或 git checkout -b <branch>"
+    if subcommand == "fetch":
+        # ponytail: fetch 是"只读远端、写入 refs/remotes"的操作，放开是为了让 agent
+        # 能查看远端新提交（如推送被拒后判断远端多了什么）。但仍严格限制：
+        #   - 只允许 0~1 个位置参数（远程名），禁止 refspec（不写本地任意 refs）
+        #   - 白名单标志位，拒绝 force/mirror/stdin/recurse 等写本地或递归/脚本注入
+        fetch_safe_flags = {
+            "-p", "--prune", "--all", "-t", "--tags", "-q", "--quiet",
+            "-v", "--verbose", "--show-origin", "--show-ref-names",
+            "--atomic", "--progress", "--refetch", "--unshallow", "--keep",
+            "--no-tags", "--update-head-ok",
+        }
+        # 允许"带值"的安全标志（--depth / --filter）
+        fetch_value_flags = {"--depth", "--depth=", "--filter", "--filter="}
+        fetch_blocked = {
+            "-f", "--force", "--mirror", "--stdin",
+            "--recurse-submodules", "--recurse-submodules=",
+            "--upload-pack", "--upload-pack=",
+        }
+        positionals = 0
+        i = 1
+        while i < len(args):
+            arg = args[i]
+            base_flag = arg.split("=", 1)[0] if "=" in arg else arg
+            if base_flag in fetch_value_flags:
+                # 带值标志：--depth=N / --filter=... 自身完整（吞 1 token）
+                #         或 --depth N / --filter blob:none（吞自身 + 值 token）
+                if "=" in arg:
+                    i += 1
+                else:
+                    i += 2
+                continue
+            if arg.startswith("-"):
+                if arg in fetch_safe_flags:
+                    i += 1
+                    continue
+                if arg in fetch_blocked:
+                    return f"❌ git fetch 不允许使用高风险标志位: {arg}"
+                return f"❌ git fetch 不允许使用标志位: {arg}"
+            else:
+                # 位置参数：第一个是远程名（须通过 safe ref），第二个起视为 refspec，禁止
+                positionals += 1
+                if positionals == 1:
+                    if not _is_safe_git_ref(arg):
+                        return "❌ git fetch 的远程名不安全"
+                else:
+                    return "❌ git fetch 仅允许: git fetch [remote]（禁止指定 refspec，避免写本地任意 refs）"
+                i += 1
+        return None
     return None
 
 
