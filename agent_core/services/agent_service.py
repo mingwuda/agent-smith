@@ -113,6 +113,15 @@ def _request_effective_model(model_override: str = "", provider_override: str = 
 
 
 def _save_assistant_result(uid: str, session_id: str, user_message: str, result: str, steps: Optional[list[dict]] = None, todo_list: Optional[dict] = None, model: str = ""):
+    # ── 写边界守卫：失败请求不落脏 assistant 消息 ─────────────────────────
+    # 根因：agent.py 失败路径把 "❌ " + error_content 当 assistant 落盘 →
+    # 下轮 session_messages_to_langchain 把它转成 AIMessage 回灌 LLM →
+    # OpenAI 侧校验 tool_calls JSON 失败 → 级联 400（见 2026-10-02 事故）。
+    # 判定：纯错误文本（❌ 前缀）且无 steps/todo → 不落 assistant 消息。
+    # 注意：失败时 agent.py 已先 add_message(user)，会话 updated_at 已刷新，
+    # 此处直接 return 即可，无需再额外写任何东西。
+    if (result or "").startswith("❌") and not steps and not todo_list:
+        return
     # 存储前剥离历史浏览器截图引用，防止旧截图 URL 持久化到 session store
     result = _strip_screenshot_urls(result)
     content = result

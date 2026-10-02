@@ -1011,7 +1011,14 @@ def session_messages_to_langchain(messages: list[dict], ocr_fallback: bool = Fal
                 pass
             # 剥离历史截图引用，避免 LLM 在后续回复中重复输出
             content = _strip_screenshot_urls_from_text(content)[0]
-            if content:
+            # ── 读边界兜底：跳过失败请求遗留的脏 assistant 消息 ───────────
+            # 历史事故（2026-10-02）：agent.py 失败路径曾把 "❌ " + error 当
+            # assistant 落盘，回灌 LLM 后触发 OpenAI 400（tool call 非合法 JSON）。
+            # P1 写边界已杜绝新增脏数据，这里只清理存量：content 为纯错误文本
+            # （❌ 前缀、非 JSON 结构）时不生成 AIMessage。正常正文不以 ❌ 开头。
+            if content and not (
+                content.startswith("❌") and not content.lstrip().startswith("{")
+            ):
                 converted.append(AIMessage(content=content))
     return converted
 
