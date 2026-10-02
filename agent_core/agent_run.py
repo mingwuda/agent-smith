@@ -495,7 +495,7 @@ class AgentRunMixin:
                     current_start = idx + 1
                     break
             steps = _extract_steps_from_messages(messages[current_start:])
-            # 方案A：本轮图片被 OCR 降级（模型不支持视觉）时，把降级动作补成 synthetic
+            # 方案A：本轮图片被视觉模型描述降级（模型不支持视觉）时，把降级动作补成 synthetic
             # 工具步骤，让非流式 /run 的返回 steps 也能体现"识别图片"这一工作过程。
             if ocr_sink:
                 steps = _synthetic_ocr_sse_steps(ocr_sink) + steps

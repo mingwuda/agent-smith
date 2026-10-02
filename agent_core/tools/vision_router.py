@@ -5,7 +5,7 @@
 "模型不支持视觉"对用户不友好。本模块提供「图片描述」能力：
 
   - 用户消息里的图片：自动用视觉模型描述 → 文本喂给当前非视觉模型
-  - agent 后续步骤调 ocr_image 工具时：同样先走视觉模型描述，失败才 OCR 兜底
+  - agent 后续步骤调 ocr_image 工具时：统一走视觉模型描述（无 OCR 兜底，未配置视觉模型时返回友好提示）
 
 依赖：通过 app_state.get_agent_config() 读取配置（无需传参），读取 active_provider
 下第一个被标记为 vision_models 的模型名作为"图片描述模型"。
@@ -162,16 +162,15 @@ def describe_image_data_url(data_url: str) -> Optional[str]:
 
     返回：
       - str：描述文本（成功时）
-      - None：无视觉模型配置 / 调用失败（调用方应回退 OCR）
+      - None：无视觉模型配置 / 调用失败（调用方应给出友好提示，不再走 OCR）
 
     异常：本函数吞掉所有视觉模型调用异常并返回 None，调用方无需 try/except。
-    ponytail：失败时一律打 warning 日志，方便排查为什么视觉路由没命中——
-    否则调用方只会看到"OCR 兜底了"而不知道根本原因。
+    ponytail：失败时一律打 warning 日志，方便排查为什么视觉路由没命中。
     """
     triple = _resolve_vision_model()
     if not triple:
         logger.warning(
-            "[vision_router] 未解析到任何视觉模型（active_provider=%s），回退 OCR/错误提示",
+            "[vision_router] 未解析到任何视觉模型（active_provider=%s），返回友好提示",
             _current_active_pid(),
         )
         return None
@@ -238,6 +237,27 @@ def describe_image_data_url(data_url: str) -> Optional[str]:
             return None
     logger.warning("[vision_router] 调用视觉模型 %s 重试耗尽，放弃", vision_model)
     return None
+
+
+_NO_VISION_TEXT = (
+    "（未能识别图片：未配置视觉模型，或视觉模型调用失败。"
+    "请在「设置 → 模型」标记一个支持图片输入的视觉模型。）"
+)
+
+
+def image_to_text(data_url: str) -> str:
+    """把图片转成文本（视觉模型描述）。
+
+    统一入口：替代原 tesseract OCR 降级。无视觉模型配置 / 视觉模型调用失败时
+    返回友好提示（而非 None），便于上层直接拼进消息文本，无需再做 None 判断。
+    """
+    try:
+        desc = describe_image_data_url(data_url)
+    except Exception:
+        desc = None
+    if desc:
+        return desc
+    return _NO_VISION_TEXT
 
 
 def describe_image_file(file_path: str) -> Optional[str]:
