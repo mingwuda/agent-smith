@@ -21,6 +21,12 @@ Moss Agent 是一个本地/私有部署的桌面 AI 工作台。它基于 FastAP
 - [Skills](#skills)
 - [子代理](#子代理)
 - [长期记忆](#长期记忆)
+- [自进化记忆（Case→Skill 蒸馏）](#自进化记忆case-skill-蒸馏)
+- [多页签与 SSE 持久化](#多页签与-sse-持久化)
+- [定时任务](#定时任务)
+- [征询用户](#征询用户)
+- [插件系统](#插件系统)
+- [Jev 决策库](#jev-决策库)
 - [微信集成](#微信集成)
 - [数据库交互](#数据库交互)
 - [远程部署](#远程部署)
@@ -69,7 +75,14 @@ Moss Agent 是一个本地/私有部署的桌面 AI 工作台。它基于 FastAP
 | 用量统计 | 按用户、会话、Provider、模型和工具统计调用与 token |
 | 会话消息管理 | 支持删除单条消息、历史消息图片点击放大、图片懒加载（lite 接口不传 base64） |
 | 系统守护与自愈 | Guardian 守护进程：boot 自愈、健康巡检、崩溃自动重启；主进程 + 守护进程双 systemd unit 管理 |
-| 工具卡片 | 步骤卡片带绿色左边框、工具名 + 耗时 + 状态圆点、参数/结果分栏展示，支持折叠
+| 工具卡片 | 步骤卡片带绿色左边框、工具名 + 耗时 + 状态圆点、参数/结果分栏展示，支持折叠 |
+| 多页签 | 单界面同时打开多个会话页签；页签状态持久化到 localStorage，刷新浏览器自动还原；正在请求的页签标题带扫光 loading 效果 |
+| 定时任务 | 侧边栏「定时任务」面板，按项目管理 cron 任务，支持表达式解析、创建/编辑/删除、手动立即执行、自动打开执行轨迹会话 |
+| 征询用户 | `ask_user` 工具在决策边界主动弹出选项让用户拍板，阻塞等待用户答复后再继续；多页签不串台（弹窗绑定当前会话） |
+| SSE 持久化 | 流式消息实时落盘，刷新浏览器/关闭重开后可从文件恢复已生成的轨迹，不丢失上下文 |
+| 自进化记忆 | 借鉴 EverOS：Agent 完成任务 → reflect 提炼 technique → 累积 Case → 达阈值蒸馏候选 SKILL → 半自动审批生效 |
+| 插件系统 | 插件加载器 + 事件钩子 + 设置页管理，支持自定义 SSE 事件推送和前端注入；参数变更自动热重载 |
+| Jev 决策 | 通用 LLM 决策库：表单字段自动填充、shell 风险门控、验证码置信度交叉校验、判别式上下文压缩 |
 
 ---
 
@@ -570,6 +583,126 @@ list_memories
 
 <a href="#目录">⬆ 返回目录</a>
 
+## 自进化记忆（Case→Skill 蒸馏）
+
+Moss Agent 内置借鉴 EverOS 的自进化机制：Agent 完成带工具调用的任务后，`reflect_on_task` 会提炼出一条 technique 反思，`case_forge` 把同类反思累积成结构化 Case，达到阈值后自动起草候选 SKILL.md 进入「待审批目录」，由用户确认后生效。
+
+### 闭环
+
+```text
+Agent 完成任务
+   └─ reflect_on_task → 一条 technique（{t, v}）
+        └─ case_forge.accumulate_case → 结构化 Case（背景/动作序列/结果/出现次数）
+             └─ 同一 Case occurrences ≥ 3（_CASE_PROMOTE_THRESHOLD）
+                  └─ 起草候选 SKILL.md → skills_dir/pending/
+                       ├─ 用户 approve → 移入技能目录 + registry.reload() → 下次命中触发词时生效
+                       └─ 用户 reject  → 丢弃候选
+```
+
+### 特性
+
+- **半自动**：生成后待用户确认再生效，避免单次偶发方法污染技能库
+- **动作序列**：记录工具调用轨迹（去重、封顶 12 步），蒸馏出的 SKILL.md 含可复用步骤
+- **幂等**：同 topic 同方法用全文 hash 指纹防碰撞（不同方法各自成 Case）
+- **Markdown 可读镜像**：记忆库同时输出可读 Markdown，便于人工审查
+- **双轨正交检索**：case（可执行技能轨迹）与 preference/avoid（偏好/踩坑）分轨检索，互不污染；检索支持同义词扩展与相关性阈值过滤
+- **审批接口**：`/skills/pending` 列表、`/skills/pending/approve`、`/skills/pending/reject`（body 含 `name`）；桌面端设置页提供待审批技能面板
+
+---
+
+
+<a href="#目录">⬆ 返回目录</a>
+
+## 多页签与 SSE 持久化
+
+### 多页签
+
+桌面端支持在同一界面打开多个会话页签，无需切换侧边栏即可并行查看多个对话。
+
+- **状态持久化**：打开/关闭/激活页签实时写入 `localStorage`（`desktop_chat_tabs_v1`），刷新浏览器自动还原所有页签并加载各自的历史消息
+- **loading 效果**：正在请求中的页签标题带浅蓝扫光动画（参考 deepseek-harness 风格），请求结束自动停止
+- **会话隔离**：每个页签的 SSE 流、运行状态、停止逻辑互相独立，不会串台
+
+### SSE 持久化
+
+流式消息（工具调用、思考、输出）实时落盘到文件。刷新浏览器或关闭重开后，可从文件恢复已生成的完整轨迹，不会因断连丢失上下文。
+
+---
+
+
+<a href="#目录">⬆ 返回目录</a>
+
+## 定时任务
+
+侧边栏「定时任务」面板支持按项目管理 cron 定时任务。
+
+| 功能 | 说明 |
+| --- | --- |
+| 创建/编辑 | 指定 cron 表达式 + 项目工作区 + 提示词，后端按 schedule 自动触发 |
+| 表达式解析 | `/cron/parse` 支持标准 5 段 cron，返回人类可读描述（如「每天 09:00」） |
+| 手动立即执行 | 「立即执行」按钮，执行过程写入固定会话 `cron_sess_{taskId}`，自动打开该会话展示轨迹 |
+| 管理 | 按项目列表、按 taskId 编辑/删除；全局列表支持跨项目 |
+
+API：
+
+| 端点 | 方法 | 说明 |
+| --- | --- | --- |
+| `/cron` | GET/POST | 列出所有定时任务 / 创建 |
+| `/cron/{task_id}` | PUT/DELETE | 更新 / 删除 |
+| `/cron/parse` | POST | 解析 cron 表达式 |
+| `/cron/{task_id}/run` | POST | 手动立即执行 |
+| `/projects/{project_id}/cron` | GET | 列出某项目的定时任务 |
+
+---
+
+
+<a href="#目录">⬆ 返回目录</a>
+
+## 征询用户
+
+`ask_user` 工具允许 Agent 在执行中主动向用户征询意见，弹出选项（+可选自定义输入）等待用户拍板后再继续。
+
+- **适用场景**：多个互斥方案需选择、涉及用户资源/账户操作需确认、需用户补充关键参数
+- **阻塞式**：调用后当前任务暂停，前端弹出问卷弹窗，用户提交后 Agent 继续
+- **多页签不串台**：弹窗绑定当前会话的 `thread_key`，多页签环境下不会因切换会话导致提交失败
+
+---
+
+
+<a href="#目录">⬆ 返回目录</a>
+
+## 插件系统
+
+支持第三方插件扩展 Agent 能力，包括自定义工具、事件钩子、SSE 事件推送和前端 UI 注入。
+
+| 端点 | 方法 | 说明 |
+| --- | --- | --- |
+| `/plugins` | GET | 列出已加载插件 |
+| `/plugins/{name}/toggle` | POST | 启用/禁用插件 |
+
+插件参数变更时自动热重载，无需重启服务。
+
+---
+
+
+<a href="#目录">⬆ 返回目录</a>
+
+## Jev 决策库
+
+通用 LLM 决策层，将复杂判断封装为可复用决策，接入多个工具场景：
+
+| 场景 | 说明 |
+| --- | --- |
+| 表单自动填充 | `browser_form_fill` 用 Jev 逐字段决策（单选/复选/提交），文本字段由 values 提供 |
+| Shell 风险门控 | `run_shell` 高危命令前 Jev 判断语义风险，命中则拦截 |
+| 验证码置信度 | 识别结果交叉校验，低置信度建议刷新重试 |
+| 上下文压缩 | 判别式压缩（保留/丢弃决策），替代简单截断 |
+
+---
+
+
+<a href="#目录">⬆ 返回目录</a>
+
 ## 微信集成
 
 Moss Agent 通过**腾讯官方 iLink Bot API** 接入微信个人号，让你可以直接在微信里与 Agent 对话。
@@ -1042,9 +1175,12 @@ moss-agent/
 │   ├── agent.py                # DesktopAgent、LangGraph、流式事件、上下文处理
 │   ├── config.py               # Provider、模型、环境变量和配置持久化
 │   ├── context_manager.py      # 上下文估算、阈值和压缩
-│   ├── subagents.py            # coder/reviewer/debugger 子代理 + 并行支持
+│   ├── subagents.py            # coder/reviewer/debugger/searcher 子代理 + 并行支持
+│   ├── case_forge.py           # Case→Skill 离线蒸馏（自进化闭环）
+│   ├── plugin_loader.py        # 插件加载器（参数变更热重载）
 │   ├── session_store.py        # SQLite 会话存储（按用户隔离）
 │   ├── user_manager.py         # 多用户数据目录管理
+│   ├── cron_service.py         # 定时任务调度服务
 │   ├── api/                    # API 路由模块
 │   │   ├── deps.py             # 认证依赖（get_current_user、require_admin）
 │   │   ├── auth.py             # 登录/登出/修改密码路由
@@ -1187,6 +1323,16 @@ http://127.0.0.1:8899/docs
 | `/wechat/stop` | POST | 停止微信轮询 |
 | `/wechat/sessions` | GET | 微信会话列表 |
 | `/wechat/sessions/{id}` | GET | 微信会话消息 |
+| `/plugins` | GET | 列出已加载插件 |
+| `/plugins/{name}/toggle` | POST | 启用/禁用插件 |
+| `/cron` | GET/POST | 列出所有定时任务 / 创建 |
+| `/cron/{task_id}` | PUT/DELETE | 更新 / 删除定时任务 |
+| `/cron/parse` | POST | 解析 cron 表达式 |
+| `/cron/{task_id}/run` | POST | 手动立即执行定时任务 |
+| `/projects/{project_id}/cron` | GET | 列出某项目的定时任务 |
+| `/skills/pending` | GET | 列出待审批技能候选 |
+| `/skills/pending/approve` | POST | 批准候选技能生效（body 含 `name`） |
+| `/skills/pending/reject` | POST | 拒绝候选技能（body 含 `name`） |
 | `/health` | GET | 健康检查 |
 
 除登录、退出、Token 登录和健康检查外，其它 API 都需要登录。

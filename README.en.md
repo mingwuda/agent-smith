@@ -32,6 +32,13 @@ It works well as a personal or intranet team assistant for reading and writing w
 | Multi-user | Login protection, admin user management, and isolated workspaces, sessions, usage records, and memories per user |
 | Context management | Estimates model context usage and compresses history near the threshold; large logs/files are not inserted in full |
 | Usage tracking | Tracks calls and tokens by user, session, provider, model, and tool |
+| Tabbed sessions | Open multiple session tabs in one UI; tab state persisted to localStorage and restored on refresh; streaming tabs show a shimmer loading effect |
+| Scheduled tasks | Sidebar "Scheduled Tasks" panel: create, edit, delete, and manually trigger cron tasks per project; auto-opens execution trajectory session |
+| Ask user | `ask_user` tool lets the Agent proactively prompt the user with options at decision boundaries; blocking, multi-tab-safe (modal bound to the current session) |
+| SSE persistence | Streaming messages are persisted to disk in real time; on browser refresh or re-open, the full execution trajectory is restored from file without context loss |
+| Self-evolving memory | EverOS-inspired: Agent completes task → reflect extracts technique → Case accumulates → threshold triggers candidate SKILL distillation → semi-automatic approval before activation |
+| Plugin system | Plugin loader + event hooks + settings-page management; supports custom SSE event push and frontend injection; parameter changes trigger hot reload |
+| Jev decision layer | Generic LLM decision library: automatic form-field filling, shell risk gating, captcha confidence cross-validation, and discriminative context compression |
 
 ---
 
@@ -332,6 +339,107 @@ Currently 13 built-in skills:
 
 ---
 
+## Self-Evolving Memory (Case→Skill Distillation)
+
+Moss Agent includes an EverOS-inspired self-evolution loop: after the Agent completes a tool-using task, `reflect_on_task` extracts a technique reflection; `case_forge` aggregates reflections of the same topic into a structured Case; when a Case's occurrence count reaches the threshold, a candidate `SKILL.md` is drafted into the `pending/` directory, then activated only after user approval.
+
+### Closed Loop
+
+```text
+Agent completes a task
+   └─ reflect_on_task → one technique ({t, v})
+        └─ case_forge.accumulate_case → structured Case (context / action sequence / result / occurrence count)
+             └─ Case occurrences ≥ 3 (CASE_PROMOTE_THRESHOLD)
+                  └─ draft candidate SKILL.md → skills_dir/pending/
+                       ├─ user approve → move into skills dir + registry.reload() → active on next trigger-word match
+                       └─ user reject  → discard candidate
+```
+
+### Highlights
+
+- **Semi-automatic**: candidates take effect only after user confirmation, preventing one-off methods from polluting the skill library
+- **Action sequence**: records the tool-call trace (deduplicated, capped at 12 steps), so distilled SKILL.md files contain reusable procedures
+- **Idempotent**: same topic + same method uses a full-text hash fingerprint to avoid collisions (different methods form separate Cases)
+- **Readable Markdown mirror**: the memory store also emits human-readable Markdown for easy review
+- **Dual-track orthogonal retrieval**: case (executable skill traces) vs. preference/avoid (preferences/pitfalls) are retrieved on separate tracks; retrieval supports synonym expansion and relevance-threshold filtering
+- **Approval API**: `/skills/pending` (list), `/skills/pending/approve`, `/skills/pending/reject` (body carries `name`); the desktop settings page provides a pending-skill panel
+
+---
+
+## Tabbed Sessions & SSE Persistence
+
+### Tabbed Sessions
+
+The desktop UI supports opening multiple session tabs at once, so you can view several conversations side by side without switching through the sidebar.
+
+- **State persistence**: opening, closing, and activating a tab writes to `localStorage` (`desktop_chat_tabs_v1`) in real time; on browser refresh all tabs are restored with their history loaded
+- **Loading effect**: a tab that is currently streaming shows a light-blue shimmer animation over its title; the effect stops automatically when the request completes
+- **Session isolation**: each tab's SSE stream, run state, and stop logic are fully independent
+
+### SSE Persistence
+
+Streaming messages (tool calls, reasoning, output) are persisted to disk in real time. After a browser refresh or re-open, the full execution trajectory is restored from file, so no context is lost on disconnect.
+
+---
+
+## Scheduled Tasks
+
+The sidebar "Scheduled Tasks" panel manages cron tasks per project.
+
+| Feature | Description |
+| --- | --- |
+| Create / edit | Specify a cron expression + project workspace + prompt; the backend triggers on schedule |
+| Expression parsing | `/cron/parse` supports standard 5-field cron and returns a human-readable description (e.g. "every day at 09:00") |
+| Manual trigger | A "Run now" button writes execution to a fixed session `cron_sess_{taskId}` and auto-opens that session to show the trajectory |
+| Management | List per project, edit/delete by taskId; a global list supports cross-project views |
+
+API:
+
+| Endpoint | Method | Description |
+| --- | --- | --- |
+| `/cron` | GET/POST | List all / create |
+| `/cron/{task_id}` | PUT/DELETE | Update / delete |
+| `/cron/parse` | POST | Parse a cron expression |
+| `/cron/{task_id}/run` | POST | Manual immediate execution |
+| `/projects/{project_id}/cron` | GET | List a project's tasks |
+
+---
+
+## Ask User
+
+The `ask_user` tool lets the Agent proactively ask the user for a decision during execution, presenting options (and optional free text) and blocking until the user responds.
+
+- **When to use**: choosing between mutually exclusive options, confirming operations on user resources/accounts, or supplying a key parameter
+- **Blocking**: the current task pauses, a questionnaire modal appears, and the Agent continues after the user submits
+- **Multi-tab safe**: the modal is bound to the current session's `thread_key`, so switching tabs will not cause submission failures
+
+---
+
+## Plugin System
+
+Third-party plugins can extend Agent capabilities, including custom tools, event hooks, SSE event push, and frontend UI injection.
+
+| Endpoint | Method | Description |
+| --- | --- | --- |
+| `/plugins` | GET | List loaded plugins |
+| `/plugins/{name}/toggle` | POST | Enable / disable a plugin |
+
+Plugin parameter changes trigger an automatic hot reload, no service restart needed.
+
+---
+
+## Jev Decision Layer
+
+A generic LLM decision layer that encapsulates complex judgments as reusable decisions, wired into several tool scenarios:
+
+| Scenario | Description |
+| --- | --- |
+| Auto form fill | `browser_form_fill` uses Jev to decide field-by-field (radio/checkbox/submit); text-field values come from `values` |
+| Shell risk gating | `run_shell` runs Jev to judge semantic risk before a high-risk command; if flagged, it is blocked |
+| Captcha confidence | Recognition results are cross-validated; low confidence suggests refresh & retry |
+| Context compression | Discriminative compression (keep/drop decisions) instead of naive truncation |
+
+---
 ## WeChat Integration
 
 Moss Agent supports connecting to **WeChat personal accounts** through Tencent's official **iLink Bot API**, allowing you to chat with your AI Agent directly from WeChat.
@@ -502,6 +610,16 @@ Main endpoints:
 | `/wechat/stop` | POST | Stop WeChat polling |
 | `/wechat/sessions` | GET | WeChat session list |
 | `/wechat/sessions/{id}` | GET | WeChat session messages |
+| `/plugins` | GET | List loaded plugins |
+| `/plugins/{name}/toggle` | POST | Enable/disable a plugin |
+| `/cron` | GET/POST | List all scheduled tasks / create |
+| `/cron/{task_id}` | PUT/DELETE | Update / delete a scheduled task |
+| `/cron/parse` | POST | Parse a cron expression |
+| `/cron/{task_id}/run` | POST | Run a scheduled task manually |
+| `/projects/{project_id}/cron` | GET | List a project's scheduled tasks |
+| `/skills/pending` | GET | List pending skill candidates |
+| `/skills/pending/approve` | POST | Approve a candidate skill (with `name` in body) |
+| `/skills/pending/reject` | POST | Reject a candidate skill (with `name` in body) |
 | `/health` | GET | Health check |
 
 All APIs except login, logout, token login, and health check require authentication.
@@ -593,7 +711,10 @@ desktop-agent/
 │   ├── agent.py                # DesktopAgent, LangGraph, streaming events, context handling
 │   ├── config.py               # Providers, model settings, environment variables, persisted config
 │   ├── context_manager.py      # Context estimation, thresholds, compression
-│   ├── subagents.py            # coder/reviewer/debugger subagents + parallel support
+│   ├── subagents.py            # coder/reviewer/debugger/searcher subagents + parallel support
+│   ├── case_forge.py           # Case→Skill offline distillation (self-evolution loop)
+│   ├── plugin_loader.py        # Plugin loader (hot reload on parameter change)
+│   ├── cron_service.py         # Scheduled task scheduler
 │   ├── session_store.py        # SQLite session storage
 │   ├── user_manager.py         # Multi-user data directories
 │   ├── network_resolver.py     # DNS fallback resolver
