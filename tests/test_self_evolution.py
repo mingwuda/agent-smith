@@ -63,6 +63,21 @@ def test_reflect_no_tool_calls_returns_none_on_success():
     assert res is None
 
 
+def test_reflect_accepts_tool_call_steps_for_success():
+    """P0-1：非流式路径 agent.run/_extract_steps_from_messages 产出 type='tool_call'，
+    以前被 reflect_on_task 的 'tool_start' 过滤漏掉 → 反思直接 return None。
+    现在 tool_start 与 tool_call 都应触发成功反思。"""
+    a = _make_agent()
+    a._build_review_llm = lambda: _FakeLLM("zip分析|先解压再逐文件分析")
+    a._build_llm = lambda: _FakeLLM("zip分析|先解压再逐文件分析")
+    res = asyncio.run(a.reflect_on_task(
+        "分析 zip",
+        [{"type": "tool_call", "tool": "run_shell", "args": {"command": "unzip x"}}],
+        "解析完成", outcome="success",
+    ))
+    assert res == {"t": "technique", "v": "zip分析|先解压再逐文件分析"}
+
+
 def test_learned_patterns_includes_avoid_and_legacy():
     a = _make_agent()
     mem = get_memory(UID)

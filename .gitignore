@@ -48,3 +48,7 @@ my-first-video-midnight/
 .agent.pid
 skills/.generated/
 skills/.quarantine/
+# 蒸馏候选技能（待审批 SKILL.md）→ 运行时产物，不入库；待用户审批后才移入生效目录。
+# 此前测试污染的 samples/pending/git/SKILL.md 被误提交（b16087a），应移除：
+#   git rm -r --cached agent_core/samples/pending/
+agent_core/samples/pending/

@@ -157,8 +157,12 @@ class AgentChatMixin:
         - preference：用户明确表达的个人偏好
         - pitfall：踩过的坑 / 不要再做的事
         """
-        # 成功路径保持原有行为：只对涉及工具调用的任务反思
-        tool_steps = [s for s in steps if s.get("type") == "tool_start"]
+        # 成功路径保持原有行为：只对涉及工具调用的任务反思。
+        # step 类型有两种来源：流式路径收集的 SSE 事件用 "tool_start"；
+        # 非流式 agent.run / 定时任务用 _extract_steps_from_messages 产出的 "tool_call"。
+        # 二者都要认，否则非流式与定时任务的反思会因过滤不到工具步骤而直接 return None
+        # （P0-1：自进化采集面只剩流式聊天一条路）。
+        tool_steps = [s for s in steps if s.get("type") in ("tool_start", "tool_call")]
         if not tool_steps and outcome == "success":
             return None
 
@@ -249,7 +253,6 @@ class AgentChatMixin:
             return None
         # 自进化开关关闭时不自动起草技能（保持默认保守行为）
         if not getattr(self.config, "enable_self_evolution", False):
-            self._case_buffer = getattr(self, "_case_buffer", [])
             return None
         if not uid:
             return None
@@ -269,11 +272,6 @@ class AgentChatMixin:
         except Exception as exc:
             logger.warning("[蒸馏] Case 累积/起草失败（已忽略）: %s", exc)
             return None
-
-
-    def _approval_gate(self, candidate: Any) -> bool:
-        # ponytail: P3/P4 占位——人工审批/沙箱校验，当前恒 False（不激活）。
-        return False
 
 
     def _record_model_usage(self, input_tokens: int, output_tokens: int, cached_tokens: int = 0, source: str = "llm", thread_id: str = "", real_output_hint: int = 0):

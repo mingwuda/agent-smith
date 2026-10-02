@@ -279,8 +279,9 @@ async def _async_reflect(uid: str, user_message: str, steps: list[dict], result:
         prefix = "_avoid_" if t == "pitfall" else "_learned_"
         key = f"{prefix}{hashlib.md5((reflection.get('v', '') + t).encode()).hexdigest()[:12]}"
         mem = get_memory(uid)
-        if mem.get(key) is None:  # 不覆盖已有记录
-            mem.set(key, reflection)
+        # P1-2(a)：重复出现同一经验也刷新 updated_at（mem.set 对相同值仍更新 meta），
+        # 否则会被 50 条封顶 / 10 天 TTL 优先淘汰——尽管它仍被反复复用。
+        mem.set(key, reflection)
         # ── Case → Skill 馏（需求1/4）：成功 technique 经验累积为 Case，
         #    达到阈值后由 maybe_generate_skill 起草候选技能（半自动：待用户确认再生效）──
         if t == "technique":
@@ -293,9 +294,19 @@ async def _async_reflect(uid: str, user_message: str, steps: list[dict], result:
                     reflection,
                     user_message=user_message,
                     tool_steps=[
-                        {"tool": s.get("tool"), "step": s.get("step")}
+                        # P1-1：透传 args + 是否报错，供 Case 蒸馏存储"怎么做"而不仅是工具名。
+                        # 流式 tool_start 带 args；非流式 tool_call 也带 args。
+                        {
+                            "tool": s.get("tool"),
+                            "step": s.get("step"),
+                            "args": s.get("args") or {},
+                            "is_error": bool(s.get("is_error") or s.get("error")),
+                        }
                         for s in (steps or [])
-                        if isinstance(s, dict) and s.get("type") == "tool_start"
+                        if isinstance(s, dict)
+                        # 兼容两种步骤来源：流式 SSE 事件 (tool_start) 与
+                        # 非流式 agent.run/cron 的 _extract_steps_from_messages (tool_call)。
+                        if s.get("type") in ("tool_start", "tool_call")
                     ],
                 )
             except Exception:
@@ -337,7 +348,8 @@ async def _reflect_from_feedback(uid: str, session_id: str, rating: int, correct
         prefix = "_avoid_" if t == "pitfall" else "_learned_"
         key = f"{prefix}{hashlib.md5((reflection.get('v', '') + t).encode()).hexdigest()[:12]}"
         mem = get_memory(uid)
-        if mem.get(key) is None:
-            mem.set(key, reflection)
+        # P1-2(a)：同内容重复出现的经验也应刷新 updated_at（mem.set 对相同值仍会更新
+        # updated_at），否则会被 50 条封顶 / 10 天 TTL 优先淘汰——尽管它仍在被反复复用。
+        mem.set(key, reflection)
     except Exception:
         pass

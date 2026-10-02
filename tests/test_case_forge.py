@@ -148,6 +148,30 @@ def test_actions_dedup_consecutive_tools(isolated):
         f"连续重复应合并，间隔应保留，实际={actions}"
 
 
+def test_actions_capture_args_labels():
+    """P1-1：Case 蒸馏不再只存裸工具名，而是带 args 摘要（如何做）。
+
+    流式/非流式步骤都含 args；_tool_label 把它们渲染成 git_status(path=/tmp/x) 形式，
+    让 SKILL.md 指令从"空泛步骤名"变成"可复现的操作"。无 args 时保持纯工具名。
+    """
+    uid = "u1"
+    accumulated = (
+        {"tool": "read_file", "args": {"path": "/tmp/x.py"}},
+        {"tool": "edit_file", "args": {"file_path": "/tmp/x.py", "occurrence": 1}},
+        {"tool": "run_shell", "args": {"command": "pytest"}},
+    )
+    accumulate_case(uid, "改代码", {"t": "technique", "v": "改码|先读再改"}, actions=accumulated)
+    from memory.local_memory import get_memory
+    mem = get_memory(uid)
+    case = next(it for it in mem.list_items() if it["key"].startswith("_case_"))
+    actions = case["value"]["actions"]
+    assert actions == [
+        "read_file(path=/tmp/x.py)",
+        "edit_file(file_path=/tmp/x.py, occurrence=1)",
+        "run_shell(command=pytest)",
+    ], f"args 应被捕获为可读标签，实际={actions}"
+
+
 def test_topic_key_no_prefix_collision(isolated):
     """P1-5：topic 用完整 hash，前 20 字相同但方法不同不合并。"""
     uid = "u1"

@@ -79,7 +79,7 @@ def accumulate_case(uid: str, user_message: str, reflection: dict,
         # 是噪音，让工作流步骤可读；保留跨步骤的顺序去重前的整体轨迹）
         seq = existing.get("actions", []) or []
         if actions:
-            new_acts = [a.get("tool", "?") for a in actions if isinstance(a, dict)]
+            new_acts = [_tool_label(a) for a in actions if isinstance(a, dict)]
             existing["actions"] = _dedupe_tool_seq((seq + new_acts)[-MAX_CASE_ACTIONS:])
         # 追加背景（去重，最多保留 5 条）
         ctx = existing.get("contexts", []) or []
@@ -94,7 +94,7 @@ def accumulate_case(uid: str, user_message: str, reflection: dict,
             "occurrences": 1,
             "contexts": [user_message[:100]] if user_message else [],
             "actions": _dedupe_tool_seq(
-                [a.get("tool", "?") for a in actions if isinstance(a, dict)][-MAX_CASE_ACTIONS:]
+                [_tool_label(a) for a in actions if isinstance(a, dict)][-MAX_CASE_ACTIONS:]
             ) if actions else [],
             "result": "成功",
             "created_at": now,
@@ -104,18 +104,56 @@ def accumulate_case(uid: str, user_message: str, reflection: dict,
     return existing
 
 
-def _dedupe_tool_seq(tools: list[str]) -> list[str]:
-    """P1-4：去除连续重复的相同工具名（git_status,git_status → git_status）。
+def _tool_label(step) -> str:
+    """把一步工具调用渲染成可读标签：工具名 + 关键 args（若有）。
+
+    兼容三种入参形态：
+      - dict 含 {"tool": ..., "args": {...}} → "tool(args摘要)"
+      - dict 只含 {"tool": ...}             → "tool"
+      - 纯字符串（历史存量 / 旧测试）       → 原样
+    仅当 args 里有标量字段时才追加摘要，纯空/仅嵌套结构不追加，
+    避免 `git_status()` 这类冗余括号，也保证旧测试断言的原味工具名不变。
+    """
+    if isinstance(step, str):
+        return step
+    if not isinstance(step, dict):
+        return str(step)
+    tool = str(step.get("tool", "?"))
+    args = step.get("args")
+    if not isinstance(args, dict):
+        return tool
+    scalars = {k: v for k, v in args.items() if isinstance(v, (str, int, float, bool))}
+    if not scalars:
+        return tool
+    # 摘要：key=value，value 截断到 40；单个 prevent 过长
+    parts = []
+    for k, v in list(scalars.items())[:3]:
+        vs = str(v)
+        if len(vs) > 40:
+            vs = vs[:40] + "…"
+        parts.append(f"{k}={vs}")
+    return f"{tool}({', '.join(parts)})"
+
+
+def _dedupe_tool_seq(tools: list) -> list[str]:
+    """P1-4：去除连续重复的相同工具（git_add,git_add → git_add）。
 
     同一工具紧邻反复调用是噪音，会让 SKILL.md 指令显得重复冗长；合并后工作流可读。
     仅合并「连续相同」，不改变不同工具间的真实顺序。
+    比较按工具名（_tool_label 前的等价名）做，而非整条带 args 标签：
+    git_status() 与 git_status() 仍视为一次重复；但 git_status(a=1) 与 git_status(b=2)
+    方法不同则各自保留。
     """
-    out = []
+    out: list[str] = []
+    last_identity: str | None = None
     for t in tools:
-        if not t:
+        label = _tool_label(t)
+        identity = str(t.get("tool", t)) if isinstance(t, dict) else label
+        if not identity:
             continue
-        if not out or out[-1] != t:
-            out.append(t)
+        if identity != last_identity:
+            out.append(label)
+            last_identity = identity
     return out
 
 
@@ -184,7 +222,9 @@ def draft_skill(uid: str, case_key: str, skills_dir: Path,
     """为已达阈值的 Case 起草候选 SKILL.md 到待审批目录。
 
     skills_dir: config.skills_dir（技能加载根目录），pending 子目录存放候选。
-    返回 {skill_name, pending_path}；已存在同名候选 / 已生效同名技能则跳过。
+    返回 {skill_name, pending_path, skipped}；已生效同名技能则返回 None。
+    P2-2：若 pending 候选已存在，则按最新 Case 刷新内容（occurrences/actions），
+    skipped=首次创建为 False、刷新为 True —— 保证待审批候选始终反映最新累积状态。
     """
     mem = get_memory(uid)
     case = mem.get(case_key)
@@ -196,13 +236,13 @@ def draft_skill(uid: str, case_key: str, skills_dir: Path,
 
     target = pending_dir / name / "SKILL.md"
     target.parent.mkdir(parents=True, exist_ok=True)
-    if target.exists():
-        return {"skill_name": name, "pending_path": str(target), "skipped": True}
 
     # 若已存在同名生效技能且 supersede=True，则跳过（避免重复占位）
     active = Path(skills_dir) / name / "SKILL.md"
     if supersede and active.exists():
         return None
+
+    refreshed = target.exists()  # P2-2：候选已存在 → 本次是刷新而非首建
 
     contexts = case.get("contexts") or []
     actions = case.get("actions") or []
@@ -218,7 +258,7 @@ def draft_skill(uid: str, case_key: str, skills_dir: Path,
         "pending_path": str(target),
         "created_at": time.time(),
     })
-    return {"skill_name": name, "pending_path": str(target), "skipped": False}
+    return {"skill_name": name, "pending_path": str(target), "skipped": refreshed}
 
 
 def _render_skill_md(name: str, technique: str, contexts: list[str],

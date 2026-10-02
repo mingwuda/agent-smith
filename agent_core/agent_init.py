@@ -363,8 +363,8 @@ class AgentInitMixin:
         avoid.sort(key=lambda x: x[0], reverse=True)
 
         # ── 限制 learnings 数量与长度，避免 system prompt 膨胀 ──
-        MAX_LEARNED = 3
-        MAX_AVOID = 3
+        MAX_LEARNED = 5
+        MAX_AVOID = 5
         MAX_ITEM_CHARS = 100
 
         def _shorten(items: list[str], limit: int) -> list[str]:

@@ -401,6 +401,17 @@ async def _run_agent_once(uid: str, task: dict) -> str:
         _save_assistant_result(uid, session_id, content, result, steps=steps or [])
     except Exception:
         session_store.add_message(uid, session_id, "assistant", result or "")
+    # ── 定时任务执行也触发反思（P0-1）──
+    # 此前 cron 走非流式 agent.run，steps 无 "tool_start"，且这里完全没调 _async_reflect，
+    # 导致定时任务跑 N 次也学不到任何经验。现显式派发后台反思，复用与 /run 相同的落盘链路。
+    try:
+        from services.agent_service import _async_reflect as _cron_reflect
+        asyncio.create_task(_cron_reflect(
+            uid, content, steps or [], result,
+            outcome="error" if str(result or "").strip().startswith("❌") else "success",
+        ))
+    except Exception:
+        pass  # 反思失败绝不阻塞主流程
     return result or ""
 
 
