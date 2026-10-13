@@ -225,7 +225,9 @@ class WeChatCommandMixin:
             return True
 
         # ── /modals 命令：列出可用模型（仅已配置 API Key 的 Provider）──
-        if text.strip() == "/modals":
+        # /models 为常见拼写别名（modal+s = 复数模型，更符合直觉），二者同命中此纯本地分支，
+        # 均在 agent/LLM 之前被拦截，不依赖 LLM。
+        if text.strip() in ("/modals", "/models"):
             model_text = self._build_model_list_text(from_user)
             await self.send_message(from_user, context_token, model_text)
             return True
@@ -454,6 +456,8 @@ class WeChatCommandMixin:
         cur_name = (cfg.providers or {}).get(cur_pid, {}).get("name", cur_pid)
         all_lines: list[str] = []
         for pid, prov in (cfg.providers or {}).items():
+            if pid == "__provider_order__" or pid == "_ctx_old_" or not isinstance(prov, dict):
+                continue  # 排序元数据/非 dict 条目不是 provider，跳过（防 list.get 崩溃）
             if not (prov or {}).get("api_key"):
                 continue  # 未配置 Key 的 provider 不可用，不列出
             name = (prov or {}).get("name", pid)

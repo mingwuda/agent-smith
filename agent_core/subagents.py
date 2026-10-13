@@ -20,6 +20,9 @@ from network_resolver import configure_host_resolution
 
 TaskStatus = Literal["pending", "running", "done", "error"]
 
+# 单个子代理日志行数上限：超过则丢弃最旧行（SSE/胶囊读取都从 index=0 全量读回，不影响语义）。
+MAX_LOG_LINES = 2000
+
 
 @dataclass
 class SubagentTask:
@@ -42,6 +45,18 @@ class SubagentTask:
             line = {"ts": time.time(), "cat": cat, "text": text}
             line.update(extra)
             self._log_lines.append(line)
+            self._trim_logs()
+
+    def _trim_logs(self) -> None:
+        """截断子代理日志，防止长时间运行/海量工具调用导致内存无界增长。
+
+        所有读取入口（get_progress_logs / get_capsule_logs / get_capsule_tool_events）
+        都从 index=0 全量读回，丢弃最旧行不影响语义，只是最早的部分日志不再保留；
+        done/error 终结事件是最后写入的，必然保留。
+        """
+        excess = len(self._log_lines) - MAX_LOG_LINES
+        if excess > 0:
+            del self._log_lines[:excess]
 
     def get_logs_since(self, index: int) -> tuple[list[dict], int]:
         with self._log_lock:
@@ -109,6 +124,23 @@ class SubagentManager:
         self._graph_cache: dict[str, object] = {}  # agent_type -> 预构建的 React 图（LLM/tools 复用）
         # 当前批次任务列表（按 capsule_id 索引），供前端 SSE 轮询用
         self._current_batch: list[SubagentTask] = []
+
+    # 已完成任务的保留时长：只有 /subagents/tasks/{id} 查询会看（调试用）。
+    # 跑完即永久攒在 _tasks 会内存无界增长，超过 TTL 的终态任务直接淘汰。
+    _TASKS_TTL = 3600.0  # 秒（1 小时）
+
+    def _prune_tasks(self) -> None:
+        """清理已结束（done/error）且超过 TTL 的子代理任务，防 _tasks 无界增长。
+
+        运行中（pending/running）任务永不淘汰；新注册时顺带清理一次（惰性，无后台循环）。
+        """
+        now = time.time()
+        stale = [
+            tid for tid, t in self._tasks.items()
+            if t.status in ("done", "error") and (now - t.finished_at) > self._TASKS_TTL
+        ]
+        for tid in stale:
+            self._tasks.pop(tid, None)
 
     def configure(self, config: AgentConfig, tools: list, review_llm=None):
         self._config = config
@@ -265,12 +297,14 @@ class SubagentManager:
                 task=task,
                 context=context,
             )
+            self._prune_tasks()  # 惰性清理过期终态任务
             self._tasks[item.id] = item
         else:
             item.agent_type = agent_type
             item.task = task
             item.context = context
             if item.id not in self._tasks:
+                self._prune_tasks()
                 self._tasks[item.id] = item
         item.status = "running"
         item.started_at = time.time()
@@ -481,6 +515,7 @@ def delegate_task(task: str, agent_type: str = "coder", context: str = "") -> st
         context=context,
     )
     item.append_log("队列中，等待执行...")
+    manager._prune_tasks()  # 惰性清理过期终态任务
     manager._tasks[item.id] = item
     manager.start_batch([item])
     # timeout 与并行路径一致（200s）：单发子代理常见跑 2~3 分钟，默认 60s 会误杀
@@ -502,7 +537,11 @@ async def _run_all_parallel(items: list[SubagentTask]) -> list[SubagentTask]:
     HTTP 请求真正同时发出（I/O 并发），不再有每任务一个线程 + 一个事件循环的重复开销。
     每个任务仍保留各自 run_sync 内的 wall_timeout(180s)/idle_timeout(60s) 保护。
     """
-    return await asyncio.gather(
+    # return_exceptions=True：run_sync 内部已把异常转成 item.status="error"，
+    # 正常不会向上抛；此参数是防御——若未来某分支漏吞异常（如 item 创建阶段
+    # 出错而 run_sync 未接住），gather 也不会因单个任务异常取消整批、丢弃其它
+    # 成功结果。异常项统一替换回对应 item，让调用方照常按 item.status 判断。
+    results = await asyncio.gather(
         *(
             manager.run_sync(
                 task=item.task,
@@ -513,8 +552,22 @@ async def _run_all_parallel(items: list[SubagentTask]) -> list[SubagentTask]:
                 item=item,  # 复用 batch item：日志/状态写入同一对象，前端 SSE 才能实时读到
             )
             for item in items
-        )
+        ),
+        return_exceptions=True,
     )
+    out: list[SubagentTask] = []
+    for it, res in zip(items, results):
+        if isinstance(res, BaseException):
+            # 防御兜底：run_sync 漏掉的异常在此兜住，保证每任务都有终态
+            if it.status not in ("done", "error"):
+                it.status = "error"
+                it.error = f"{type(res).__name__}: {res}"
+                it.result = f"❌ 子代理执行失败：{it.error}"
+                it.append_log(f"❌ 子代理执行失败: {it.error}", "error")
+            out.append(it)
+            continue
+        out.append(res)
+    return out
 
 
 @tool
@@ -533,6 +586,7 @@ def delegate_tasks_parallel(tasks_json: str) -> str:
         return "❌ 需要至少一个任务"
 
     # 预创建所有任务，注册到 manager 供前端 SSE 轮询
+    manager._prune_tasks()  # 惰性清理过期终态任务
     items = []
     for i, t in enumerate(tasks[:4]):
         agent_type = t.get("agent_type", "coder") if isinstance(t, dict) else "coder"

@@ -419,7 +419,7 @@ async function openCommitsPanel(projectId) {
   const proj = ((typeof projectsCache !== 'undefined' ? projectsCache : []) || [])
     .find(p => String(p.id) === String(commitProjectId));
   const title = document.getElementById('commits-panel-title');
-  if (title) title.textContent = '🕘 ' + (proj ? proj.name : '');
+  if (title) title.textContent = '🕘 ' + (proj && proj.name ? proj.name : '');
 
   const listEl = document.getElementById('project-list');
   if (listEl) listEl.style.display = 'none';

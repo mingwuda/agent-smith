@@ -19,7 +19,8 @@ async function openCronPanel(projectId) {
   const proj = (typeof projectsCache !== 'undefined' ? projectsCache : []) || []
     .find(p => String(p.id) === String(cronSelectedProject));
   const title = document.getElementById('cron-panel-title');
-  if (title) title.textContent = '⏰ ' + (proj ? proj.name : t('cronPanelTitle'));
+  // ponytail: proj 命中但 name 缺失/为空时兜底回退到通用标题，避免显示 "undefined"
+  if (title) title.textContent = '⏰ ' + (proj && proj.name ? proj.name : t('cronPanelTitle'));
 
   const listEl = document.getElementById('project-list');
   if (listEl) listEl.style.display = 'none';

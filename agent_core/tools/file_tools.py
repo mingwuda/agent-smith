@@ -6,10 +6,12 @@
 - 所有写入操作自动生成行级 diff
 """
 import difflib
+import functools
 import json
 import mmap
 import os
 import re
+import threading
 from collections import defaultdict
 from contextvars import ContextVar
 from pathlib import Path
@@ -18,6 +20,37 @@ from langchain_core.tools import tool
 
 # 工作区由调用方注入（ContextVar：每个 async 请求/任务各自独立，避免并发串目录）
 _workspace_ctx: ContextVar[Optional[Path]] = ContextVar("file_tools_workspace", default=None)
+
+# ── 文件写互斥锁 ──────────────────────────────────────────
+# 并行的子代理（delegate_tasks_parallel）在各自独立线程里执行文件写工具，
+# ContextVar 无法跨线程共享锁，必须用真正的 threading.Lock 做进程内互斥，
+# 避免多个子代理/主代理同时写同一文件相互覆盖。
+#
+# ponytail: 进程内全局写锁，串行化所有文件写（保证不互相覆盖，够用）；
+# 已知边界：粒度是整个工作区的写，而非按文件，高并发写时吞吐会串行化。
+# 若未来要提升并发写，可升级为「按 resolved 路径的 per-file 锁」。
+_WRITE_LOCK = threading.RLock()
+
+
+def _write_locked(fn):
+    """装饰器：让文件写工具在读-改-写全程持有全局写锁。
+
+    与 @tool 配合时写在 @tool 下方（先加锁，再被 @tool 包成 StructuredTool）：
+        @tool
+        @_write_locked
+        def write_file(...): ...
+    这样并发子代理线程执行 write_file 时会被 _WRITE_LOCK 互斥，
+    避免 read-modify-write 之间被其他线程插队导致互相覆盖。
+    """
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        with _WRITE_LOCK:
+            return fn(*args, **kwargs)
+
+    return wrapper
+
+
 MAX_FILE_RETURN_CHARS = 20000
 FILE_HEAD_CHARS = 8000
 FILE_TAIL_CHARS = 8000
@@ -378,6 +411,7 @@ def read_bytes(path: str, offset: int = 0, length: int = 4096) -> str:
 # ═══════════════════════════════════════════════════════════════
 
 @tool
+@_write_locked
 def write_file(path: str, content: str) -> str:
     """写入内容到文件（UTF-8）。path 相对于工作区目录。自动创建父目录。"""
     try:
@@ -399,6 +433,7 @@ def write_file(path: str, content: str) -> str:
 
 
 @tool
+@_write_locked
 def append_to_file(path: str, content: str) -> str:
     """追加内容到文件末尾。path 相对于工作区目录。"""
     try:
@@ -420,6 +455,7 @@ def append_to_file(path: str, content: str) -> str:
 
 
 @tool
+@_write_locked
 def edit_file(path: str, old_string: str, new_string: str, replace_all: bool = False, occurrence: int = 0) -> str:
     """按文本（或正则）替换文件内容。修改代码/文本时优先使用本工具，不要改用 run_python 执行脚本去改写文件（更慢且不易校验）。
 
@@ -509,6 +545,7 @@ def edit_file(path: str, old_string: str, new_string: str, replace_all: bool = F
 
 
 @tool
+@_write_locked
 def insert_lines(path: str, line_number: int, content: str) -> str:
     """在指定行号前插入内容。行号从 0 开始。
 
@@ -556,6 +593,7 @@ def insert_lines(path: str, line_number: int, content: str) -> str:
 
 
 @tool
+@_write_locked
 def replace_lines(path: str, start_line: int, end_line: int, content: str) -> str:
     """替换指定行区间的全部内容。行号从 0 开始。
 
@@ -626,6 +664,7 @@ def list_files(path: str = "") -> str:
 
 
 @tool
+@_write_locked
 def delete_file(path: str) -> str:
     """删除文件或空目录。path 相对于工作区目录。"""
     try:
