@@ -159,6 +159,25 @@ def _extract_zip(raw: bytes, zip_name: str) -> tuple[str, str]:
     return str(dest), manifest
 
 
+def _save_document(raw: bytes, doc_name: str) -> str:
+    """保存文档（pdf/word/excel）字节到工作区 .agent_uploads/ 目录，返回保存的绝对路径。
+
+    ponytail: 方案B —— 文档不解析内容注入 LLM，仅落盘供 agent 用 read_file / run_shell
+    等工具自行查看。落点到用户工作区 .agent_uploads/{文件名}，与 .agent_zip 同级。
+    上限在 _safe_attachments 已约束为 20MB。
+    """
+    safe_name = Path(doc_name or "document").name
+    safe_name = re.sub(r"[^\w.\- ]", "_", safe_name)[:128]
+    dest = Path.home() / "agent_workspace" / ".agent_uploads"
+    dest.mkdir(parents=True, exist_ok=True)
+    target = dest / safe_name
+    # 同名冲突：加短哈希后缀避免覆盖
+    if target.exists():
+        target = dest / f"{target.stem}_{hashlib.md5(raw[:1024]).hexdigest()[:8]}{target.suffix}"
+    target.write_bytes(raw)
+    return str(target)
+
+
 def _display_user_message(uid: str, message: str, attachments: list[dict]) -> str:
     """生成用户消息的存储文本。有图片/压缩包/文本文件时保存到磁盘，返回摘要信息。"""
     if not attachments:
@@ -193,6 +212,26 @@ def _display_user_message(uid: str, message: str, attachments: list[dict]) -> st
         combined = "\n".join(parts).strip()
         return json.dumps({"text": combined or "请分析这些文件。", "text_files": [tf["name"] for tf in text_files]}, ensure_ascii=False)
 
+# ── 文档处理（pdf/word/excel）─ 保存到工作区 .agent_uploads/ 供 agent 用文件工具查看 ──
+    doc_files: list[dict] = []
+    for item in attachments:
+        raw_doc = item.get("raw")
+        if raw_doc:
+            saved = _save_document(raw_doc, item.get("name", "document"))
+            doc_files.append({
+                "name": item.get("name", "document"),
+                "path": saved,
+            })
+    if doc_files:
+        parts = [message or ""]
+        for df in doc_files:
+            parts.append(f"\n── 文档: {df['name']} 已保存到 {df['path']} ──")
+        combined = "\n".join(parts).strip()
+        return json.dumps({
+            "text": combined or "请分析这些文档。",
+            "doc_files": [{"name": df["name"], "path": df["path"]} for df in doc_files],
+        }, ensure_ascii=False)
+
     # ── 图片处理 ──
     image_paths: list[str] = []
     img_dir = Path.home() / ".desktop_agent" / "user_images" / uid
@@ -214,6 +253,7 @@ def _display_user_message(uid: str, message: str, attachments: list[dict]) -> st
         fpath.write_bytes(raw)
         image_paths.append(str(fpath))
     if not image_paths:
+        # 无图片时，若有文档附件则在文档校验里返回文档信息；否则没有文档信息需要返回
         return message or "请分析这些图片。"
     payload = {
         "text": message or "请分析这些图片。",
@@ -235,13 +275,22 @@ def _safe_attachments(attachments: list[Any]) -> list[dict]:
         data_url = (item.data_url or "").strip()
         is_zip = mime in ("application/zip", "application/x-zip-compressed") or ext == ".zip"
         is_text = mime.startswith("text/") or ext in TEXT_EXTS
+        # 文档类：pdf / word / excel（二进制，保存到工作区供 agent 用文件工具查看）
+        DOC_EXTS = {".pdf", ".doc", ".docx", ".xls", ".xlsx"}
+        DOC_MIME = {
+            "application/pdf", "application/msword",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "application/vnd.ms-excel",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        }
+        is_doc = not is_zip and not is_text and (mime in DOC_MIME or ext in DOC_EXTS)
         prefix = "data:application/zip;base64," if is_zip else f"data:{mime};base64,"
 
         if not data_url.startswith(prefix):
             if not is_zip:
-                if not is_text:
+                if not is_text and not is_doc:
                     continue
-                # 文本文件：宽松检测 base64
+                # 文本/文档文件：宽松检测 base64
                 if not data_url.startswith("data:") or ";base64," not in data_url:
                     continue
                 base64_data = data_url.split(";base64,", 1)[-1]
@@ -281,6 +330,15 @@ def _safe_attachments(attachments: list[Any]) -> list[dict]:
                 "mime_type": mime,
                 "data_url": data_url,
                 "content": decoded,
+            })
+        elif is_doc:
+            if len(raw) > 20 * 1024 * 1024:  # 文档上限 20MB
+                continue
+            safe.append({
+                "name": item.name or "document",
+                "mime_type": mime,
+                "data_url": data_url,
+                "raw": raw,
             })
         else:
             if not mime.startswith("image/") or len(data_url) > 8 * 1024 * 1024:

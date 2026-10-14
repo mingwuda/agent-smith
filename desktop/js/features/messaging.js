@@ -210,9 +210,13 @@ function addUserMessage(text, attachments = [], index) {
   const hasText = !hasZip && attachments.some(function(item) {
     return /\.(md|txt|json|yaml|yml|xml|html|css|js|ts|jsx|tsx|py|java|c|cpp|h|hpp|go|rs|rb|php|sh|bash|zsh|sql|csv|log|env|toml|ini|cfg|conf|vue|svelte|kt|swift|scala)$/i.test(item.name || '');
   });
+  const hasDoc = !hasZip && !hasText && attachments.some(function(item) {
+    return /\.(pdf|doc|docx|xls|xlsx)$/i.test(item.name || '');
+  });
   var msgFallback = '分析附件中...';
   if (hasZip) msgFallback = '分析项目中...';
   else if (hasText) msgFallback = '分析文件中...';
+  else if (hasDoc) msgFallback = '分析文档中...';
   const div = addMessage(text || (attachments.length ? msgFallback : ''), 'user', index);
   if (attachments.length) {
     const grid = document.createElement('div');
@@ -221,6 +225,7 @@ function addUserMessage(text, attachments = [], index) {
       const name = item.name || '';
       const isZip = item.mime_type === 'application/zip' || name.endsWith('.zip');
       const isText = !isZip && /\.(md|txt|json|yaml|yml|xml|html|css|js|ts|jsx|tsx|py|java|c|cpp|h|hpp|go|rs|rb|php|sh|bash|zsh|sql|csv|log|env|toml|ini|cfg|conf|vue|svelte|kt|swift|scala)$/i.test(name);
+      const isDoc = !isZip && !isText && /\.(pdf|doc|docx|xls|xlsx)$/i.test(name);
       if (isZip) {
         const badge = document.createElement('div');
         badge.style.cssText = 'width:96px;height:96px;display:flex;flex-direction:column;align-items:center;justify-content:center;border-radius:8px;background:#e0f2fe;color:#0369a1;border:1px solid rgba(255,255,255,.5);font-size:12px;';
@@ -234,6 +239,15 @@ function addUserMessage(text, attachments = [], index) {
         // ponytail: 文本附件默认只显示图标，用户双击才展开内容（刷新恢复的消息 item.content 已有内容；实时消息从 data_url 解码）
         badge.title = currentLanguage === 'en' ? 'Double-click to view file content' : '双击查看文件内容';
         badge.addEventListener('dblclick', () => toggleTextExpand(div, item, badge));
+        grid.appendChild(badge);
+      } else if (isDoc) {
+        // ponytail: 文档附件（pdf/word/excel）为二进制，展示为不可展开的图标徽章，
+        // 内容已保存到工作区供 agent 用文件工具查看，避免双击把 base64 当文本展开。
+        const badge = document.createElement('div');
+        const ext = name.lastIndexOf('.') >= 0 ? name.slice(name.lastIndexOf('.') + 1).toUpperCase() : 'FILE';
+        badge.style.cssText = 'width:96px;height:96px;display:flex;flex-direction:column;align-items:center;justify-content:center;border-radius:8px;background:#f3f4f6;color:#374151;border:1px solid rgba(255,255,255,.5);font-size:11px;font-weight:bold;';
+        badge.innerHTML = '<span style="font-size:28px;line-height:1">📄</span><span style="margin-top:4px">' + escapeHtml(name) + '</span>';
+        badge.title = name;
         grid.appendChild(badge);
       } else {
         const img = document.createElement('img');
@@ -323,12 +337,13 @@ function renderAttachmentPreview() {
     var name = item.name || '';
     var isZip = item.mime_type === 'application/zip' || name.endsWith('.zip');
     var isText = !isZip && /\.(md|txt|json|yaml|yml|xml|html|css|js|ts|jsx|tsx|py|java|c|cpp|h|hpp|go|rs|rb|php|sh|bash|zsh|sql|csv|log|env|toml|ini|cfg|conf|vue|svelte|kt|swift|scala)$/i.test(name);
+    var isDoc = !isZip && !isText && /\.(pdf|doc|docx|xls|xlsx)$/i.test(name);
     if (isZip) {
       const icon = document.createElement('div');
       icon.style.cssText = 'width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:28px;background:#e0f2fe;color:#0369a1;font-weight:bold;';
       icon.textContent = '📦';
       chip.appendChild(icon);
-    } else if (isText) {
+    } else if (isText || isDoc) {
       const icon = document.createElement('div');
       var ext = name.lastIndexOf('.') >= 0 ? name.slice(name.lastIndexOf('.') + 1).toUpperCase() : 'FILE';
       icon.style.cssText = 'width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;font-size:11px;background:#f3f4f6;color:#374151;font-weight:bold;';
@@ -361,12 +376,20 @@ function addFile(file) {
     '.py','.java','.c','.cpp','.h','.hpp','.go','.rs','.rb','.php','.sh','.bash','.zsh','.sql',
     '.csv','.log','.env','.toml','.ini','.cfg','.conf','.vue','.svelte','.kt','.swift','.scala'];
   var isText = !isZip && TEXT_EXTS.some(function(ext) { return name.toLowerCase().endsWith(ext); });
+  // 文档类：pdf / word / excel（纯二进制，保存到工作区供 agent 用文件工具查看）
+  var DOC_EXTS = ['.pdf','.doc','.docx','.xls','.xlsx'];
+  var DOC_MIME = { '.pdf': 'application/pdf', '.doc': 'application/msword',
+    '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    '.xls': 'application/vnd.ms-excel',
+    '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' };
+  var lowerName = name.toLowerCase();
+  var isDoc = !isZip && !isText && DOC_EXTS.some(function(ext) { return lowerName.endsWith(ext); });
 
-  if (!isZip && !isText && !file.type.startsWith('image/')) return;
+  if (!isZip && !isText && !isDoc && !file.type.startsWith('image/')) return;
 
-  var maxSize = isZip ? 50 * 1024 * 1024 : (isText ? 1 * 1024 * 1024 : 6 * 1024 * 1024);
+  var maxSize = isZip ? 50 * 1024 * 1024 : (isText ? 1 * 1024 * 1024 : (isDoc ? 20 * 1024 * 1024 : 6 * 1024 * 1024));
   if (file.size > maxSize) {
-    addMessage(t('imageTooLarge', { name: name }), 'system');
+    addMessage(isDoc ? t('docTooLarge', { name: name, size: Math.floor(maxSize / 1024 / 1024) }) : t('imageTooLarge', { name: name }), 'system');
     return;
   }
 
@@ -377,9 +400,17 @@ function addFile(file) {
 
   var reader = new FileReader();
   reader.onload = function() {
+    var mime = 'application/octet-stream';
+    if (isZip) mime = 'application/zip';
+    else if (isText) mime = 'text/plain';
+    else if (isDoc) {
+      // 用标准映射：优先按扩展名精确判定，回退到 file.type
+      var ext = lowerName.slice(lowerName.lastIndexOf('.'));
+      mime = DOC_MIME[ext] || file.type || 'application/octet-stream';
+    }
     pendingAttachments.push({
       name: name,
-      mime_type: isZip ? 'application/zip' : (isText ? 'text/plain' : (file.type || 'image/png')),
+      mime_type: mime,
       data_url: String(reader.result || ''),
     });
     renderAttachmentPreview();

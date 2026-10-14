@@ -184,6 +184,15 @@ async def run_agent(req: RunRequest, request: Request):
                     agent_message = text_content
         except (json.JSONDecodeError, TypeError):
             pass
+    # ── 解析文档路径，追加到 LLM 消息中供 agent 用文件工具查看 ──
+    if attachments and any(a.get("raw") for a in attachments):
+        try:
+            parsed = json.loads(display_text)
+            doc_notes = parsed.get("text", "") if isinstance(parsed, dict) and parsed.get("doc_files") else ""
+            if doc_notes and doc_notes != req.message:
+                agent_message = req.message + "\n\n" + doc_notes
+        except (json.JSONDecodeError, TypeError):
+            pass
     # ── 解析 ZIP 清单，追加到 LLM 消息中 ──
     if attachments and any(a.get("mime_type") == "application/zip" for a in attachments):
         try:
@@ -278,6 +287,15 @@ async def run_agent_stream(req: RunRequest, request: Request):
                 text_content = parsed.get("text", "")
                 if text_content and text_content != req.message:
                     agent_message = text_content
+        except (json.JSONDecodeError, TypeError):
+            pass
+    # ── 解析文档路径，追加到 LLM 消息中供 agent 用文件工具查看 ──
+    if attachments and any(a.get("raw") for a in attachments):
+        try:
+            parsed = json.loads(display_text)
+            doc_notes = parsed.get("text", "") if isinstance(parsed, dict) and parsed.get("doc_files") else ""
+            if doc_notes and doc_notes != req.message:
+                agent_message = req.message + "\n\n" + doc_notes
         except (json.JSONDecodeError, TypeError):
             pass
     if attachments and any(a.get("mime_type") == "application/zip" for a in attachments):
