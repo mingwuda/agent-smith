@@ -52,3 +52,5 @@ skills/.quarantine/
 # 此前测试污染的 samples/pending/git/SKILL.md 被误提交（b16087a），应移除：
 #   git rm -r --cached agent_core/samples/pending/
 agent_core/samples/pending/
+# 本地下载的 Obscura 轻量浏览器二进制（运行时依赖，不入仓）
+deps/obscura/

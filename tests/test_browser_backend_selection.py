@@ -14,7 +14,7 @@ import agent_core.tools.browser_tools as bt
 def _reset():
     """清空模块级后端状态与全局 playwright stub"""
     bt._BROWSER_BACKEND = None
-    bt._BACKEND_CAPS = {"file": False, "iframe": False, "contenteditable": False}
+    bt._BACKEND_CAPS = {"file": False, "iframe": False, "contenteditable": False, "cjk": False}
     bt._browser = None
     bt._playwright = None
     bt._TOOL_ORIG_DESC = {}
@@ -50,18 +50,18 @@ class FakeBrowser:
     """stub：可被 _probe_backend_caps 使用的假浏览器"""
     def __init__(self, caps=None):
         self._caps = caps if caps is not None else {
-            "file": True, "iframe": True, "contenteditable": True}
+            "file": True, "iframe": True, "contenteditable": True, "cjk": True}
         self._closed = False
 
-    async def new_context(self):
-        return FakeCtx(self._caps)
+    async def new_context(self, viewport=None):
+        return FakeCtx(self._caps, viewport)
 
     async def close(self):
         self._closed = True
 
 
 class FakeCtx:
-    def __init__(self, caps):
+    def __init__(self, caps, viewport=None):
         self._caps = caps
     async def new_page(self):
         return FakePage(self._caps)
@@ -74,6 +74,12 @@ class FakePage:
         self._caps = caps
     async def goto(self, *a, **k):
         return None
+    async def set_content(self, *a, **k):
+        return None
+    async def wait_for_timeout(self, *a, **k):
+        return None
+    async def screenshot(self, *a, **k):
+        return b"fake-png-bytes"
     async def evaluate(self, js):
         # 模拟 _PROBE_CAPS_JS 探测返回
         return {
@@ -165,9 +171,12 @@ async def _call_init(fake_pw, cdp_url):
     import agent_core.tools.browser_tools as bt
     # 直接 monkeypatch 模块级 _playwright 全局，绕开 globals().get 启动真实 playwright
     bt._playwright = fake_pw
-    # async 内部 await：保证在 with 块内完整执行（patch 生效期间跑完）
-    with mock.patch.object(bt, "_obscura_cdp_url", return_value=cdp_url):
-        return await bt._init_browser_backend()
+    # 用假的 _cjk_has_glyphs 替代实际 Pillow 截图解析（测试不跑真实浏览器）
+    def _fake_cjk(browser):
+        return bool(browser._caps.get("cjk", True))
+    with mock.patch.object(bt, "_cjk_has_glyphs", side_effect=_fake_cjk):
+        with mock.patch.object(bt, "_obscura_cdp_url", return_value=cdp_url):
+            return await bt._init_browser_backend()
 
 
 class CapsProbeTest(unittest.TestCase):
@@ -202,12 +211,12 @@ class CapsNoteTest(unittest.TestCase):
 
     def test_chromium_full_caps_no_note(self):
         bt._BROWSER_BACKEND = "chromium"
-        bt._BACKEND_CAPS = {"file": True, "iframe": True, "contenteditable": True}
+        bt._BACKEND_CAPS = {"file": True, "iframe": True, "contenteditable": True, "cjk": True}
         self.assertEqual(bt._backend_caps_note(), "")
 
     def test_obscura_missing_caps_generates_note(self):
         bt._BROWSER_BACKEND = "obscura"
-        bt._BACKEND_CAPS = {"file": False, "iframe": True, "contenteditable": False}
+        bt._BACKEND_CAPS = {"file": False, "iframe": True, "contenteditable": False, "cjk": True}
         note = bt._backend_caps_note()
         self.assertIn("文件上传", note)
         self.assertIn("富文本", note)
@@ -215,12 +224,22 @@ class CapsNoteTest(unittest.TestCase):
 
     def test_all_missing_includes_iframe(self):
         bt._BROWSER_BACKEND = "obscura"
-        bt._BACKEND_CAPS = {"file": False, "iframe": False, "contenteditable": False}
-        self.assertIn("iframe", bt._backend_caps_note())
+        bt._BACKEND_CAPS = {"file": False, "iframe": False, "contenteditable": False, "cjk": False}
+        note = bt._backend_caps_note()
+        self.assertIn("iframe", note)
+        self.assertIn("中文", note)  # cjk=False 也应提示
+
+    def test_cjk_missing_adds_chinese_note(self):
+        """cjk 缺位 → 能力提示包含中文豆腐块说明"""
+        bt._BROWSER_BACKEND = "obscura"
+        bt._BACKEND_CAPS = {"file": True, "iframe": True, "contenteditable": True, "cjk": False}
+        note = bt._backend_caps_note()
+        self.assertIn("中文", note)
+        self.assertIn("豆腐块", note)
 
     def test_refresh_injects_into_tool_descriptions(self):
         bt._BROWSER_BACKEND = "obscura"
-        bt._BACKEND_CAPS = {"file": False, "iframe": False, "contenteditable": False}
+        bt._BACKEND_CAPS = {"file": False, "iframe": False, "contenteditable": False, "cjk": False}
         # 记录原描述，注入后应包含限制提示
         bt._refresh_browser_tool_notes()
         self.assertIn("当前浏览器后端能力限制", bt.browser_get_dom.description)
@@ -231,7 +250,7 @@ class CapsNoteTest(unittest.TestCase):
 
     def test_refresh_noop_when_chromium_full(self):
         bt._BROWSER_BACKEND = "chromium"
-        bt._BACKEND_CAPS = {"file": True, "iframe": True, "contenteditable": True}
+        bt._BACKEND_CAPS = {"file": True, "iframe": True, "contenteditable": True, "cjk": True}
         bt._refresh_browser_tool_notes()
         self.assertNotIn("当前浏览器后端能力限制", bt.browser_get_dom.description)
 

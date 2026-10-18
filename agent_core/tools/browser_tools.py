@@ -136,7 +136,7 @@ _workspace_ctx: ContextVar[Optional[Path]] = ContextVar("browser_tools_workspace
 #   - contenteditable : V8 未完整实现 isContentEditable → fill 不识别（可 JS 绕过）
 _BROWSER_BACKEND: Optional[str] = None        # 实际生效后端: "obscura" | "chromium"
 _BACKEND_TRY_CHROMIUM = not os.environ.get("OBSCURA_DISABLE_FALLBACK", "") == "1"
-_BACKEND_CAPS: dict = {"file": False, "iframe": False, "contenteditable": False}
+_BACKEND_CAPS: dict = {"file": False, "iframe": False, "contenteditable": False, "cjk": False}
 _TOOL_ORIG_DESC: dict = {}   # 工具原始 description 缓存（供能力提示可还原）
 
 
@@ -160,6 +160,8 @@ def _backend_caps_note() -> str:
         missing.append("不支持富文本编辑器(contenteditable)的 fill，需用 browser_evaluate 改 textContent")
     if not caps.get("iframe"):
         missing.append("iframe 子页内容不可达")
+    if not caps.get("cjk"):
+        missing.append("中文渲染为豆腐块（缺 --font-dir 字形体），中文页面截图/文本不可读，请改用 Chromium 后端或补配字体")
     if not missing:
         return ""
     note = "⚠️ 当前浏览器后端能力限制: " + "；".join(missing) + "。"
@@ -239,25 +241,81 @@ _PROBE_CAPS_JS = """() => ({
   })()
 })"""
 
+# CJK 字形渲染探测：真实截图中单个中文字形应产生大量着墨像素（笔画）。
+# 豆腐块/缺字形时着墨像素稀疏。取"字形着墨像素数"为判据（单字，白底黑字）。
+# 实测基准：无 font-dir ≈ 236px；有 font-dir ≈ 1263px。阈值取 ~500px 区分。
+_CJK_PROBE_HTML = (
+    '<body style="margin:0;background:#fff;">'
+    '<div style="position:fixed;top:0;left:0;width:160px;height:64px;'
+    'background:#fff;color:#000;font-size:48px;'
+    'font-family:\'Noto Sans CJK SC\',\'PingFang SC\',\'Microsoft YaHei\',sans-serif;">'
+    '建设</div></body>'
+)
+_CJK_PROBE_VIEWPORT = {"width": 200, "height": 90}
+_CJK_PROBE_CLIP = {"x": 0, "y": 0, "width": 160, "height": 64}
+# 单字真实字形 vs 豆腐块的着墨像素阈值（实验标定，见 _cjk_has_glyphs 注释）
+_CJK_INK_THRESHOLD = 500
+
+
+async def _cjk_has_glyphs(browser) -> bool:
+    """用真实截图判定后端能否渲染 CJK 字形（白底黑字单字着墨像素）。
+
+    为什么不用 canvas 测文本：canvas 2D 文本渲染路径与页面 CSS 排版路径在
+    Obscura 里是独立的，canvas 即使缺字体也可能返回无抗锯齿块，会误判。
+    因此用 set_content + screenshot 的真实排版路径，数"建设"两字的着墨像素。
+    真实性体现在：字形笔画产生大量非白像素；豆腐块只有稀疏的矩形轮廓。
+    返回 False 表示 CJK 渲染为豆腐块（缺字形），无法正常阅读中文。
+    """
+    ctx = None
+    try:
+        ctx = await browser.new_context(viewport=_CJK_PROBE_VIEWPORT)
+        page = await ctx.new_page()
+        await page.set_content(_CJK_PROBE_HTML)
+        await page.wait_for_timeout(200)
+        shot = await page.screenshot(clip=_CJK_PROBE_CLIP)
+        from PIL import Image
+        import io as _io
+        im = Image.open(_io.BytesIO(shot)).convert("RGB")
+        w, h = im.size
+        ink = sum(
+            1 for y in range(h) for x in range(w)
+            if all(ch < 230 for ch in im.getpixel((x, y)))
+        )
+        logger.info("CJK 字形探测: 着墨像素=%d(阈值=%d)", ink, _CJK_INK_THRESHOLD)
+        return ink >= _CJK_INK_THRESHOLD
+    except Exception as e:
+        logger.warning("CJK 字形探测失败(保守判为不支持): %s", e)
+        return False
+    finally:
+        if ctx is not None:
+            try:
+                await ctx.close()
+            except Exception:
+                pass
+
 
 async def _probe_backend_caps(browser) -> dict:
-    """在新后端上开一次性页面，探测 V8 能力缺口（file/iframe/contenteditable）。
+    """在新后端上开一次性页面，探测能力缺口。
 
-    用于 Obscura 接入时的 capability 记录：Obscura 的 V8 缺 DataTransfer、
-    contenteditable 规范实现，iframe 子帧 CDP 不通。Chromium 则全部为 true。
-    探测失败（页面都开不了）时保守返回全 False。
+    V8 能力（file/iframe/contenteditable）用 JS 探测；CJK 字形渲染用真实
+    截图探测（canvas 路径不可靠，见 _cjk_has_glyphs）。Obscura 缺 DataTransfer、
+    contenteditable 规范实现、iframe 子帧 CDP 不通，且若未配 --font-dir 中文字
+    渲染为豆腐块。Chromium 则全部为 true。探测失败保守返回全 False。
     """
-    caps = {"file": False, "iframe": False, "contenteditable": False}
+    caps = {"file": False, "iframe": False, "contenteditable": False, "cjk": False}
     try:
         ctx = await browser.new_context()
         page = await ctx.new_page()
         await page.goto("about:blank")
         data = await page.evaluate(_PROBE_CAPS_JS)
         if isinstance(data, dict):
-            caps.update({k: bool(data.get(k)) for k in caps})
+            caps.update({k: bool(data.get(k)) for k in ("file", "iframe", "contenteditable")})
         await ctx.close()
     except Exception as e:
-        logger.warning("后端能力探测失败(保守按不支持): %s", e)
+        logger.warning("V8 能力探测失败(保守按不支持): %s", e)
+
+    # CJK 字形需真实渲染路径，单独探测（与 V8 探测分开，避免互拖后腿）
+    caps["cjk"] = await _cjk_has_glyphs(browser)
     return caps
 
 
