@@ -372,17 +372,21 @@ class AgentConfig:
         if provider_id not in self.providers:
             return
         provider = self.providers[provider_id]
-        valid = [m for m in order if m in provider.get("models", [])]
-        # 收缩 models 到 order（order 即用户当前的权威模型列表），并清理关联字段残留
+        # ponytail: 令 order 为权威完整模型列表，直接落库 models。
+        # 原实现只保留"后端已存在的模型"(if m in models)+仅当删除时才写回，
+        # 导致前端新增模型(order 有、models 没有)被过滤掉、永不落库 → "Add Model 后保存丢失"。
+        # 现直接 models = order，同时支持新增(order 有而 models 没有)与删除(order 没有而 models 有)。
         if provider.get("is_custom"):
+            valid = list(order)
             removed = set(provider.get("models", [])) - set(valid)
-            if removed:
+            if provider.get("models") != valid:
                 provider["models"] = valid
+            if removed:
                 provider["vision_models"] = [m for m in provider.get("vision_models", []) if m not in removed]
                 if provider.get("model", "") in removed:
                     provider["model"] = valid[0] if valid else ""
                 self._sync_effective_model()
-        provider["model_order"] = valid
+        provider["model_order"] = list(order)
 
     def set_vision_models(self, provider_id: str, models: list[str]):
         """标记该 provider 下哪些模型支持图片输入（来自设置页的显式勾选）。"""
