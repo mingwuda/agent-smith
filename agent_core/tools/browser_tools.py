@@ -126,6 +126,70 @@ _contexts: dict[str, "BrowserContext"] = {}
 # 工作区（用于保存截图，ContextVar：每个 async 请求各自独立）
 _workspace_ctx: ContextVar[Optional[Path]] = ContextVar("browser_tools_workspace", default=None)
 
+# ── 双后端：默认 Obscura，失败自动回退 Chromium ──
+# Obscura 是轻量 Rust 无头浏览器（~40MB vs Chromium 365MB），通过 CDP 对接。
+# 接入策略（经 POC + 边界压测验证）：
+#   优先连 Obscura；连不上/启动失败/健康探针不过 → 自动回退本地 Chromium。
+# 已知缺口（POC 压测确认，capability 探测记录，供上层路由）：
+#   - file 上传       : V8 缺 DataTransfer API → set_input_files 不可用
+#   - iframe 子帧     : CDP 子帧 evaluate 静默失败 → 拿不到嵌套页内容
+#   - contenteditable : V8 未完整实现 isContentEditable → fill 不识别（可 JS 绕过）
+_BROWSER_BACKEND: Optional[str] = None        # 实际生效后端: "obscura" | "chromium"
+_BACKEND_TRY_CHROMIUM = not os.environ.get("OBSCURA_DISABLE_FALLBACK", "") == "1"
+_BACKEND_CAPS: dict = {"file": False, "iframe": False, "contenteditable": False}
+_TOOL_ORIG_DESC: dict = {}   # 工具原始 description 缓存（供能力提示可还原）
+
+
+def _obscura_cdp_url() -> Optional[str]:
+    """Obscura CDP 端点；未配置(env 为空)则视为不用 Obscura。"""
+    url = os.environ.get("OBSCURA_CDP_URL", "").strip()
+    return url or None
+
+
+def _backend_caps_note() -> str:
+    """生成后端能力限制提示（供 get_dom 输出 / 工具描述注入）。
+
+    仅当后端存在能力缺口时返回非空文案，让 agent 知情、自主避让。
+    Chromium 全能力 → 返回空串（不打扰）。探测为 None（尚未初始化）→ 返回空串。
+    """
+    caps = _BACKEND_CAPS
+    missing = []
+    if not caps.get("file"):
+        missing.append("不支持文件上传(input[type=file])")
+    if not caps.get("contenteditable"):
+        missing.append("不支持富文本编辑器(contenteditable)的 fill，需用 browser_evaluate 改 textContent")
+    if not caps.get("iframe"):
+        missing.append("iframe 子页内容不可达")
+    if not missing:
+        return ""
+    note = "⚠️ 当前浏览器后端能力限制: " + "；".join(missing) + "。"
+    note += "如遇上述场景，请改用 browser_evaluate 或说明受限。"
+    return "\n\n" + note
+
+
+def _refresh_browser_tool_notes():
+    """后端能力探测完成后，把能力提示写进相关工具 description，让 agent 调用前知情。
+
+    description 是运行时属性可改。首次修改前缓存原始描述，全能力(无提示)或后端
+    切换时能还原到干净描述，保证不残留旧提示。幂等。
+    """
+    global _TOOL_ORIG_DESC
+    note = _backend_caps_note()
+    for name in ("browser_get_dom", "browser_fill"):
+        tool = globals().get(name)
+        if tool is None or not hasattr(tool, "description"):
+            continue
+        # 缓存原始描述（仅首次取到的、未注入过的）
+        if name not in _TOOL_ORIG_DESC:
+            _TOOL_ORIG_DESC[name] = tool.description.split("\n\n⚠️ 当前浏览器后端能力限制")[0]
+        if not note:
+            tool.description = _TOOL_ORIG_DESC[name]
+        else:
+            # 幂等：从干净 base 重建，避免重复追加
+            base = _TOOL_ORIG_DESC[name]
+            if "当前浏览器后端能力限制" not in tool.description:
+                tool.description = base + note
+
 # 进程退出时清理浏览器资源
 import atexit
 atexit.register(_stop_browser_loop)
@@ -159,7 +223,87 @@ def _cleanup_expired_screenshots():
     if removed:
         logger.info("🧹 已清理 %d 个过期截图文件（超过 %d 天）",
                      removed, SCREENSHOT_RETENTION_DAYS)
+_PROBE_CAPS_JS = """() => ({
+  file: typeof DataTransfer !== 'undefined',
+  iframe: (() => { try {
+      const f = document.createElement('iframe');
+      f.src = 'about:blank';
+      document.body.appendChild(f);
+      // 等待子帧可达后探测其 evaluate；同步阶段无法等，仅判 API 存在
+      return true;
+  } catch(e){ return false; } })(),
+  contenteditable: (() => {
+      const el = document.createElement('div');
+      el.setAttribute('contenteditable','true');
+      return el.isContentEditable === true;
+  })()
+})"""
 
+
+async def _probe_backend_caps(browser) -> dict:
+    """在新后端上开一次性页面，探测 V8 能力缺口（file/iframe/contenteditable）。
+
+    用于 Obscura 接入时的 capability 记录：Obscura 的 V8 缺 DataTransfer、
+    contenteditable 规范实现，iframe 子帧 CDP 不通。Chromium 则全部为 true。
+    探测失败（页面都开不了）时保守返回全 False。
+    """
+    caps = {"file": False, "iframe": False, "contenteditable": False}
+    try:
+        ctx = await browser.new_context()
+        page = await ctx.new_page()
+        await page.goto("about:blank")
+        data = await page.evaluate(_PROBE_CAPS_JS)
+        if isinstance(data, dict):
+            caps.update({k: bool(data.get(k)) for k in caps})
+        await ctx.close()
+    except Exception as e:
+        logger.warning("后端能力探测失败(保守按不支持): %s", e)
+    return caps
+
+
+async def _init_browser_backend():
+    """初始化实际浏览器后端：优先 Obscura(CDP)，连不上/探针失败则回退 Chromium。
+
+    Obscura 通过 env OBSCURA_CDP_URL 指定端点（默认 http://127.0.0.1:9222）。
+    把结果写入 _browser / _BROWSER_BACKEND / _BACKEND_CAPS。
+    回退策略：连接抛错 → Chromium；连上但能力探测异常 → Chromium。
+    """
+    global _browser, _BROWSER_BACKEND, _BACKEND_CAPS
+    pw = globals().get("_playwright")
+    if pw is None:
+        pw = await __import__("playwright.async_api", fromlist=["async_playwright"]).async_playwright().start()
+        globals()["_playwright"] = pw
+
+    cdp_url = _obscura_cdp_url()
+
+    # 1) 尝试 Obscura
+    if cdp_url:
+        try:
+            logger.info("尝试连接 Obscura 浏览器后端: %s", cdp_url)
+            _browser = await pw.chromium.connect_over_cdp(cdp_url)
+            _BROWSER_BACKEND = "obscura"
+            _BACKEND_CAPS = await _probe_backend_caps(_browser)
+            logger.info("Obscura 后端已连接，能力=%s", _BACKEND_CAPS)
+            _refresh_browser_tool_notes()
+            return
+        except Exception as e:
+            logger.warning("Obscura CDP 连接失败(%s)，将尝试回退本地 Chromium", e)
+            _browser = None
+            _BROWSER_BACKEND = None
+
+    # 2) 回退 Chromium（默认允许；OBSCURA_DISABLE_FALLBACK=1 且 Obscura 失败 → 抛错）
+    if _BACKEND_TRY_CHROMIUM:
+        headless = os.environ.get("BROWSER_HEADLESS", "1") == "1"
+        _browser = await pw.chromium.launch(
+            headless=headless,
+            args=["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"],
+        )
+        _BROWSER_BACKEND = "chromium"
+        _BACKEND_CAPS = await _probe_backend_caps(_browser)
+        logger.info("已回退使用本地 Chromium 后端，能力=%s", _BACKEND_CAPS)
+        _refresh_browser_tool_notes()
+    else:
+        raise RuntimeError("Obscura CDP 不可用且已禁用 Chromium 回退(OBSCURA_DISABLE_FALLBACK=1)")
 
 async def _ensure_browser(thread_id: str = "default"):
     """惰性初始化浏览器实例，每个 thread_id 创建独立的上下文和页面。
@@ -175,20 +319,11 @@ async def _ensure_browser(thread_id: str = "default"):
 
     from playwright.async_api import async_playwright
 
-    # 首次启动浏览器（全局唯一，只启动一次）
+    # 首次启动浏览器（全局唯一，只启动一次）——优先 Obscura(CDP)，失败回退 Chromium
     if _browser is None:
-        # 在浏览器事件循环中用 asyncio.Lock 防止重复启动
         _playwright = await async_playwright().start()
-        headless = os.environ.get("BROWSER_HEADLESS", "1") == "1"
-        _browser = await _playwright.chromium.launch(
-            headless=headless,
-            args=[
-                "--no-sandbox",
-                "--disable-gpu",
-                "--disable-dev-shm-usage",
-            ],
-        )
-        logger.info("✅ 浏览器已启动（全局共享）")
+        await _init_browser_backend()
+        logger.info("✅ 浏览器已启动（全局共享，后端=%s）", _BROWSER_BACKEND)
 
     # 为该会话创建独立的 BrowserContext 和 Page
     ctx = await _browser.new_context(
@@ -209,7 +344,7 @@ async def _ensure_browser(thread_id: str = "default"):
 
 async def _close_browser():
     """关闭浏览器实例（释放所有会话的页面）"""
-    global _browser, _playwright, _pages, _contexts
+    global _browser, _playwright, _pages, _contexts, _BROWSER_BACKEND
     try:
         # 关闭所有独立上下文和页面
         for tid, ctx in list(_contexts.items()):
@@ -230,6 +365,7 @@ async def _close_browser():
     finally:
         _browser = None
         _playwright = None
+        _BROWSER_BACKEND = None
 
 
 def release_browser_page(thread_id: str):
@@ -815,7 +951,8 @@ def browser_get_dom(config: RunnableConfig, max_depth: int = 5) -> str:
             "\n\n▸=可交互元素  ·=结构节点  sel= 后的选择器可直接用于 click/fill"
             "  密码字段已脱敏  单节点文本超长已截断（全文用 browser_get_text）"
         )
-        return header + body + footer
+        # 注入后端能力限制（仅 Obscura 等有缺口时非空），让 agent 知情避让
+        return header + body + footer + _backend_caps_note()
 
     try:
         return _run_browser(_run(), thread_id)
