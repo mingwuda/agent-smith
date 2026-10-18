@@ -2137,11 +2137,13 @@ function handleStreamEvent(data) {
         currentBotMsgEl = document.createElement('div');
         if (hasToolCalls && currentStepsEl) {
           // 本次请求已出现过工具调用 → 中间轮次的正文大概率是推理，
-          // 不再乐观流入最终输出区（避免「先进答案区→thought 归位→闪烁」），
-          // 改为以思考样式流入步骤区；若本轮实为最终答案，done 事件会
-          // 复用该节点、改为 agent-final-output 并迁回答案区（见 done 的兜底迁移）。
+          // 不再乐观流入最终输出区（避免「先进答案区→thought 归位→闪烁」）。
+          // ponytail: 这段推理正文必须以思考样式插入"执行区顶部"(工具卡上方)，
+          // 而非 appendChild 底部——否则会先出现在已渲染的工具调用下方，随后
+          // 又被 thought/tool_start 移除并在顶部重建 → 视觉上"从工具下方跳到工具上方"。
+          // 同时本轮已完成的是思考，done 事件会复用该节点改为 agent-final-output 并迁回答案区。
           currentBotMsgEl.className = 'thought-block streaming-final';
-          currentStepsEl.appendChild(currentBotMsgEl);
+          currentStepsEl.insertBefore(currentBotMsgEl, currentStepsEl.firstChild);
         } else {
           // 简单问答（尚无工具调用）：流式期间临时气泡挂在第二段 body，
           // 不提前暴露第三段「最终回答」标题栏；done 时统一迁移进 _answerBodyEl。
