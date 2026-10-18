@@ -351,6 +351,279 @@ async def _page_info(page) -> str:
         return f"（无法获取页面信息: {e}）"
 
 
+# ── DOM 结构化抽取（借鉴 OpenMinis getBackbone：可见叶子 + 向上合并 + 深度截断 + 密码脱敏）──
+# inner_text 全文对"点哪个按钮"噪声大、整页截图烧 token；本工具生成紧凑的
+# tag/selector/rect/text/href 树，让导航/点击决策成本更低。
+# 安全：input/textarea 的 value 一概不捕获；密码字段在捕获期即标注 [redacted]。
+_DOM_MAX_OUTPUT_CHARS = 8000   # 工具返回给模型的总字符上限（超出按行截断）
+
+# 页面侧执行：返回 {nodes: [{tag,id,type,sel,rect,href,label,text,interactive,depth}], truncated}
+# ponytail: MAX_NODES/MAX_VISITS 双上限是防大页面（Google 级 DOM）把 evaluate 拖垮的保险丝，
+# 不是常规路径；正常页面远低于此。
+_DOM_EXTRACT_JS = r"""
+(maxDepth) => {
+  const REDACTED = '[redacted]';
+  const MAX_NODES = 400;
+  const MAX_VISITS = 3000;
+  const MAX_TEXT = 60;
+  const SKIP_TAGS = ['SCRIPT','STYLE','NOSCRIPT','TEMPLATE','HEAD','META','LINK','TITLE','SVG','PATH','BR','HR'];
+  const INTERACTIVE_TAGS = ['A','BUTTON','INPUT','SELECT','TEXTAREA','SUMMARY'];
+  const INTERACTIVE_ROLES = ['button','link','checkbox','radio','textbox','searchbox','switch','tab','menuitem','option','combobox','slider','spinbutton','treeitem'];
+  const INTERACTIVE_SELECTOR = 'a[href],button,input,select,textarea,summary,[role],[onclick]';
+
+  if (!document.body) return { nodes: [], truncated: false };
+  const out = [];
+  let truncated = false;
+  let visits = 0;
+
+  function isVisible(el) {
+    try {
+      if (el.getAttribute && el.getAttribute('aria-hidden') === 'true') return false;
+      const cs = getComputedStyle(el);
+      if (cs.display === 'none' || cs.visibility === 'hidden' || cs.opacity === '0') return false;
+      return true;  // 注意：不按零尺寸剪枝——空的 <a>/<button>/<input> 是合法点击目标
+    } catch (e) { return false; }
+  }
+
+  function visibleKids(el) {
+    const kids = [];
+    for (const n of el.childNodes) {
+      if (n.nodeType !== 1 || SKIP_TAGS.indexOf(n.tagName) >= 0 || !isVisible(n)) continue;
+      // 零尺寸且无子元素的非交互叶子（布局间隔 div/span）无信息量，跳过以省 visits
+      if (n.children.length === 0 && INTERACTIVE_TAGS.indexOf(n.tagName) < 0) {
+        try {
+          const r = n.getBoundingClientRect();
+          if (r.width === 0 && r.height === 0) continue;
+        } catch (e) {}
+      }
+      kids.push(n);
+    }
+    return kids;
+  }
+
+  function clean(s) {
+    return String(s == null ? '' : s).replace(/[\x00-\x1f]/g, ' ').replace(/\s+/g, ' ').trim();
+  }
+
+  function cssPath(el) {
+    const parts = [];
+    let node = el;
+    while (node && node.nodeType === 1 && node !== document.documentElement && parts.length < 6) {
+      if (node.id && /^[A-Za-z][\w-]*$/.test(node.id)) { parts.unshift('#' + node.id); break; }
+      const parent = node.parentElement;
+      if (!parent) break;
+      let sel = node.tagName.toLowerCase();
+      const same = Array.prototype.filter.call(parent.children, (c) => c.tagName === node.tagName);
+      if (same.length > 1) sel += ':nth-of-type(' + (same.indexOf(node) + 1) + ')';
+      parts.unshift(sel);
+      node = parent;
+    }
+    return parts.join('>') || 'body';
+  }
+
+  function ownText(el) {
+    let t = '';
+    for (const n of el.childNodes) {
+      if (n.nodeType === 3) t += n.data;
+    }
+    return clean(t);
+  }
+
+  function describe(el, depth) {
+    const tag = el.tagName.toLowerCase();
+    const node = { tag: tag, sel: cssPath(el), depth: depth };
+    const role = (el.getAttribute('role') || '').toLowerCase();
+    const type = (el.getAttribute('type') || '').toLowerCase();
+    if (el.id) node.id = el.id;
+    try {
+      const r = el.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0) {
+        node.rect = [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)];
+      }
+    } catch (e) {}
+    if (tag === 'a') {
+      const href = el.getAttribute('href');
+      if (href) node.href = href.slice(0, 120);
+    }
+    let interactive = INTERACTIVE_ROLES.indexOf(role) >= 0
+      || INTERACTIVE_TAGS.indexOf(el.tagName) >= 0
+      || el.hasAttribute('onclick');
+    try { if (el.isContentEditable) interactive = true; } catch (e) {}
+    if (tag === 'input' || tag === 'select' || tag === 'textarea') {
+      node.type = type || tag;
+      // 密码字段：捕获期脱敏。注意本实现对 input/textarea 一概不读取 value。
+      if (type === 'password') node.text = REDACTED;
+      const label = el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.getAttribute('name') || '';
+      if (label) node.label = clean(label).slice(0, MAX_TEXT);
+    } else {
+      let ot = ownText(el);
+      // 交互元素文本常包在 <span> 里（<button><span>提交</span></button>），做单层继承
+      if (!ot && interactive) {
+        let inherited = '';
+        for (const n of el.childNodes) {
+          if (n.nodeType === 1 && SKIP_TAGS.indexOf(n.tagName) < 0) inherited += ownText(n) + ' ';
+        }
+        ot = clean(inherited);
+      }
+      if (ot) node.text = ot.slice(0, MAX_TEXT);
+    }
+    if (interactive) node.interactive = true;
+    return node;
+  }
+
+  function walk(el, depth) {
+    if (out.length >= MAX_NODES || visits >= MAX_VISITS) { truncated = true; return; }
+    visits += 1;
+    if (depth > maxDepth) { truncated = true; return; }
+    const info = describe(el, depth);
+    const kids = visibleKids(el);
+    let subtreeInteractive = false;
+    if (kids.length >= 2 && !info.interactive && !info.text) {
+      try { subtreeInteractive = el.querySelector(INTERACTIVE_SELECTOR) !== null; } catch (e) {}
+    }
+    // 「向上合并」：纯包装节点不单独成节点，子元素沿用当前深度渲染，
+    // 避免 <div><div><div><button> 逐层刷屏。仅当节点自身有信息量时才成节点：
+    // 可交互 / 有自有文本 / body 根 / 含交互后代的真正分组（≥2 个子元素）。
+    if (!(info.interactive || info.text || depth === 0 || (kids.length >= 2 && subtreeInteractive))) {
+      for (const k of kids) walk(k, depth);
+      return;
+    }
+    out.push(info);
+    for (const k of kids) {
+      if (out.length >= MAX_NODES) { truncated = true; return; }
+      const kInfo = describe(k, depth + 1);
+      // 文本已被父行继承展示过的纯文本叶子不再重复成行
+      if (!kInfo.interactive && !kInfo.href && !kInfo.id && !kInfo.type && kInfo.text
+          && info.text && info.text.indexOf(kInfo.text) >= 0) {
+        continue;
+      }
+      walk(k, depth + 1);
+    }
+  }
+
+  walk(document.body, 0);
+  return { nodes: out, truncated: truncated };
+}
+"""
+
+# DOM 稳定判定：MutationObserver 监听 childList/attributes/characterData，
+# 连续 quiet_intervals 个 quiet_ms 静默期无变更即判定稳定（替代必超时的 networkidle）。
+_DOM_STABLE_JS = r"""
+(opts) => new Promise((resolve) => {
+  const timeoutMs = opts.timeout, quietMs = opts.quiet_ms, quietCount = opts.quiet_intervals;
+  let lastMutation = performance.now();
+  let quiet = 0;
+  let mutations = 0;
+  const observer = new MutationObserver((records) => {
+    lastMutation = performance.now();
+    mutations += records.length;
+    quiet = 0;
+  });
+  try {
+    observer.observe(document.documentElement || document.body, {
+      subtree: true, childList: true, attributes: true, characterData: true,
+    });
+  } catch (e) {
+    resolve({ stable: false, elapsedMs: 0, mutations: 0, reason: String(e) });
+    return;
+  }
+  const t0 = performance.now();
+  const timer = setInterval(() => {
+    const now = performance.now();
+    if (now - lastMutation >= quietMs) quiet += 1; else quiet = 0;
+    const done = quiet >= quietCount;
+    const timedOut = now - t0 >= timeoutMs;
+    if (done || timedOut) {
+      clearInterval(timer);
+      observer.disconnect();
+      resolve({ stable: done && !timedOut, elapsedMs: Math.round(now - t0), mutations });
+    }
+  }, quietMs);
+});
+"""
+
+
+def _format_dom_node(n: dict) -> str:
+    """把 JS 返回的单个 DOM 节点格式化为一行（纯函数，便于测试）。
+
+    行格式: {缩进}{▸| } <tag#id[type]> href=… label=… "text" (x,y w×h)  sel=选择器
+    """
+    indent = "  " * max(0, int(n.get("depth", 0) or 0))
+    tag = str(n.get("tag", "?"))
+    head = f"<{tag}"
+    if n.get("id"):
+        head += f"#{n['id']}"
+    if n.get("type"):
+        head += f"[{n['type']}]"
+    head += ">"
+    marker = "▸" if n.get("interactive") else " "
+    line = f"{indent}{marker} {head}"
+    meta = []
+    if n.get("href"):
+        meta.append(f"href={n['href']}")
+    if n.get("label"):
+        meta.append(f"label={n['label']}")
+    if n.get("text"):
+        meta.append(f"\"{n['text']}\"")
+    rect = n.get("rect")
+    if isinstance(rect, (list, tuple)) and len(rect) == 4:
+        x, y, w, h = rect
+        meta.append(f"({x},{y} {w}×{h})")
+    if meta:
+        line += " " + " ".join(meta)
+    if n.get("sel"):
+        line += f"  sel={n['sel']}"
+    return line
+
+
+def _format_dom_tree(nodes: list) -> tuple[str, bool]:
+    """格式化 DOM 节点列表为缩进树文本。返回 (文本, 是否被截断)。"""
+    lines = []
+    total = 0
+    truncated = False
+    for n in nodes:
+        line = _format_dom_node(n)
+        if total + len(line) + 1 > _DOM_MAX_OUTPUT_CHARS:
+            truncated = True
+            break
+        lines.append(line)
+        total += len(line) + 1
+    text = "\n".join(lines)
+    if truncated:
+        text += (
+            f"\n…（DOM 过大，仅展示前 {len(lines)} 个节点）"
+            "——缩小 max_depth、用 browser_get_text 读全文，或先 browser_scroll_to 定位目标区域"
+        )
+    return text, truncated
+
+
+# browser_navigate 的 networkidle 兜底参数：SPA / 长轮询 / WebSocket 页面 networkidle
+# 几乎必超时，改等 DOM 静默。
+# ponytail: 仅在 networkidle 超时后才跑——静态页 networkidle 通常快速成功，不增加其延迟；
+# 5s 上限是「多数 SPA 约 1.5s 内静默」与「不过度拖慢导航」的折中。
+_NAV_DOM_STABLE: dict = {"timeout": 5000, "quiet_ms": 500, "quiet_intervals": 3}
+
+
+async def _wait_dom_stable(page) -> bool:
+    """等页面 DOM 停止变化，返回是否稳定。
+
+    供 browser_navigate 的 networkidle 兜底路径调用（共享同一 page，不重入
+    _run_browser 的会话锁）。 evaluate 失败（如导航中上下文被销毁）时视为不稳定
+    但不抛出——兜底等待不应阻断导航本身。
+    """
+    try:
+        data = await page.evaluate(_DOM_STABLE_JS, _NAV_DOM_STABLE)
+        data = data or {}
+        logger.info(
+            "DOM 静默判定: stable=%s elapsed=%sms mutations=%s",
+            data.get("stable"), data.get("elapsedMs"), data.get("mutations"),
+        )
+        return bool(data.get("stable"))
+    except Exception as e:
+        logger.info("DOM 静默判定跳过: %s", e)
+        return False
+
+
 @tool
 def browser_navigate(url: str, config: RunnableConfig) -> str:
     """导航到指定 URL 并返回页面标题和截图。
@@ -362,14 +635,21 @@ def browser_navigate(url: str, config: RunnableConfig) -> str:
 
     async def _run():
         page = await _ensure_browser(thread_id)
+        unstable_note = ""
         try:
             logger.info(f"🌐 正在导航到: {url}")
-            # 先尝试 networkidle，失败后用 domcontentloaded 兜底
+            # 先尝试 networkidle，失败后（SPA/长轮询/WebSocket 几乎必超时）用 DOM 静默判定兜底
             await page.goto(url, wait_until="domcontentloaded", timeout=120000)
             try:
                 await page.wait_for_load_state("networkidle", timeout=10000)
             except Exception:
-                logger.info("networkidle 超时，但页面已加载（domcontentloaded）")
+                logger.info("networkidle 超时，改用 DOM 静默判定等待页面稳定")
+                if not await _wait_dom_stable(page):
+                    unstable_note = (
+                        "\n\n⚠️ 页面 DOM 持续变动（可能仍在加载/动画/轮询）。"
+                        "可调大 browser_wait_for_dom_stable 的 timeout 继续等，"
+                        "或直接 browser_get_dom 抽取当前结构。"
+                    )
             logger.info(f"✅ 导航完成: {url}")
         except Exception as e:
             logger.error(f"导航失败: {e}")
@@ -385,7 +665,7 @@ def browser_navigate(url: str, config: RunnableConfig) -> str:
         
         if screenshot.get("size"):
             result += f"页面尺寸: {screenshot['size']}\n"
-        return result
+        return result + unstable_note
 
     try:
         return _run_browser(_run(), thread_id)
@@ -497,6 +777,50 @@ def browser_get_text(selector: str, config: RunnableConfig) -> str:
         return _run_browser(_run(), thread_id)
     except Exception as e:
         return f"❌ 获取文本失败: {type(e).__name__}: {e}"
+
+
+@tool
+def browser_get_dom(config: RunnableConfig, max_depth: int = 5) -> str:
+    """抽取当前页面的结构化 DOM 树（紧凑 tag/selector/rect/text/href）。
+
+    与 browser_get_text（纯文本全文）互补：本工具输出页面结构与可交互元素，
+    每个元素带 CSS 选择器（sel=），可直接用于 browser_click / browser_fill。
+    密码字段在捕获期已脱敏为 [redacted]，input 的 value 一概不外泄。
+
+    适用场景：判断"点哪个按钮 / 填哪个输入框"、元素多而杂的页面、
+    纯文本无法体现页面结构时。省 token：不用整页截图也能定位元素。
+
+    参数:
+      max_depth: 树的最大深度，默认 5（越大越详细，输出越长，上限 8）
+    """
+    thread_id = config.get("configurable", {}).get("thread_id", "default")
+    max_depth = min(max(1, int(max_depth)), 8)
+
+    async def _run():
+        page = await _ensure_browser(thread_id)
+        info = await _page_info(page)
+        try:
+            data = await page.evaluate(_DOM_EXTRACT_JS, max_depth)
+        except Exception as e:
+            return f"❌ DOM 抽取失败: {type(e).__name__}: {e}"
+        nodes = data.get("nodes", []) if isinstance(data, dict) else []
+        if not nodes:
+            return f"（未抽取到可见节点，页面可能为空白或仍在加载）\n\n{info}"
+        body, truncated = _format_dom_tree(nodes)
+        header = (
+            f"🌳 DOM 结构树（深度≤{max_depth}，{len(nodes)} 节点"
+            f"{'，已截断' if truncated else ''}）\n{info}\n\n"
+        )
+        footer = (
+            "\n\n▸=可交互元素  ·=结构节点  sel= 后的选择器可直接用于 click/fill"
+            "  密码字段已脱敏  单节点文本超长已截断（全文用 browser_get_text）"
+        )
+        return header + body + footer
+
+    try:
+        return _run_browser(_run(), thread_id)
+    except Exception as e:
+        return f"❌ DOM 抽取失败: {type(e).__name__}: {e}"
 
 
 @tool
@@ -660,6 +984,62 @@ def browser_wait_for_element(selector: str, config: RunnableConfig, timeout: int
         return _run_browser(_run(), thread_id)
     except Exception as e:
         return f"❌ 等待元素失败: {type(e).__name__}: {e}"
+
+
+@tool
+def browser_wait_for_dom_stable(
+    config: RunnableConfig,
+    timeout: int = 10000,
+    quiet_ms: int = 500,
+    quiet_intervals: int = 3,
+) -> str:
+    """等待页面 DOM 停止变化（MutationObserver 静默判定）。
+
+    networkidle 在 SPA / 长轮询 / WebSocket 页面几乎必超时（当前实现靠 10s
+    超时兜底）；本工具改为监听 DOM 实际变更：连续 quiet_intervals 个 quiet_ms
+    静默期内无任何 childList / attributes / characterData 变更，即判定稳定。
+
+    适用场景：点击后等动态内容渲染、SPA 路由切换、网络空闲但 DOM 仍在变的页面。
+
+    参数:
+      timeout: 总超时毫秒数，默认 10000（10 秒，上限 60000）
+      quiet_ms: 单个静默期毫秒数，默认 500
+      quiet_intervals: 连续静默期次数，默认 3（即约 1.5s 无变更）
+    """
+    thread_id = config.get("configurable", {}).get("thread_id", "default")
+    timeout = min(max(1000, int(timeout)), 60000)
+    quiet_ms = min(max(100, int(quiet_ms)), 5000)
+    quiet_intervals = min(max(2, int(quiet_intervals)), 10)
+
+    async def _run():
+        page = await _ensure_browser(thread_id)
+        try:
+            data = await page.evaluate(
+                _DOM_STABLE_JS,
+                {"timeout": timeout, "quiet_ms": quiet_ms, "quiet_intervals": quiet_intervals},
+            )
+        except Exception as e:
+            return f"❌ 等待 DOM 稳定失败: {type(e).__name__}: {e}"
+        data = data or {}
+        info = await _page_info(page)
+        elapsed = data.get("elapsedMs", 0)
+        mutations = data.get("mutations", 0)
+        if data.get("stable"):
+            return (
+                f"✅ DOM 已稳定（{elapsed}ms 内共 {mutations} 次变更后进入静默）\n\n{info}\n\n"
+                "建议接着用 browser_get_dom 抽取结构树，或 browser_click 操作目标元素。"
+            )
+        return (
+            f"⏱️ DOM 在 {timeout}ms 内未完全稳定（已等 {elapsed}ms，共 {mutations} 次变更）"
+            "——页面可能仍在加载 / 动画 / 轮询。\n\n"
+            f"{info}\n\n"
+            "可调大 timeout 继续等，或直接用 browser_get_dom 抽取当前结构。"
+        )
+
+    try:
+        return _run_browser(_run(), thread_id)
+    except Exception as e:
+        return f"❌ 等待 DOM 稳定失败: {type(e).__name__}: {e}"
 
 
 @tool
@@ -2149,12 +2529,14 @@ TOOLS = [
     browser_fill,
     browser_select,
     browser_get_text,
+    browser_get_dom,
     browser_screenshot,
     browser_evaluate,
     browser_wait,
     browser_takeover,
     browser_scroll_to,
     browser_wait_for_element,
+    browser_wait_for_dom_stable,
     browser_drag,
     browser_slide,
     browser_captcha_recognize,

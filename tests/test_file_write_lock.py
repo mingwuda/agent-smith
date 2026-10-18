@@ -36,16 +36,16 @@ def test_write_tools_locked():
         assert raw.__wrapped__ is not raw, f"{name} wrapper 指向自身，未真正包裹"
 
 
-def test_locked_serializes_read_modify_write(tmp_path):
-    """两个线程并发 edit_file 同一文件：不互相覆盖，结果完整。
+def test_locked_concurrent_edits_isolated(tmp_path):
+    """两个线程并发编辑各自文件的 read-modify-write：锁保证互不干扰、不死锁。
 
-    用 edit_file 把 [[A]] 同时替换为其它标记再替换回，模拟并发 read-modify-write。
-    存在锁时，两次替换串行执行，文件内容必为完整形态；
-    若不加锁，可能读到半截/互相覆盖导致内容损坏。
+    设计说明（旧版为何是竞态用例）：旧版让两线程对同一共享 token [[A]]
+    各自做「替换-还原」——一个线程改掉 [[A]] 后，另一个线程的替换必然
+    「未找到匹配」，锁越正确该交错越必然发生，纯属调度侥幸才能通过。
+    工具级锁能保证的是：并发下不死锁、不报错、各写各的；跨 read+write
+    两次工具调用的 RMW 原子性无法在工具粒度回归，由
+    test_write_lock_serializes_critical_section 直接验锁互斥补足。
     """
-    target = tmp_path / "f.txt"
-    target.write_text("[[A]]", encoding="utf-8")
-
     results = {}
     barrier = threading.Barrier(2)
 
@@ -55,11 +55,14 @@ def test_locked_serializes_read_modify_write(tmp_path):
         file_tools.set_workspace(tmp_path)
         # logger.langchain 由 StructuredTool 正常执行；直接用 .func（持锁的裸 wrapper）
         ed = file_tools.edit_file.func
-        barrier.wait()
+        own = f"f_{tag}.txt"
+        (tmp_path / own).write_text("[[A]]", encoding="utf-8")
+        barrier.wait()  # 同时起跑，制造锁竞争
         for i in range(20):
-            resp = ed("f.txt", "[[A]]", f"[{tag}{i}]")
+            resp = ed(own, "[[A]]", f"[{tag}{i}]")
             assert "已替换" in resp or "未变化" in resp, resp
-            ed("f.txt", f"[{tag}{i}]", "[[A]]")
+            resp = ed(own, f"[{tag}{i}]", "[[A]]")
+            assert "已替换" in resp or "未变化" in resp, resp
         results[tag] = True
 
     threads = [threading.Thread(target=worker, args=(t,)) for t in ("x", "y")]
@@ -67,10 +70,39 @@ def test_locked_serializes_read_modify_write(tmp_path):
         t.start()
     for t in threads:
         t.join(timeout=20)
+        assert not t.is_alive(), "线程 20s 未结束——写锁死锁？"
 
-    final = target.read_text(encoding="utf-8")
-    assert final == "[[A]]", f"并发读写损坏文件: {final!r}"
-    assert len(results) == 2
+    assert len(results) == 2, f"有线程中途失败: {results}"
+    for tag in ("x", "y"):
+        assert (tmp_path / f"f_{tag}.txt").read_text(encoding="utf-8") == "[[A]]"
+
+
+def test_write_lock_serializes_critical_section():
+    """_WRITE_LOCK 确实互斥：临界区内不允许另一线程进入（确定性验证串行化）。"""
+    order = []
+
+    def worker(tag: str):
+        with file_tools._WRITE_LOCK:
+            order.append(f"{tag}-enter")
+            time.sleep(0.05)  # 撑住临界区，给另一线程闯入的机会
+            order.append(f"{tag}-exit")
+
+    threads = [threading.Thread(target=worker, args=(t,)) for t in ("x", "y")]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=5)
+        assert not t.is_alive()
+
+    # enter/exit 必须严格交替（x-enter,x-exit,y-enter,y-exit 的任意线程顺序），
+    # 不允许出现 x-enter,y-enter 这种交错
+    assert len(order) == 4, f"进入次数异常: {order}"
+    for i in range(0, 4, 2):
+        pair = order[i:i + 2]
+        assert pair[0].endswith("-enter") and pair[1].endswith("-exit"), \
+            f"临界区被闯入（enter 后紧跟另一线程 enter）: {order}"
+        assert pair[0].split("-")[0] == pair[1].split("-")[0], \
+            f"enter/exit 不属于同一线程: {order}"
 
 
 def test_write_tools_still_function(tmp_path):

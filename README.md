@@ -332,11 +332,13 @@ Moss Agent 内置 Playwright 浏览器，支持完整的页面交互流程：
 | `browser_fill` | 在输入框中填入文本 |
 | `browser_select` | 选择下拉框选项 |
 | `browser_get_text` | 获取元素文本内容 |
+| `browser_get_dom` | 抽取结构化 DOM 树（紧凑 selector/rect/text，密码脱敏） |
 | `browser_screenshot` | 截图（全页或视口） |
 | `browser_evaluate` | 执行 JavaScript |
 | `browser_wait` | 等待指定时长 |
 | `browser_scroll_to` | 滚动页面到元素或坐标 |
 | `browser_wait_for_element` | 等待元素出现/可见 |
+| `browser_wait_for_dom_stable` | 等待 DOM 停止变化（SPA/长轮询页替代 networkidle） |
 | `browser_drag` | 拖拽元素到目标位置 |
 | `browser_slide` | 滑块操作（含人类化轨迹模拟） |
 

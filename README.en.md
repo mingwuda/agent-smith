@@ -257,11 +257,13 @@ Moss Agent includes a built-in Playwright browser with full page interaction sup
 | `browser_fill` | Fill text into an input field |
 | `browser_select` | Select a dropdown option |
 | `browser_get_text` | Get the text content of an element |
+| `browser_get_dom` | Extract a structured DOM tree (compact selector/rect/text, password redacted) |
 | `browser_screenshot` | Take a screenshot (full page or viewport) |
 | `browser_evaluate` | Execute JavaScript |
 | `browser_wait` | Wait for a specified duration |
 | `browser_scroll_to` | Scroll to an element or coordinates |
 | `browser_wait_for_element` | Wait for an element to appear/be visible |
+| `browser_wait_for_dom_stable` | Wait for the DOM to stop changing (replaces networkidle on SPA/long-poll pages) |
 | `browser_drag` | Drag an element to a target |
 | `browser_slide` | Slide operation with human-like trajectory simulation |
 

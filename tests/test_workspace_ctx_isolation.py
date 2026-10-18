@@ -15,6 +15,13 @@ def _ws_of(uid: str) -> Path:
     return Path.home() / ".desktop_agent" / "sessions" / uid / "ws"
 
 
+def _expected_ws(uid: str, marker: str) -> str:
+    # set_workspace 会 expanduser().resolve()（防符号链接逃逸，是正确行为）；
+    # macOS 上 /var 是 /private/var 的符号链接，必须比对解析后的路径，
+    # 否则拿未解析的 Path.home() 比字符串必挂。
+    return str((_ws_of(uid) / marker).resolve())
+
+
 async def _run_request(uid: str, marker: str):
     from agent_core.tools import file_tools, shell_tools
 
@@ -32,7 +39,7 @@ async def _run_request(uid: str, marker: str):
 
 def test_workspace_propagates_into_tool_thread():
     ws = asyncio.run(_run_request("alice", "REQ_A"))
-    assert ws[0] == str(_ws_of("alice") / "REQ_A"), f"工作区未传播: {ws[0]}"
+    assert ws[0] == _expected_ws("alice", "REQ_A"), f"工作区未传播: {ws[0]}"
 
 
 def test_concurrent_requests_isolated():
@@ -43,8 +50,8 @@ def test_concurrent_requests_isolated():
         return await t_alice, await t_bob
 
     r_alice, r_bob = asyncio.run(_main())
-    assert r_alice[0] == str(_ws_of("alice") / "REQ_A"), r_alice
+    assert r_alice[0] == _expected_ws("alice", "REQ_A"), r_alice
     assert r_alice[1] == "alice" and r_alice[2] == "alice", r_alice
-    assert r_bob[0] == str(_ws_of("bob") / "REQ_B"), r_bob
+    assert r_bob[0] == _expected_ws("bob", "REQ_B"), r_bob
     assert r_bob[1] == "bob" and r_bob[2] == "bob", r_bob
     assert r_alice != r_bob

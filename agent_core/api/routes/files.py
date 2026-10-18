@@ -86,6 +86,28 @@ def _resolve_allowed_root(request: Request, path: Optional[str] = None, project_
     return target
 
 
+def _assert_path_in_scope(request: Request, target: Path, project_id: str = "") -> None:
+    """校验 target 在用户 workspace（或项目 directory_path）内，否则 403。
+
+    read/write 共用同一套包含检查（均在 resolve 之后的路径上比对，防符号链接逃逸）。
+    ponytail: base 也必须 resolve——macOS 上 /var 是 /private/var 的符号链接，
+    base 不解析而 target 解析时，relative_to 会把域内路径误判成域外。
+    """
+    uid = getattr(request.state, "user_id", "default")
+    base = _resolve_base_path(request)
+    if project_id:
+        import session_store as _ss
+        project = _ss.get_project(uid, project_id)
+        if project and project.get("directory_path"):
+            base = Path(project["directory_path"])
+    if base:
+        base = Path(base).resolve()
+        try:
+            target.relative_to(base)
+        except ValueError:
+            raise HTTPException(status_code=403, detail="禁止访问项目目录外的路径")
+
+
 def _is_text_file(file_path: Path) -> bool:
     """判断是否为可预览的文本文件"""
     ext = file_path.suffix.lower()
@@ -172,18 +194,14 @@ async def read_file(
     ponytail: 大文件分页读——offset 起始行 + limit 限定行数，避免把几 MB 文件
     一次性塞给前端 textarea。前端滚动到接近底部时再请求下一批。
     """
-    from services.workspace import _workspace_for_user
+    target = Path(path).expanduser().resolve()
 
-    target = Path(path).resolve()
-
-    # 安全检查：不允许路径穿越
-    _dangerous_prefixes = ['/etc', '/usr', '/var', '/System', '/Library']
-    for prefix in _dangerous_prefixes:
-        try:
-            if str(target).startswith(prefix):
-                raise HTTPException(status_code=403, detail=f"禁止访问系统目录")
-        except (ValueError, TypeError):
-            pass
+    # 权限：只允许读工作区（或项目 directory_path）内的文件——与 /files/write
+    # 同一套包含检查。旧实现是「resolve 后系统目录前缀黑名单」，有两个洞：
+    # ① macOS 上 /etc 解析成 /private/etc，绕过黑名单拿到 200 + 全文；
+    # ② 黑名单对 /var/www 这类「域内但路径含黑名单前缀」的合法项目误报 403。
+    # 包含检查严格更强（拦全部域外路径），黑名单已删。
+    _assert_path_in_scope(request, target, project_id)
 
     if not target.exists():
         raise HTTPException(status_code=404, detail=f"文件不存在: {path}")
@@ -267,20 +285,9 @@ async def write_file(request: Request, payload: dict = Body(...)):
 
     target = Path(path).expanduser().resolve()
 
-    # 权限：必须在用户 workspace 内（或项目 directory_path 内）
-    uid = getattr(request.state, "user_id", "default")
+    # 权限：必须在用户 workspace 内（或项目 directory_path 内）——与 /files/read 共用
     project_id = (payload or {}).get("project_id", "").strip()
-    base = _resolve_base_path(request)
-    if project_id:
-        import session_store as _ss
-        project = _ss.get_project(uid, project_id)
-        if project and project.get("directory_path"):
-            base = Path(project["directory_path"]).resolve()
-    if base:
-        try:
-            target.relative_to(base)
-        except ValueError:
-            raise HTTPException(status_code=403, detail="禁止写入工作区外的文件")
+    _assert_path_in_scope(request, target, project_id)
 
     if not target.exists():
         raise HTTPException(status_code=404, detail=f"文件不存在: {path}")
