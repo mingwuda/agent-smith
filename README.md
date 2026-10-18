@@ -323,7 +323,36 @@ git_revert       git_command
 
 ### 浏览器自动化
 
-Moss Agent 内置 Playwright 浏览器，支持完整的页面交互流程：
+Moss Agent 内置浏览器自动化，默认采用 **Obscura** 轻量无头浏览器，失败时自动回退到本地 Chromium。双后端引擎通过运行时探测自动选择，agent 调用前即可感知当前后端能力差异。
+
+**双后端引擎：**
+
+1. **Obscura**：轻量无头浏览器（内存约 30MB，远小于 Chromium）。优先使用；若连接失败自动回退 Chromium。对 CJK 中文字形渲染需要显式配置字体目录（见下）。
+2. **Chromium**：完整渲染能力，作为默认回退引擎（无需额外配置）。
+
+**引擎选择环境变量：**
+
+```bash
+# 可选：连到独立的 Obscura CDP 服务（未设置时走默认 Chromium 回退）
+OBSCURA_CDP_URL=http://127.0.0.1:9222
+```
+
+**启动 Obscura（systemd 推荐）：** `deploy/obscura.service` 提供一键接入，注意**必须带 `--font-dir` 指到系统 CJK 字体目录**，否则中文会渲染成豆腐块：
+
+```bash
+obscura serve -p 9222 --host 127.0.0.1 --allow-private-network \
+  --font-dir /usr/share/fonts/google-noto-cjk
+```
+
+> ⚠️ **已知能力差异**：Obscura 为压内存精简了 V8 的字形渲染与部分 DOM 能力，因此中文字形、文件上传（`file`）、富文本 `contenteditable` 的 fill 可能受限或需要额外配置。接入后系统会对每类后端做**运行时能力探测**，并把这些差异（如「不支持文件上传 / 中文渲染为豆腐块」）写进工具描述，让 agent 在调用前就知情。若你的页面强依赖这些能力（尤其中文内容密集页面），务必为 Obscura 配好 `--font-dir`，或用回退 Chromium。
+
+**验证当前真正走哪个后端：**
+
+- 看后端启动日志：含 `Obscura 后端已连接，能力={'file': False, 'iframe': ...}` 即走 Obscura；`后端=chromium` 为回退。
+- 对比进程内存：Obscura 单进程约 40MB；Chromium 是 6+ 进程合计 300MB+。
+- 运行时 `browser_get_dom` / `browser_fill` 工具描述中若出现「⚠️ 当前浏览器后端能力限制」提示，即当前是 Obscura（Chromium 全能力时提示为空，完全不打扰）。
+
+**支持的工具（全部经由同一全局浏览器实例，当前后端下均生效）：**
 
 | 工具 | 用途 |
 |------|------|

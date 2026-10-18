@@ -248,7 +248,36 @@ Other files only provide download links.
 
 ### Browser Automation
 
-Moss Agent includes a built-in Playwright browser with full page interaction support:
+Moss Agent includes a built-in browser automation layer. It defaults to the lightweight **Obscura** headless browser and automatically falls back to local Chromium on failure. The engine is picked at runtime via capability probing, so agents know the current backend's limits before calling browser tools.
+
+**Two backends:**
+
+1. **Obscura** — lightweight headless browser (~30MB memory, far smaller than Chromium). Preferred; falls back to Chromium if unreachable. CJK glyph rendering requires an explicit font directory (see below).
+2. **Chromium** — full rendering capability, the default fallback (no extra config).
+
+**Engine selection env var:**
+
+```bash
+# Optional: point to a standalone Obscura CDP service (unset → default Chromium fallback)
+OBSCURA_CDP_URL=http://127.0.0.1:9222
+```
+
+**Start Obscura (systemd recommended):** `deploy/obscura.service` wires it up. You **must pass `--font-dir` pointing to the system CJK font directory**, otherwise Chinese renders as tofu/placeholder boxes:
+
+```bash
+obscura serve -p 9222 --host 127.0.0.1 --allow-private-network \
+  --font-dir /usr/share/fonts/google-noto-cjk
+```
+
+> ⚠️ **Known capability gaps:** Obscura trims V8 glyph rendering and some DOM features to save memory, so Chinese glyphs, file upload (`file`), and rich-text `contenteditable` fill may be limited or need extra config. The runtime probes each backend and folds these gaps (e.g. "file upload unsupported / Chinese rendered as tofu") into the tool description so agents know before calling. If your pages rely on these (especially Chinese-heavy pages), configure `--font-dir` for Obscura or fall back to Chromium.
+
+**Verifying which backend is active:**
+
+- Startup log: `Obscura 后端已连接，能力={'file': False, 'iframe': ...}` means Obscura; `backend=chromium` means fallback.
+- Compare process memory: Obscura is a single ~40MB process; Chromium is 6+ processes totaling 300MB+.
+- At runtime, if `browser_get_dom` / `browser_fill` tool descriptions include a "⚠️ browser backend capability limit" note, Obscura is active (fully-capable Chromium shows no note).
+
+**Supported tools (all share one global browser instance and work on whichever backend is active):**
 
 | Tool | Purpose |
 |------|---------|
