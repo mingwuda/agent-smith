@@ -89,6 +89,102 @@ class FakePage:
         }
 
 
+class FakePersistentCtx:
+    """stub：launch_persistent_context 的返回值（一个 BrowserContext）"""
+    def __init__(self, caps=None):
+        self._browser = FakeBrowser(caps)
+        self._pages = []
+    @property
+    def browser(self):
+        return self._browser
+    async def new_page(self):
+        p = FakePage(self._browser._caps)
+        self._pages.append(p)
+        return p
+    async def close(self):
+        pass
+
+
+class PersistableBackendTest(unittest.TestCase):
+    """MOSS_PERSISTABLE_BROWSER=1 → 优先 Chromium persistent context"""
+
+    def setUp(self):
+        _reset()
+
+    def test_persistable_uses_launch_persistent_context(self):
+        """开启持久化 → 走 launch_persistent_context，不用 connect_cdp/new_context 隔离"""
+        launch_calls = []
+
+        async def run():
+            fake_pw = FakePlaywright(launch=lambda **k: FakeBrowser())
+            # 覆盖 chromium.launch_persistent_context 为假持久上下文
+            fake_pc = FakePersistentCtx()
+            fake_pw.chromium.launch_persistent_context = (
+                lambda user_dir, **k: _await_later(fake_pc)
+            )
+            with mock.patch.object(bt, "persistable", True):
+                await _call_init(fake_pw, "http://127.0.0.1:9222")
+            self.assertIsNotNone(bt._persistent_ctx)
+            self.assertIs(bt._persistent_ctx, fake_pc)
+            self.assertEqual(bt._BROWSER_BACKEND, "chromium")
+            # 持久化模式即使 Obscura 可用也不用 Obscura（可靠性优先）
+            self.assertEqual(fake_pw.chromium.cdp_calls, 0)
+        asyncio.run(run())
+
+    def test_persistable_falls_back_to_obscura_on_launch_failure(self):
+        """持久上下文启动失败 → 回退常规后端（Obscura/Chromium），不抛错"""
+        async def run():
+            async def boom(user_dir, **k):
+                raise RuntimeError("profile locked")
+            fake_pw = FakePlaywright(
+                cdp=lambda url: FakeBrowser(caps={
+                    "file": False, "iframe": False, "contenteditable": False}),
+                launch=lambda **k: FakeBrowser())
+            fake_pw.chromium.launch_persistent_context = boom
+            with mock.patch.object(bt, "persistable", True):
+                await _call_init(fake_pw, "http://127.0.0.1:9222")
+            self.assertIsNone(bt._persistent_ctx)
+            self.assertEqual(bt._BROWSER_BACKEND, "obscura")
+        asyncio.run(run())
+
+    def test_non_persistable_ignores_persistent_path(self):
+        """关闭持久化 → 不调用 launch_persistent_context"""
+        launch_calls = []
+        async def run():
+            fake_pw = FakePlaywright(launch=lambda **k: FakeBrowser())
+            fake_pw.chromium.launch_persistent_context = (
+                lambda *a, **k: launch_calls.append(1) or _await_later(FakePersistentCtx())
+            )
+            with mock.patch.object(bt, "persistable", False):
+                await _call_init(fake_pw, "http://127.0.0.1:9222")
+            self.assertEqual(launch_calls, [])
+            self.assertIsNone(bt._persistent_ctx)
+        asyncio.run(run())
+
+    def test_ensure_browser_reuses_persistent_ctx(self):
+        """持久化模式 → _ensure_browser 在共享持久上下文开页，不 new_context"""
+        async def run():
+            fake_pw = FakePlaywright(launch=lambda **k: FakeBrowser())
+            fake_pc = FakePersistentCtx()
+            fake_pw.chromium.launch_persistent_context = (
+                lambda user_dir, **k: _await_later(fake_pc))
+            with mock.patch.object(bt, "persistable", True):
+                await _call_init(fake_pw, "http://127.0.0.1:9222")
+                page = await bt._ensure_browser("sess-1")
+                self.assertIsNotNone(page)
+                # 持久上下文只创建了一个页面，且 _contexts 指向持久 ctx
+                self.assertEqual(len(fake_pc._pages), 1)
+                self.assertIs(bt._contexts["sess-1"], fake_pc)
+            await bt._close_browser()
+            self.assertIsNone(bt._persistent_ctx)
+        asyncio.run(run())
+
+
+async def _await_later(v):
+    """把同步值包装成可 await 的协程（模拟 async 返回）"""
+    return v
+
+
 class ObscuraUrlTest(unittest.TestCase):
     @mock.patch.dict("os.environ", {}, clear=False)
     def setUp(self):

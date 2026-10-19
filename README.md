@@ -346,6 +346,19 @@ obscura serve -p 9222 --host 127.0.0.1 --allow-private-network \
 
 > ⚠️ **已知能力差异**：Obscura 为压内存精简了 V8 的字形渲染与部分 DOM 能力，因此中文字形、文件上传（`file`）、富文本 `contenteditable` 的 fill 可能受限或需要额外配置。接入后系统会对每类后端做**运行时能力探测**，并把这些差异（如「不支持文件上传 / 中文渲染为豆腐块」）写进工具描述，让 agent 在调用前就知情。若你的页面强依赖这些能力（尤其中文内容密集页面），务必为 Obscura 配好 `--font-dir`，或用回退 Chromium。
 
+**🔒 CDP 端口安全提醒（P1-①）**：Obscura 的 CDP 服务**原生不提供 token 鉴权**（连接时带不带 header 服务端都不校验）。因此必须保持 `--host 127.0.0.1`（仅本机后端进程可连），**切勿把 9222 端口暴露到局域网/公网**。项目前端也**无直连 CDP 的入口**，浏览器操作一律经由后端进程代理，这是已固化的安全边界。若确需跨机访问，请在外部加一层带鉴权的反向代理（如 nginx `auth_basic` / Tailscale）。
+
+**💾 登录态持久化（P1-②）**：默认会话间 cookie/localStorage 是内存态，后端重启即登出各站点。如需登录态跨重启保留，给主进程加：
+
+```bash
+MOSS_PERSISTABLE_BROWSER=1                      # 开启登录态持久化
+MOSS_BROWSER_PROFILE_DIR=/path/to/profile       # 可选用指定 profile 目录（默认 ~/.moss/browser-profile）
+```
+
+- 开启后，浏览器走 **Chromium 的 `launch_persistent_context`**（可靠落盘 Cookies/LocalStorage，实测验证），**多会话共用一个持久化上下文** → 登录态全局唯一且重启后保留。
+- 这是**有意权衡**：持久化模式走 Chromium（牺牲 Obscura 低内存优势），以换取**可靠的登录态落盘**。经实测 **Obscura 的 `--storage-dir` 在 CDP 客户端写入场景不落盘**，故不做默认依赖。
+- 部署侧 `deploy/obscura.service` 也配了 `--storage-dir` 作**尽力而为**（可能不落盘，不保证）。**可靠登录态持久化请用按上面的 `MOSS_PERSISTABLE_BROWSER=1`**。
+
 **验证当前真正走哪个后端：**
 
 - 看后端启动日志：含 `Obscura 后端已连接，能力={'file': False, 'iframe': ...}` 即走 Obscura；`后端=chromium` 为回退。

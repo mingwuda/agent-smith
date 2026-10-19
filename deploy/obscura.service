@@ -6,7 +6,11 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=/opt/desktop-agent/deps/obscura
-ExecStart=/opt/desktop-agent/deps/obscura/obscura serve -p 9222 --host 127.0.0.1 --allow-private-network --font-dir /usr/share/fonts/google-noto-cjk
+# 注意：必须 --host 127.0.0.1（CDP 不鉴权，仅允许本机后端进程连接，勿暴露端口）。
+# --storage-dir 尽力而为的 Obscura 侧持久化（CDP 写入实测不落盘，登录态持久化
+#   可靠保证依赖主进程的 MOSS_PERSISTABLE_BROWSER=1 → Chromium persistent context，
+#   见 agent_core/tools/browser_tools.py 说明）。
+ExecStart=/opt/desktop-agent/deps/obscura/obscura serve -p 9222 --host 127.0.0.1 --allow-private-network --font-dir /usr/share/fonts/google-noto-cjk --storage-dir /opt/desktop-agent/.browser_profiles/obscura
 Restart=always
 RestartSec=3
 

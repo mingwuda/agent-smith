@@ -271,6 +271,19 @@ obscura serve -p 9222 --host 127.0.0.1 --allow-private-network \
 
 > ⚠️ **Known capability gaps:** Obscura trims V8 glyph rendering and some DOM features to save memory, so Chinese glyphs, file upload (`file`), and rich-text `contenteditable` fill may be limited or need extra config. The runtime probes each backend and folds these gaps (e.g. "file upload unsupported / Chinese rendered as tofu") into the tool description so agents know before calling. If your pages rely on these (especially Chinese-heavy pages), configure `--font-dir` for Obscura or fall back to Chromium.
 
+**🔒 CDP port security (P1-①):** Obscura's CDP server has **no native token auth** (it does not validate any header on connect). So you **must** keep `--host 127.0.0.1` (only the local backend process can connect) and **never expose port 9222** to LAN/public. The frontend has no direct CDP entry point — all browser actions go through the backend process, a hardened boundary. If cross-machine access is truly needed, put an authenticated reverse proxy (nginx `auth_basic` / Tailscale) in front.
+
+**💾 Login-state persistence (P1-②):** By default cookies/localStorage are in-memory per session and are lost when the backend restarts. To keep login state across restarts, set on the main process:
+
+```bash
+MOSS_PERSISTABLE_BROWSER=1                    # enable login-state persistence
+MOSS_BROWSER_PROFILE_DIR=/path/to/profile     # optional profile dir (default ~/.moss/browser-profile)
+```
+
+- When enabled, the browser uses Chromium's `launch_persistent_context` (reliably persists Cookies/LocalStorage, verified), and **all sessions share one persistent context** → a single global login state that survives restarts.
+- This is a **deliberate trade-off**: persistence mode runs Chromium (giving up Obscura's low-memory advantage) in exchange for **reliable state persistence**. Testing shows Obscura's `--storage-dir` does **not** flush for CDP-client writes, so it's not the default path.
+- `deploy/obscura.service` also sets `--storage-dir` as best-effort (may not persist). For **reliable** persistence use `MOSS_PERSISTABLE_BROWSER=1` above.
+
 **Verifying which backend is active:**
 
 - Startup log: `Obscura 后端已连接，能力={'file': False, 'iframe': ...}` means Obscura; `backend=chromium` means fallback.

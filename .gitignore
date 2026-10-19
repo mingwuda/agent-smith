@@ -20,6 +20,7 @@ venv/
 
 # 调试/构建产物（本地临时，不入仓）
 .browser_screenshots/
+.browser_profiles/
 build_*.log
 
 # Electron（node_modules 含 Electron 运行时二进制，体积大，由 npm install 重新生成）

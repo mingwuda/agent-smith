@@ -122,6 +122,11 @@ _playwright = None
 # 每个会话独立页面（key=thread_id，避免会话间页面状态串扰）
 _pages: dict[str, "Page"] = {}
 _contexts: dict[str, "BrowserContext"] = {}
+# 可持久化的 Chromium persistent context（仅 MOSS_PERSISTABLE_BROWSER=1 时启用）。
+# 对应 launch_persistent_context 的返回值（一个 BrowserContext，持 user_data_dir 落盘
+# Cookies/LocalStorage）。多会话共享同一持久化上下文 → 登录态全局唯一且在重启后保留；
+# 这正是单用户内网工作台想要的行为。_browser 指向其 .browser 以便能力探测等复用。
+_persistent_ctx: Optional["BrowserContext"] = None
 
 # 工作区（用于保存截图，ContextVar：每个 async 请求各自独立）
 _workspace_ctx: ContextVar[Optional[Path]] = ContextVar("browser_tools_workspace", default=None)
@@ -144,6 +149,19 @@ def _obscura_cdp_url() -> Optional[str]:
     """Obscura CDP 端点；未配置(env 为空)则视为不用 Obscura。"""
     url = os.environ.get("OBSCURA_CDP_URL", "").strip()
     return url or None
+
+
+# ── 可持久化浏览器（登录态持久化）──
+# 背景：Obscura 的 --storage-dir 在 CDP 客户端写入场景实测不落盘（cookie/localStorage
+# 仍在内存，但不写回磁盘），因此登录态持久化不可依赖它。可靠路径是 Chromium 的
+# launch_persistent_context（user_data_dir 落盘 Cookies/LocalStorage/IndexedDB）。
+# 策略（经实验验证）：
+#   - MOSS_PERSISTABLE_BROWSER=1 开启持久化；此时优先 Chromium persistent context，
+#     以获得可靠的登录态落盘（牺牲 Obscura 低内存优势）。
+#   - 若同时 OBSCURA_CDP_URL 可用，仍尽力为 Obscura 配 --storage-dir（尽力而为，可能不落盘），
+#     但持久化可靠保证依赖 Chromium persistent 路径。
+persistable = os.environ.get("MOSS_PERSISTABLE_BROWSER", "") == "1"
+_persistent_profile_dir = os.environ.get("MOSS_BROWSER_PROFILE_DIR", "").strip()
 
 
 def _backend_caps_note() -> str:
@@ -325,8 +343,13 @@ async def _init_browser_backend():
     Obscura 通过 env OBSCURA_CDP_URL 指定端点（默认 http://127.0.0.1:9222）。
     把结果写入 _browser / _BROWSER_BACKEND / _BACKEND_CAPS。
     回退策略：连接抛错 → Chromium；连上但能力探测异常 → Chromium。
+
+    若 MOSS_PERSISTABLE_BROWSER=1（登录态持久化）：优先走 Chromium 的
+    launch_persistent_context（user_data_dir 可靠落盘 Cookies/LocalStorage），
+    并把持久上下文存入 _persistent_ctx。此时 Obscura 仅作为持久上下文不可用
+    （如 persistent 启动失败）时的回退，以免丢失持久化可靠保证。
     """
-    global _browser, _BROWSER_BACKEND, _BACKEND_CAPS
+    global _browser, _BROWSER_BACKEND, _BACKEND_CAPS, _persistent_ctx
     pw = globals().get("_playwright")
     if pw is None:
         pw = await __import__("playwright.async_api", fromlist=["async_playwright"]).async_playwright().start()
@@ -334,7 +357,31 @@ async def _init_browser_backend():
 
     cdp_url = _obscura_cdp_url()
 
-    # 1) 尝试 Obscura
+    # 持久化模式：优先可靠落盘的 Chromium persistent context
+    if persistable:
+        try:
+            user_dir = _persistent_profile_dir or os.path.join(
+                os.path.expanduser("~"), ".moss", "browser-profile")
+            os.makedirs(user_dir, exist_ok=True)
+            _persistent_ctx = await pw.chromium.launch_persistent_context(
+                user_dir,
+                headless=os.environ.get("BROWSER_HEADLESS", "1") == "1",
+                viewport={"width": 1280, "height": 720},
+                args=["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"],
+            )
+            _browser = _persistent_ctx.browser
+            _BROWSER_BACKEND = "chromium"
+            _BACKEND_CAPS = await _probe_backend_caps(_browser)
+            logger.info("已启用 Chromium 持久化后端（profile=%s），能力=%s", user_dir, _BACKEND_CAPS)
+            _refresh_browser_tool_notes()
+            return
+        except Exception as e:
+            logger.warning("Chromium 持久化启动失败(%s)，回退常规后端", e)
+            _browser = None
+            _BROWSER_BACKEND = None
+            _persistent_ctx = None
+
+    # 常规模式：优先 Obscura(CDP)
     if cdp_url:
         try:
             logger.info("尝试连接 Obscura 浏览器后端: %s", cdp_url)
@@ -368,6 +415,10 @@ async def _ensure_browser(thread_id: str = "default"):
 
     浏览器进程（Chromium）全局唯一，但每个会话拥有独立的
     BrowserContext（隔离 cookie/localStorage）和 Page。
+
+    持久化模式下（persistable 且 _persistent_ctx 存在）：所有会话共用同一
+    持久化上下文，直接在其中创建页面（cookie/localStorage 共享并落盘），
+    不新建隔离 context——这是登录态持久化的刻意行为（单用户工作台）。
     """
     global _browser, _playwright
 
@@ -383,7 +434,15 @@ async def _ensure_browser(thread_id: str = "default"):
         await _init_browser_backend()
         logger.info("✅ 浏览器已启动（全局共享，后端=%s）", _BROWSER_BACKEND)
 
-    # 为该会话创建独立的 BrowserContext 和 Page
+    # 持久化模式：在共享持久化上下文内开页面（不经 new_context，保留登录态）
+    if _persistent_ctx is not None:
+        page = await _persistent_ctx.new_page()
+        _contexts[thread_id] = _persistent_ctx
+        _pages[thread_id] = page
+        logger.info("✅ 已为会话 %s 在持久化上下文中创建页面", thread_id[:16])
+        return page
+
+    # 常规模式：为该会话创建独立的 BrowserContext 和 Page
     ctx = await _browser.new_context(
         viewport={"width": 1280, "height": 720},
         user_agent=(
@@ -402,10 +461,15 @@ async def _ensure_browser(thread_id: str = "default"):
 
 async def _close_browser():
     """关闭浏览器实例（释放所有会话的页面）"""
-    global _browser, _playwright, _pages, _contexts, _BROWSER_BACKEND
+    global _browser, _playwright, _pages, _contexts, _BROWSER_BACKEND, _persistent_ctx
     try:
-        # 关闭所有独立上下文和页面
+        # 关闭所有独立上下文和页面（持久化模式 _contexts 里压的是 persistent_ctx，
+        # 多个 thread 引用同一实例，去重后执行一次 close 即可）
+        closed = set()
         for tid, ctx in list(_contexts.items()):
+            if id(ctx) in closed:
+                continue
+            closed.add(id(ctx))
             try:
                 await ctx.close()
             except Exception:
@@ -413,8 +477,8 @@ async def _close_browser():
         _contexts.clear()
         _pages.clear()
 
-        # 关闭浏览器进程
-        if _browser:
+        # 持久化上下文已随上面关闭；普通模式单独关 browser
+        if _persistent_ctx is None and _browser is not None:
             await _browser.close()
         if _playwright:
             await _playwright.stop()
@@ -424,6 +488,7 @@ async def _close_browser():
         _browser = None
         _playwright = None
         _BROWSER_BACKEND = None
+        _persistent_ctx = None
 
 
 def release_browser_page(thread_id: str):
