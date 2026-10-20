@@ -290,6 +290,11 @@ MOSS_BROWSER_PROFILE_DIR=/path/to/profile     # optional profile dir (default ~/
 - Compare process memory: Obscura is a single ~40MB process; Chromium is 6+ processes totaling 300MB+.
 - At runtime, if `browser_get_dom` / `browser_fill` tool descriptions include a "⚠️ browser backend capability limit" note, Obscura is active (fully-capable Chromium shows no note).
 
+**🖥 Browser live view + takeover (P1-③ A/B)**: A new "Browser" menu item under the project `⋯` menu opens a sidebar panel:
+- **Live view (A)**: polls `GET /api/browser/live` to show the page the agent is currently driving — live screenshot (data-url) + title/URL + structured DOM summary, auto-refreshing every 3s (stops when the panel hides). Now you can actually *see* what the agent is doing in the browser.
+- **Takeover (B)**: the panel offers an "Open in real browser" button (`window.open` on the current URL), so you can open the same page in your own browser and keep operating (form state / login / page state left by the agent). When the backend is Obscura (CDP), the takeover endpoint's `cdp_url` field exposes the DevTools entry for `chrome://inspect`.
+- Both backend endpoints are auth-guarded (`/api/browser/live`, `/api/browser/takeover-url`), so the existing security boundary is unchanged.
+
 **Supported tools (all share one global browser instance and work on whichever backend is active):**
 
 | Tool | Purpose |

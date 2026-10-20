@@ -24,6 +24,9 @@ async function openCronPanel(projectId) {
 
   const listEl = document.getElementById('project-list');
   if (listEl) listEl.style.display = 'none';
+  const bPanel = document.getElementById('browser-panel');
+  if (bPanel) bPanel.style.display = 'none';
+  if (window.stopBrowserPolling) window.stopBrowserPolling();
   panel.style.display = 'flex';
   document.querySelectorAll('.sidebar-accordion').forEach(a => a.style.display = 'none');
   loadCronTasks();

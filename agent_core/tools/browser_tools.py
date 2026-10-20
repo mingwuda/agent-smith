@@ -215,6 +215,63 @@ import atexit
 atexit.register(_stop_browser_loop)
 
 
+# ── 实时视图：UV 当前浏览器页面快照（供 /api/browser/live 端点轮询）──
+# 让「人看到 agent 正在浏览器里干什么」（方案 A）。纯只读快照，不创建浏览器、
+# 不占用会话页面锁，避免与正在进行的 agent 操作冲突。浏览器未初始化时返回空壳。
+def get_live_view(thread_id: str = "default") -> dict:
+    """获取某会话当前浏览器页面的实时快照（url/title/截图 base64/DOM 摘要）。
+
+    返回 {available, url, title, screenshot (data-url), dom (预览), backend}。
+    浏览器尚未初始化或该会话无页面时 available=False。
+    """
+    # 浏览器从未初始化 → 无可用视图
+    if _browser is None and not _pages:
+        return {"available": False, "backend": _BROWSER_BACKEND,
+                "url": "", "title": "", "screenshot": "", "dom": "", "note": "浏览器尚未使用"}
+
+    async def _snapshot():
+        page = _pages.get(thread_id)
+        # 未指定 thread（或该会话无页面）→ 退到任意活跃页面（实时视图通常不关心具体会话）
+        if page is None and thread_id in ("", "default") and _pages:
+            page = next(iter(_pages.values()))
+        if page is None:
+            return {"available": False, "backend": _BROWSER_BACKEND,
+                    "url": "", "title": "", "screenshot": "", "dom": "",
+                    "note": "该会话尚未打开浏览器页面"}
+        try:
+            url = await asyncio.wait_for(page.evaluate("window.location.href"), timeout=8)
+            title = ""
+            try:
+                title = await asyncio.wait_for(page.title(), timeout=5)
+            except Exception:
+                pass
+            png = b""
+            try:
+                png = await asyncio.wait_for(page.screenshot(type="png", full_page=False, timeout=20000), timeout=22)
+            except Exception as e:
+                logger.warning("live view 截图失败: %s", e)
+            import base64 as _b64
+            data_url = "data:image/png;base64," + _b64.b64encode(png).decode("ascii") if png else ""
+            # DOM 摘要（复用结构化抽取，截断到可读预览）
+            dom_preview = ""
+            try:
+                nodes = await asyncio.wait_for(page.evaluate(_DOM_EXTRACT_JS, 2), timeout=8)
+                nodes = nodes or {}
+                dom_preview, _ = _format_dom_tree((nodes or {}).get("nodes") or [])
+                dom_preview = dom_preview[:600]
+            except Exception as e:
+                logger.warning("live view DOM 抽取失败: %s", e)
+            return {"available": True, "backend": _BROWSER_BACKEND,
+                    "url": url or "", "title": title or "", "screenshot": data_url,
+                    "dom": dom_preview, "note": ""}
+        except Exception as e:
+            return {"available": False, "backend": _BROWSER_BACKEND,
+                    "url": "", "title": "", "screenshot": "", "dom": "",
+                    "note": f"读取当前页面失败: {type(e).__name__}: {e}"}
+
+    return _run_async(_snapshot())
+
+
 def set_workspace(path: Path):
     _workspace_ctx.set(path.expanduser().resolve())
     # 工作区变更时清理过期截图

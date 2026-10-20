@@ -568,6 +568,7 @@ from api.routes.projects import router as projects_router
 from api.routes.cron import router as cron_router
 from api.routes.files import router as files_router
 from api.routes.admin_evolution import router as admin_evolution_router
+from api.routes.browser import router as browser_router
 
 app.include_router(auth_router)
 app.include_router(agent_router)
@@ -584,6 +585,7 @@ app.include_router(projects_router)
 app.include_router(cron_router)
 app.include_router(files_router)
 app.include_router(admin_evolution_router)
+app.include_router(browser_router)
 
 
 # ---------- 入口 ----------

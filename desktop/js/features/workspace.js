@@ -423,11 +423,12 @@ async function openCommitsPanel(projectId) {
 
   const listEl = document.getElementById('project-list');
   if (listEl) listEl.style.display = 'none';
-  // 隐藏其他侧边栏面板（文件浏览器 / 定时任务）
-  ['file-browser-panel', 'cron-panel'].forEach(id => {
+  // 隐藏其他侧边栏面板（文件浏览器 / 定时任务 / 浏览器）
+  ['file-browser-panel', 'cron-panel', 'browser-panel'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.style.display = 'none';
   });
+  if (window.stopBrowserPolling) window.stopBrowserPolling();
   panel.style.display = 'flex';
   document.querySelectorAll('.sidebar-accordion').forEach(a => a.style.display = 'none');
   loadCommitList();
@@ -620,6 +621,7 @@ function toggleProjectMenu(btn, projectId) {
     { icon: '🕘', label: t('viewCommits') || '查看提交清单', fn: () => openCommitsPanel(projectId) },
     { icon: '✎', label: t('editProject') || '编辑', fn: () => editProject(projectId) },
     { icon: '⏰', label: t('cronTasks') || '定时任务', fn: () => openCronPanel(projectId) },
+    { icon: '🖥', label: t('browserLive') || '浏览器', fn: () => openBrowserPanel(projectId) },
     { icon: '🗑', label: t('deleteProject') || '删除', danger: true, fn: () => deleteProject(projectId) },
   ];
   items.forEach(it => {

@@ -365,8 +365,12 @@ MOSS_BROWSER_PROFILE_DIR=/path/to/profile       # 可选用指定 profile 目录
 - 对比进程内存：Obscura 单进程约 40MB；Chromium 是 6+ 进程合计 300MB+。
 - 运行时 `browser_get_dom` / `browser_fill` 工具描述中若出现「⚠️ 当前浏览器后端能力限制」提示，即当前是 Obscura（Chromium 全能力时提示为空，完全不打扰）。
 
-**支持的工具（全部经由同一全局浏览器实例，当前后端下均生效）：**
+**🖥 浏览器实时视图 + 接管（P1-③方案 A/B）**：项目 ⋯ 菜单新增「浏览器」入口，打开侧边栏面板：
+- **实时视图（方案 A）**：轮询 `GET /api/browser/live` 展示 agent 当前正在操作的浏览器页面——实时截图（data-url）+ 标题/URL + 结构化 DOM 摘要，每 3s 自动刷新（面板隐藏即停）。你终于能「看见」agent 在浏览器里干什么。
+- **接管（方案 B）**：面板提供「在真实浏览器打开」按钮（`window.open` 当前页 URL），你可在自己的浏览器里直接打开继续操作（表单、登录态、页面状态即 agent 留下的现场）。当后端为 Obscura（CDP）时，接管端点的 `cdp_url` 字段给出 DevTools 入口供 `chrome://inspect` 连接。
+- 后端端点有鉴权（`/api/browser/live`、`/api/browser/takeover-url` 均校验登录），不改变现有安全边界。
 
+**支持的工具（全部经由同一全局浏览器实例，当前后端下均生效）：**
 | 工具 | 用途 |
 |------|------|
 | `browser_navigate` | 导航到指定 URL |

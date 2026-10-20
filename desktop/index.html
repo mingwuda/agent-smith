@@ -99,6 +99,18 @@
     </div>
   </div>
 
+  <!-- 浏览器实时视图面板（从项目 ⋯ 菜单「浏览器」进入，类似文件浏览器） -->
+  <div id="browser-panel" class="browser-panel" style="display:none;">
+    <div class="fb-header">
+      <button class="fb-back" onclick="exitBrowserPanel()" title="返回项目列表">←</button>
+      <div class="fb-path" id="browser-panel-title">🖥 浏览器</div>
+      <button class="fb-refresh" onclick="browserLiveRefresh()" data-i18n-title="browserRefresh" title="刷新">⟳</button>
+    </div>
+    <div class="browser-live" id="browser-live">
+      <div class="browser-live-empty">加载中…</div>
+    </div>
+  </div>
+
   <!-- 监控手风琴 -->
   <div class="sidebar-accordion" id="monitoring-accordion">
     <button class="accordion-toggle" type="button" aria-expanded="false" aria-controls="monitoring-body" onclick="toggleSidebarAccordion('monitoring-accordion')">
@@ -779,6 +791,7 @@
   <script src="/static/js/features/file-preview.js"></script>
   <script src="/static/js/features/workspace.js"></script>
   <script src="/static/js/features/cron.js"></script>
+  <script src="/static/js/features/browser-live.js"></script>
   <script src="/static/js/features/settings.js"></script>
 <script src="/static/js/features/database.js"></script>
 <script src="/static/js/features/permissions.js"></script>
