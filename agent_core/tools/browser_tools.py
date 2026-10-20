@@ -234,6 +234,21 @@ def get_live_view(thread_id: str = "default") -> dict:
         # 未指定 thread（或该会话无页面）→ 退到任意活跃页面（实时视图通常不关心具体会话）
         if page is None and thread_id in ("", "default") and _pages:
             page = next(iter(_pages.values()))
+        # 持久化兜底：会话结束（release 已 pop 掉 _pages 引用）但页面仍保留在共享
+        # 持久上下文里。实时视图应能继续展示这个"现场"（如刚登录过的站点），
+        # 而不是因为 _pages 无引用就报"尚未打开"。取最后一个可见页面。
+        if page is None and _persistent_ctx is not None:
+            try:
+                pages = _persistent_ctx.pages
+                for p in reversed(pages):
+                    try:
+                        if p.url and not p.url.startswith("about:"):
+                            page = p
+                            break
+                    except Exception:
+                        continue
+            except Exception as e:
+                logger.warning("live view 持久上下文兜底取页面失败: %s", e)
         if page is None:
             return {"available": False, "backend": _BROWSER_BACKEND,
                     "url": "", "title": "", "screenshot": "", "dom": "",
@@ -566,12 +581,19 @@ def release_browser_page(thread_id: str):
 
     async def _release():
         global _pages, _contexts, _page_locks
-        if thread_id in _contexts:
-            try:
-                await _contexts[thread_id].close()
-            except Exception:
-                pass
-            del _contexts[thread_id]
+        ctx = _contexts.get(thread_id)
+        if ctx is not None:
+            # 持久化上下文是全局共享的（仅一个实例，多会话共用），关闭它会导致
+            # 整个工作台的浏览器现场/登录态丢失。release 会话时只释放引用，不关它——
+            # 页面保留在共享上下文里，供 /api/browser/live 实时视图继续展示。
+            if ctx is _persistent_ctx:
+                _contexts.pop(thread_id, None)
+            else:
+                try:
+                    await ctx.close()
+                except Exception:
+                    pass
+                del _contexts[thread_id]
         _pages.pop(thread_id, None)
         _page_locks.pop(thread_id, None)
 
