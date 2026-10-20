@@ -226,7 +226,7 @@ def get_live_view(thread_id: str = "default") -> dict:
     """
     # 浏览器从未初始化 → 无可用视图
     if _browser is None and not _pages:
-        return {"available": False, "backend": _BROWSER_BACKEND,
+        return {"available": False, "backend": _BROWSER_BACKEND or "",
                 "url": "", "title": "", "screenshot": "", "dom": "", "note": "浏览器尚未使用"}
 
     async def _snapshot():
@@ -250,7 +250,7 @@ def get_live_view(thread_id: str = "default") -> dict:
             except Exception as e:
                 logger.warning("live view 持久上下文兜底取页面失败: %s", e)
         if page is None:
-            return {"available": False, "backend": _BROWSER_BACKEND,
+            return {"available": False, "backend": _BROWSER_BACKEND or "",
                     "url": "", "title": "", "screenshot": "", "dom": "",
                     "note": "该会话尚未打开浏览器页面"}
         try:
@@ -276,11 +276,11 @@ def get_live_view(thread_id: str = "default") -> dict:
                 dom_preview = dom_preview[:600]
             except Exception as e:
                 logger.warning("live view DOM 抽取失败: %s", e)
-            return {"available": True, "backend": _BROWSER_BACKEND,
+            return {"available": True, "backend": _BROWSER_BACKEND or "",
                     "url": url or "", "title": title or "", "screenshot": data_url,
                     "dom": dom_preview, "note": ""}
         except Exception as e:
-            return {"available": False, "backend": _BROWSER_BACKEND,
+            return {"available": False, "backend": _BROWSER_BACKEND or "",
                     "url": "", "title": "", "screenshot": "", "dom": "",
                     "note": f"读取当前页面失败: {type(e).__name__}: {e}"}
 
