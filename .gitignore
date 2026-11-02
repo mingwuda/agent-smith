@@ -55,3 +55,7 @@ skills/.quarantine/
 agent_core/samples/pending/
 # 本地下载的 Obscura 轻量浏览器二进制（运行时依赖，不入仓）
 deps/obscura/
+# 基准评测运行产物（临时结果，不入仓；脚本 bench/bench_prestep_agent.py 保留）
+_bench/
+bench/runs/
+bench/*.log
