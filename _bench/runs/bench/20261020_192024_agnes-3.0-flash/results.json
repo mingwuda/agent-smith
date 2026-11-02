@@ -1,0 +1,147 @@
+{
+  "summary": {
+    "model": "agnes-3.0-flash",
+    "user": "test",
+    "base": "http://127.0.0.1:8080",
+    "run_stamp": "20261020_192024",
+    "n": 8,
+    "pass": 5,
+    "fail": 2,
+    "error": 1,
+    "total_elapsed_s": 849.44,
+    "total_input_tokens": 263423,
+    "total_output_tokens": 907,
+    "est_cost_usd": 0.040058,
+    "price_note": "估算价 IN=$0.15/M OUT=$0.6/M（可覆盖）"
+  },
+  "tasks": [
+    {
+      "id": "c1_py_exec",
+      "cap": "C1 代码执行",
+      "cost_dim": "中",
+      "status": "pass",
+      "result": "2550",
+      "elapsed_s": 5.61,
+      "usage": {
+        "input_tokens": 14650,
+        "output_tokens": 5,
+        "cached_tokens": 12288,
+        "recorded_cost": 0.0,
+        "calls": 4
+      },
+      "est_cost_usd": 0.0022
+    },
+    {
+      "id": "c2_file_io",
+      "cap": "C2 文件读写",
+      "cost_dim": "中",
+      "status": "pass",
+      "result": "已完成：\n\n1. **创建文件**：在当前工作目录创建了 `bench_hello.txt`，内容为 `hello from moss bench`。\n2. **读取第一行**：该文件第一行内容为：\n\n> hello from moss bench\n\n---\n\n可下载文件：\n- bench_hello.txt: [下载](/artifacts/download?path=bench_hello.txt) (`bench_hello.txt`)",
+      "elapsed_s": 139.99,
+      "usage": {
+        "input_tokens": 44004,
+        "output_tokens": 60,
+        "cached_tokens": 36864,
+        "recorded_cost": 0.0,
+        "calls": 11
+      },
+      "est_cost_usd": 0.006637
+    },
+    {
+      "id": "c3_analysis",
+      "cap": "C3 数据分析/计算",
+      "cost_dim": "高",
+      "status": "pass",
+      "result": "113.27",
+      "elapsed_s": 35.5,
+      "usage": {
+        "input_tokens": 29016,
+        "output_tokens": 86,
+        "cached_tokens": 24576,
+        "recorded_cost": 0.0,
+        "calls": 4
+      },
+      "est_cost_usd": 0.004404
+    },
+    {
+      "id": "c4_retrieval",
+      "cap": "C4 信息检索",
+      "cost_dim": "中",
+      "status": "pass",
+      "result": "最近一次 git 提交时间为：\n\n**2026-10-20**",
+      "elapsed_s": 52.9,
+      "usage": {
+        "input_tokens": 87195,
+        "output_tokens": 131,
+        "cached_tokens": 75776,
+        "recorded_cost": 0.0,
+        "calls": 11
+      },
+      "est_cost_usd": 0.013158
+    },
+    {
+      "id": "c5_network",
+      "cap": "C5 网络访问",
+      "cost_dim": "高",
+      "status": "pass",
+      "result": "`http://127.0.0.1:8080/health` 的 status 字段值为：\n\n- **status: ok**",
+      "elapsed_s": 58.0,
+      "usage": {
+        "input_tokens": 14625,
+        "output_tokens": 35,
+        "cached_tokens": 12288,
+        "recorded_cost": 0.0,
+        "calls": 11
+      },
+      "est_cost_usd": 0.002215
+    },
+    {
+      "id": "c6_planning",
+      "cap": "C6 多步规划",
+      "cost_dim": "高",
+      "status": "fail",
+      "result": "该目录在工作区外，文件写入需要你在界面点击「授权写入」。\n\n**需要你操作：** 请在界面点击「授权写入」按钮，然后输入「继续」。授权后我会用完全相同的写文件调用重试，完成 a.txt/b.txt 创建、Python 求和写入 sum.txt，并返回 sum.txt 内容。\n\n（说明：`mkdir` 用 run_shell 能成功，但 write_file 写 /tmp 下的文件必须走授权流程，我不能用 shell 等方式绕过授权写文件。）",
+      "elapsed_s": 230.15,
+      "usage": {
+        "input_tokens": 44388,
+        "output_tokens": 276,
+        "cached_tokens": 41472,
+        "recorded_cost": 0.0,
+        "calls": 14
+      },
+      "est_cost_usd": 0.006824
+    },
+    {
+      "id": "c7_combo",
+      "cap": "C7 工具组合",
+      "cost_dim": "高",
+      "status": "fail",
+      "result": "**平均值：38.5**\n\n- 1..10 的平方列表：`[1, 4, 9, 16, 25, 36, 49, 64, 81, 100]`\n- 已写入 `/tmp/moss_bench_squares.json`\n- 读回后计算：`385 / 10 = 38.5`",
+      "elapsed_s": 237.2,
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cached_tokens": 0,
+        "recorded_cost": 0.0,
+        "calls": 1
+      },
+      "est_cost_usd": 0.0
+    },
+    {
+      "id": "c8_precision",
+      "cap": "C8 输出精确性",
+      "cost_dim": "低",
+      "status": "error",
+      "result": "TimeoutError: timed out",
+      "elapsed_s": 90.09,
+      "usage": {
+        "input_tokens": 29545,
+        "output_tokens": 314,
+        "cached_tokens": 28672,
+        "recorded_cost": 0.0,
+        "calls": 6
+      },
+      "est_cost_usd": 0.00462
+    }
+  ]
+}

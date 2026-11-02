@@ -1539,6 +1539,11 @@ function handleStreamEvent(data) {
       var activeLabel = getToolLabel(data.tool, data.args);
       updateActiveLine(toolIcon, activeLabel, '', 'running');
 
+      // ── 浏览器操作自动弹出浮动窗 ──
+      if (typeof data.tool === 'string' && data.tool.startsWith('browser_')) {
+        if (typeof showBrowserFloat === 'function') showBrowserFloat();
+      }
+
       // 渲染参数
       let argsHtml = '';
       if (data.tool === 'run_python' && data.args && typeof data.args.code === 'string') {

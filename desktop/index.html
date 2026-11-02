@@ -99,18 +99,6 @@
     </div>
   </div>
 
-  <!-- 浏览器实时视图面板（从项目 ⋯ 菜单「浏览器」进入，类似文件浏览器） -->
-  <div id="browser-panel" class="browser-panel" style="display:none;">
-    <div class="fb-header">
-      <button class="fb-back" onclick="exitBrowserPanel()" title="返回项目列表">←</button>
-      <div class="fb-path" id="browser-panel-title">🖥 浏览器</div>
-      <button class="fb-refresh" onclick="browserLiveRefresh()" data-i18n-title="browserRefresh" title="刷新">⟳</button>
-    </div>
-    <div class="browser-live" id="browser-live">
-      <div class="browser-live-empty">加载中…</div>
-    </div>
-  </div>
-
   <!-- 监控手风琴 -->
   <div class="sidebar-accordion" id="monitoring-accordion">
     <button class="accordion-toggle" type="button" aria-expanded="false" aria-controls="monitoring-body" onclick="toggleSidebarAccordion('monitoring-accordion')">
@@ -281,6 +269,18 @@
     </div>
     <input type="file" id="file-input" accept="image/*,.zip,.md,.txt,.json,.yaml,.yml,.xml,.html,.css,.js,.ts,.jsx,.tsx,.py,.java,.c,.cpp,.h,.hpp,.go,.rs,.rb,.php,.sh,.bash,.sql,.csv,.log,.env,.toml,.ini,.cfg,.conf,.pdf,.doc,.docx,.xls,.xlsx" multiple style="display:none" />
   </div>
+
+  <!-- 浏览器实时视图浮动窗：聊天区右下角可拖拽，agent 有 browser_* 操作时自动弹出 -->
+  <div id="browser-float" class="bl-float bl-hidden">
+    <div class="bl-float-header">
+      <span class="bl-float-title">🖥 浏览器</span>
+      <button class="bl-float-close" onclick="hideBrowserFloat()" title="关闭">×</button>
+    </div>
+    <div class="bl-float-body browser-live" id="browser-live">
+      <div class="browser-live-empty">加载中…</div>
+    </div>
+  </div>
+</div>
 
   <!-- ── 修改密码弹窗 ── -->
   <div id="change-password-overlay" class="modal-overlay" onclick="if(event.target===this)closeChangePassword()">

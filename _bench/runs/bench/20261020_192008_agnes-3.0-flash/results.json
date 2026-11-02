@@ -1,0 +1,35 @@
+{
+  "summary": {
+    "model": "agnes-3.0-flash",
+    "user": "test",
+    "base": "http://127.0.0.1:8080",
+    "run_stamp": "20261020_192008",
+    "n": 1,
+    "pass": 1,
+    "fail": 0,
+    "error": 0,
+    "total_elapsed_s": 14.24,
+    "total_input_tokens": 14561,
+    "total_output_tokens": 5,
+    "est_cost_usd": 0.002187,
+    "price_note": "估算价 IN=$0.15/M OUT=$0.6/M（可覆盖）"
+  },
+  "tasks": [
+    {
+      "id": "c1_py_exec",
+      "cap": "C1 代码执行",
+      "cost_dim": "中",
+      "status": "pass",
+      "result": "2550",
+      "elapsed_s": 14.24,
+      "usage": {
+        "input_tokens": 14561,
+        "output_tokens": 5,
+        "cached_tokens": 12288,
+        "recorded_cost": 0.0,
+        "calls": 5
+      },
+      "est_cost_usd": 0.002187
+    }
+  ]
+}

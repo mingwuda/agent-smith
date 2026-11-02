@@ -1,0 +1,147 @@
+{
+  "summary": {
+    "model": "agnes-3.0-flash",
+    "user": "test",
+    "base": "http://127.0.0.1:8080",
+    "run_stamp": "20261020_192030",
+    "n": 8,
+    "pass": 5,
+    "fail": 1,
+    "error": 2,
+    "total_elapsed_s": 846.29,
+    "total_input_tokens": 248773,
+    "total_output_tokens": 902,
+    "est_cost_usd": 0.037857,
+    "price_note": "估算价 IN=$0.15/M OUT=$0.6/M（可覆盖）"
+  },
+  "tasks": [
+    {
+      "id": "c1_py_exec",
+      "cap": "C1 代码执行",
+      "cost_dim": "中",
+      "status": "pass",
+      "result": "2550",
+      "elapsed_s": 3.7,
+      "usage": {
+        "input_tokens": 14794,
+        "output_tokens": 5,
+        "cached_tokens": 12288,
+        "recorded_cost": 0.0,
+        "calls": 2
+      },
+      "est_cost_usd": 0.002222
+    },
+    {
+      "id": "c2_file_io",
+      "cap": "C2 文件读写",
+      "cost_dim": "中",
+      "status": "pass",
+      "result": "已创建文件 `bench_hello.txt`（工作区 `/root/agent_workspace/test`），并读取验证通过。\n\n- 写入：`hello from moss bench`（22 字节）\n- 第一行内容：**`hello from moss bench`**\n\n验证结果：read_file 回读该文件第 1 行，输出与写入内容一致。",
+      "elapsed_s": 136.33,
+      "usage": {
+        "input_tokens": 43863,
+        "output_tokens": 134,
+        "cached_tokens": 36864,
+        "recorded_cost": 0.0,
+        "calls": 11
+      },
+      "est_cost_usd": 0.00666
+    },
+    {
+      "id": "c3_analysis",
+      "cap": "C3 数据分析/计算",
+      "cost_dim": "高",
+      "status": "pass",
+      "result": "113.27",
+      "elapsed_s": 36.07,
+      "usage": {
+        "input_tokens": 43565,
+        "output_tokens": 45,
+        "cached_tokens": 38912,
+        "recorded_cost": 0.0,
+        "calls": 5
+      },
+      "est_cost_usd": 0.006562
+    },
+    {
+      "id": "c4_retrieval",
+      "cap": "C4 信息检索",
+      "cost_dim": "中",
+      "status": "pass",
+      "result": "/opt/desktop-agent 最近一次提交时间（`git log -1 --format=%cs`）：\n\n**2026-10-20**",
+      "elapsed_s": 51.21,
+      "usage": {
+        "input_tokens": 28927,
+        "output_tokens": 42,
+        "cached_tokens": 24576,
+        "recorded_cost": 0.0,
+        "calls": 5
+      },
+      "est_cost_usd": 0.004364
+    },
+    {
+      "id": "c5_network",
+      "cap": "C5 网络访问",
+      "cost_dim": "高",
+      "status": "pass",
+      "result": "`status` 字段的值是：\n\n**`\"ok\"`**",
+      "elapsed_s": 98.25,
+      "usage": {
+        "input_tokens": 58151,
+        "output_tokens": 102,
+        "cached_tokens": 49152,
+        "recorded_cost": 0.0,
+        "calls": 18
+      },
+      "est_cost_usd": 0.008784
+    },
+    {
+      "id": "c6_planning",
+      "cap": "C6 多步规划",
+      "cost_dim": "高",
+      "status": "fail",
+      "result": "需要确认一下:第(2)(3)(4)步要写的文件位于工作区外(/tmp/moss_bench_planner),我这边没有授权无法直接写入。请在前端授权写入后回复\"继续\",我会重试。",
+      "elapsed_s": 190.62,
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cached_tokens": 0,
+        "recorded_cost": 0.0,
+        "calls": 3
+      },
+      "est_cost_usd": 0.0
+    },
+    {
+      "id": "c7_combo",
+      "cap": "C7 工具组合",
+      "cost_dim": "高",
+      "status": "error",
+      "result": "TimeoutError: timed out",
+      "elapsed_s": 240.03,
+      "usage": {
+        "input_tokens": 29928,
+        "output_tokens": 260,
+        "cached_tokens": 29184,
+        "recorded_cost": 0.0,
+        "calls": 8
+      },
+      "est_cost_usd": 0.004645
+    },
+    {
+      "id": "c8_precision",
+      "cap": "C8 输出精确性",
+      "cost_dim": "低",
+      "status": "error",
+      "result": "TimeoutError: timed out",
+      "elapsed_s": 90.08,
+      "usage": {
+        "input_tokens": 29545,
+        "output_tokens": 314,
+        "cached_tokens": 28672,
+        "recorded_cost": 0.0,
+        "calls": 6
+      },
+      "est_cost_usd": 0.00462
+    }
+  ]
+}
