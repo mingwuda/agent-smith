@@ -62,6 +62,7 @@ class AgentConfig:
     max_cost_per_day: float = 5.0
     recursion_limit: int = 60
     enable_loop_guard: bool = True  # 防循环检测（关闭后交由用户手动终止任务）
+    enable_todo_guard: bool = True  # 任务清单收尾守卫（未收尾时提醒模型再走一轮）
     enable_self_evolution: bool = False  # 自进化（反馈捕获+失败反思+负向注入），默认关
     enable_self_healing: bool = False  # 守护进程运行时巡检自愈（控制面），默认关
     self_healing_interval_seconds: int = 600  # 巡检周期，默认 10min
@@ -165,6 +166,8 @@ class AgentConfig:
         "## 任务清单（Todo List）\n"
         "当任务包含 3 个或更多独立步骤时，必须先用 manage_todo 工具（action=create_todo）创建任务清单，"
         "然后在每个步骤执行过程中用 update_todo 或 complete_todo 更新状态。"
+        "**结束本轮前必须收尾清单：每一项要么 complete_todo，要么 update_todo 标为 blocked 并说明原因；"
+        "清单还有 pending/in_progress 项时不得直接给出最终回答。**"
         "简单问答（1-2 步）不需要创建清单，避免不必要的 overhead。\n\n"
         "## 工作区\n"
         f"你的工作区目录是：{Path.home() / 'agent_workspace'}\n"

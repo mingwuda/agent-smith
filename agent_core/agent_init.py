@@ -34,7 +34,7 @@ from network_resolver import configure_host_resolution
 from skills.registry import get_registry, SkillRegistry
 from agent_helpers import *  # noqa: F401,F403
 from agent_helpers import _on_llm_idle_retry  # import * 不导入下划线名
-from agent_helpers import _make_inbox_pre_hook  # import * 不导入下划线名
+from agent_helpers import _make_inbox_pre_hook, _make_todo_guard_post_hook  # import * 不导入下划线名
 
 logger = get_logger(__name__)
 
@@ -200,12 +200,21 @@ class AgentInitMixin:
         # 「只在 LLM 调用边界注入、不打断正在执行的工具」的语义。返回 messages 追加进 agent 输入，
         # 仅当本轮有待注入消息时才活动（claim 后为空即原样返回，无额外内容、零行为变化）。
         pre_hook = _make_inbox_pre_hook(self._user_id)
+        # —— 任务清单收尾守卫（Stop hook）：模型准备结束但 todo 未收尾时提醒一次并续跑 ——
+        # post_model_hook 在每次模型输出后触发；返回 Command(goto="agent") 可让模型再走一轮，
+        # 正好用来「拦住 3/4 完成的收尾」。关闭开关即完全不装，图行为与旧版一致。
+        post_hook = (
+            _make_todo_guard_post_hook()
+            if getattr(self.config, "enable_todo_guard", True)
+            else None
+        )
         return create_react_agent(
             llm,
             self.tools,
             prompt=self._build_system_prompt(),
             checkpointer=self.memory,
             pre_model_hook=pre_hook,
+            post_model_hook=post_hook,
         )
 
 

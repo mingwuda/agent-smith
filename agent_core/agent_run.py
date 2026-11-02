@@ -1553,6 +1553,18 @@ class AgentRunMixin:
             if not _done_yielded:
                 if truncated_final:
                     final_buffer = final_buffer + "\n\n⚠️ 以上回答可能因模型输出长度限制被截断，你可以说「继续」让我把剩余部分补完。"
+                # 收尾兜底：post_model_hook 已提醒过一轮，仍有未完成项就如实告知用户。
+                # 这里不篡改状态（不把没做的事标成 done），只保证「任务已完成」与清单不一致时不静默。
+                try:
+                    from tools.todo_tools import unfinished_notice
+                    _todo_notice = unfinished_notice(current_todo_list)
+                    if _todo_notice and final_buffer.strip():
+                        final_buffer += _todo_notice
+                        logger.warning(
+                            "[todo] 本轮结束时清单仍有未完成项（thread_key=%s）", thread_key
+                        )
+                except Exception:
+                    pass
                 done_data = {"type": "done", "content": final_buffer}
                 if current_todo_list:
                     done_data["todo_list"] = current_todo_list

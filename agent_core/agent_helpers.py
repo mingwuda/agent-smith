@@ -14,9 +14,10 @@ from urllib.parse import urlparse
 
 from langchain_anthropic import ChatAnthropic
 from langchain_openai import ChatOpenAI
-from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import Runnable
 from langgraph.prebuilt import create_react_agent
+from langgraph.types import Command
 from langgraph.checkpoint.memory import MemorySaver
 
 from config import AgentConfig
@@ -1235,6 +1236,71 @@ def _make_inbox_pre_hook(user_id: str):
             return {"messages": msgs}
         except Exception:
             # 注入失败绝不影响主流程：无配置/无会话/异常都原样放行
+            return None
+
+    return _hook
+
+
+_TODO_GUARD_MARK = "【任务清单收尾检查】"
+
+
+def _make_todo_guard_post_hook():
+    """构造 create_react_agent 的 post_model_hook：收尾前强制过一次任务清单。
+
+    问题：模型常常做完活直接给最终回答，忘了把 todo 标 done，UI 就停在「3/4 已完成」。
+    机制：create_react_agent 在「模型输出无 tool_calls（即准备结束本轮）」时会经过
+    post_model_hook，此处返回 Command(goto="agent") 即可让模型再走一轮。
+    - 仅当本轮 todo（peek 缓存，即本轮 create/update 过的清单）仍有 pending/in_progress 时介入；
+    - 每轮最多提醒一次（按注入消息里的标记去重），避免与模型拉锯成死循环；
+    - 工具调用轮、无清单、已全部完成都原样放行（返回 None，图行为零变化）；
+    - 任何异常都放行，绝不影响主流程。
+
+    模型收到提醒后应调用 manage_todo 更新状态（完成→done，做不了→blocked 并说明），
+    再补一句收尾说明；agent_run 的结束兜底会再检查一次并如实提示用户。
+    """
+    def _hook(state, runtime=None, config=None) -> Optional[Command]:
+        try:
+            thread_key = (config or {}).get("configurable", {}).get("thread_id", "")
+            if not thread_key:
+                return None
+            msgs = list(state.get("messages", []) or [])
+            last = msgs[-1] if msgs else None
+            # 只在「模型给出最终回答」这一刻介入；工具调用轮不打扰
+            if not isinstance(last, AIMessage) or getattr(last, "tool_calls", None):
+                return None
+            # 高危命令确认 / 文件授权：模型是「故意停下等用户」的，绝不能逼它继续
+            for _m in reversed(msgs[:-1]):
+                if isinstance(_m, ToolMessage):
+                    if "__CONFIRM_NEEDED__" in str(_m.content) or "__PERMISSION_NEEDED__" in str(_m.content):
+                        return None
+                    break  # 只看紧邻的最后一条工具结果
+            # 本轮已提醒过 → 放行，交给结束兜底如实提示
+            if any(_TODO_GUARD_MARK in str(getattr(m, "content", "")) for m in msgs):
+                return None
+            from tools.todo_tools import peek_todo_list, unfinished_items
+            unfinished = unfinished_items(peek_todo_list(thread_key))
+            if not unfinished:
+                return None
+            listing = "\n".join(
+                f"- {i.get('id')}: {i.get('content')}" for i in unfinished
+            )
+            reminder = (
+                f"{_TODO_GUARD_MARK}\n"
+                f"你正要结束本轮，但任务清单还有 {len(unfinished)} 项未完成：\n{listing}\n"
+                "请先用 manage_todo 更新它们的真实状态：已完成的用 complete_todo；"
+                "确实没做或做不了的用 update_todo 标为 blocked，并在最终回答里说明原因。"
+                "更新后只补一句清单收尾情况，不要重复之前的完整回答。"
+            )
+            logger.info(
+                "[todo] 收尾守卫：%d 项未完成，提醒模型收尾（thread_key=%s）",
+                len(unfinished), thread_key,
+            )
+            # 与 pre_model_hook 一致：返回完整 messages 列表（add_messages 按 id 去重，不会重复）
+            return Command(
+                goto="agent",
+                update={"messages": msgs + [HumanMessage(content=reminder)]},
+            )
+        except Exception:
             return None
 
     return _hook

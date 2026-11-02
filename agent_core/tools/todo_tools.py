@@ -85,6 +85,32 @@ def peek_todo_list(thread_id: str) -> Optional[dict]:
     return _TODO_CACHE.get(thread_id)
 
 
+def unfinished_items(todo_list: Optional[dict]) -> list[dict]:
+    """返回清单中未收尾的项（pending / in_progress）。无清单时返回空列表。"""
+    if not todo_list:
+        return []
+    return [
+        i for i in (todo_list.get("items") or [])
+        if i.get("status") in ("pending", "in_progress")
+    ]
+
+
+def unfinished_notice(todo_list: Optional[dict]) -> str:
+    """生成「任务清单仍有未完成项」的追加提示；全部完成或无清单时返回空串。
+
+    给运行链路兜底用：它只如实告知，不篡改状态（不把没做的事标成 done）。
+    """
+    left = unfinished_items(todo_list)
+    if not left:
+        return ""
+    names = "、".join(str(i.get("content") or i.get("id")) for i in left[:5])
+    more = f" 等 {len(left)} 项" if len(left) > 5 else ""
+    return (
+        f"\n\n⚠️ 任务清单还有 {len(left)} 项未完成：{names}{more}。"
+        "可回复「继续」让我补完。"
+    )
+
+
 @tool
 def manage_todo(
     action: str,
