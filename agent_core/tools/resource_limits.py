@@ -33,8 +33,12 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 from typing import Callable, Optional
+
+# `from __future__ import ...` 必须位于文件首部，注入 prologue 时要跳过它
+_FUTURE_IMPORT_RE = re.compile(r"^\s*from\s+__future__\s+import\b")
 
 # 默认值（可用环境变量覆盖）。单位：MB / 秒 / 个数。
 #
@@ -108,6 +112,11 @@ def ulimit_prefix() -> str:
     由 shell 在 exec 后的子进程里执行，与父进程线程状态无关，完全避开 preexec 死锁。
     ponytail: 只设常见 shell 支持的项；不支持时 `2>/dev/null` 吞掉报错，
     不影响命令本体执行。
+
+    ⚠ 分隔符必须用 `;` 而不是 `&&`：个别环境下 ulimit 会失败（例如硬限低于
+    目标值、shell 不支持某项），若串成 `&&` 链条，命令本体就被静默跳过了，
+    而退出码只剩一个看不出原因的 1。用 `;` 时限制设失败最多是「没限制」，
+    命令照常执行。
     """
     if not limits_enabled() or sys.platform == "win32":
         return ""
@@ -131,7 +140,8 @@ def ulimit_prefix() -> str:
         parts.append(f"ulimit -v {lim['memory_mb'] * 1024} 2>/dev/null")
     if not parts:
         return ""
-    return " && ".join(parts) + " && "
+    # 用 `;` 而非 `&&`：限制没设上也要让命令本体继续跑（见函数 docstring）
+    return "; ".join(parts) + "; "
 
 
 def python_prologue() -> str:
@@ -142,7 +152,9 @@ def python_prologue() -> str:
     """
     if not limits_enabled() or sys.platform == "win32":
         return ""
-    if _rlimit_mode() == "off":
+    # 仅 ulimit 模式用脚本首部注入；preexec 模式由 popen_kwargs() 在 exec 前施加，
+    # 两者不能叠加（重复设同一个值无害，但会让「用哪个模式」变得不可辨）。
+    if _rlimit_mode() != "ulimit":
         return ""
     lim = _read_limits()
     return (
@@ -161,6 +173,33 @@ def python_prologue() -> str:
         f"_moss_set('RLIMIT_NPROC', {lim['nproc']})\n"
         "del _moss_set\n"
     )
+
+
+def inject_prologue(code: str) -> str:
+    """把资源限制 prologue 注入用户代码，**不破坏 `from __future__` 导入**。
+
+    为什么需要单独处理：Python 要求 `from __future__ import ...` 必须是文件中
+    的第一条语句（前面只允许 docstring 与注释/空行）。如果直接把 prologue 拼在
+    代码最前面，模型写的 `from __future__ import annotations` 会立刻
+    SyntaxError —— 模型写现代 Python 时经常带这一行，等于把 run_python 打断。
+
+    故：若开头（前 50 行内）有 future 导入，就插在**最后一个** future 导入之后；
+    否则正常前置。prologue 为空时原样返回，不引入多余空行（避免 traceback 行号偏移）。
+    """
+    prologue = python_prologue()
+    if not prologue:
+        return code
+    lines = code.splitlines(keepends=True)
+    insert_at = 0
+    for idx, line in enumerate(lines[:50]):
+        if _FUTURE_IMPORT_RE.match(line):
+            insert_at = idx + 1
+    if insert_at:
+        head = "".join(lines[:insert_at])
+        if not head.endswith("\n"):
+            head += "\n"
+        return head + prologue + "".join(lines[insert_at:])
+    return prologue + code
 
 
 def make_preexec() -> Optional[Callable[[], None]]:

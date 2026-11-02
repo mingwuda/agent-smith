@@ -13,8 +13,9 @@ from typing import Optional
 
 from langchain_core.tools import tool
 
+from tool_result import annotate_for_model
 from tools.file_tools import resolve_workspace
-from tools.resource_limits import python_prologue
+from tools.resource_limits import inject_prologue, popen_kwargs
 
 MAX_PYTHON_OUTPUT_CHARS = 20000
 PYTHON_OUTPUT_HEAD_CHARS = 8000
@@ -172,9 +173,11 @@ async def run_python(code: str) -> str:
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".py", delete=False, encoding="utf-8", dir=workspace
         ) as f:
-            # 资源限制：在脚本首部插 setrlimit 代码（评审 P1-7：不用 preexec_fn，
+            # 资源限制：默认在脚本首部插 setrlimit 代码（评审 P1-7：不用 preexec_fn，
             # 避免多线程进程 fork 后 exec 前死锁）。
-            f.write(python_prologue() + "\n" + code)
+            # inject_prologue 会把这段插到 `from __future__` 之后——模型写现代 Python
+            # 常带该导入，直接前置会 SyntaxError。
+            f.write(inject_prologue(code))
             temp_path = f.name
 
         proc = await asyncio.create_subprocess_exec(
@@ -183,6 +186,8 @@ async def run_python(code: str) -> str:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+            # 默认 {}；仅 MOSS_RLIMIT_MODE=preexec 时才有内容（排障回退路径）
+            **popen_kwargs(),
         )
 
         async def _reader() -> None:
@@ -204,7 +209,13 @@ async def run_python(code: str) -> str:
             await asyncio.wait_for(asyncio.shield(proc.wait()), timeout=PYTHON_TIMEOUT)
         except asyncio.TimeoutError:
             proc.kill()
-            await asyncio.wait_for(proc.wait(), timeout=5)
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=5)
+            except asyncio.TimeoutError:
+                pass
+            # 超时分支原本直接 return，reader_task 会一直挂着读已关闭的管道，
+            # 事件循环关闭时抛 "Task was destroyed but it is pending"。
+            reader_task.cancel()
             return (
                 f"⌛ 脚本执行超时（{PYTHON_TIMEOUT}s），已强制终止。\n"
                 f"已输出 {len(output)} 字符:\n{output[-2000:] if output else '（无输出）'}"
@@ -250,8 +261,8 @@ async def run_python(code: str) -> str:
 
     # ── 组装输出 ──
     if not output:
-        # 让模型知道「成功但无输出」不等于失败（annotate_for_model 的内部承诺）
-        output = "[状态: empty] 代码执行完成，但没有任何输出。这不代表失败，不要原样重试。"
+        # 让模型知道「成功但无输出」不等于失败（文案统一由 tool_result 维护）
+        output = annotate_for_model("", "empty")
     elif len(output) > MAX_PYTHON_OUTPUT_CHARS:
         output = (
             "⚠️ Python 输出较大，未将完整日志放入模型上下文。\n"

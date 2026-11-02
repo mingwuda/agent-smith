@@ -53,23 +53,26 @@ def test_limits_reach_child_process():
         assert out.strip() == "600", out
 
 
-def test_file_size_limit_actually_blocks_writes():
+def test_file_size_limit_actually_blocks_writes(tmp_path):
     """真正超限的行为：写超过上限的文件应被 SIGXFSZ 杀死。
 
     用 1MB 上限 + 写 2MB 验证，避免 CI 上真写 600MB。
+    ⚠ 写入路径必须落在 pytest 的 tmp_path 里：之前用 tempfile.gettempdir()，
+    在 TMPDIR 不可用的沙箱下会退化成当前目录，把 1MB 的 _rl_probe.bin 写进仓库根
+    并可能被误提交（实际发生过一次）。
     """
     if sys.platform == "win32":
         return
+    target = tmp_path / "_rl_probe.bin"
     rc, _ = _run(
-        "import tempfile, os;"
-        "p=os.path.join(tempfile.gettempdir(),'_rl_probe.bin');"
-        "f=open(p,'wb');"
+        f"f=open({str(target)!r},'wb');"
         "f.write(b'x'*(2*1024*1024));"
         "f.close();"
         "print('NOT_KILLED')",
         env_extra={"MOSS_RLIMIT_FILESIZE_MB": "1"},
     )
     assert rc != 0, "超过文件大小上限应被终止"
+    assert not (target.exists() and target.stat().st_size > 1024 * 1024), "写入未被截断在 1MB"
 
 
 def test_limits_can_be_disabled():
@@ -108,3 +111,43 @@ def test_describe_does_not_promise_memory_on_macos():
     desc = rl.describe_limits()
     if sys.platform == "darwin":
         assert "内存" not in desc, desc
+
+
+def test_prologue_injection_keeps_future_import_first():
+    """prologue 不能插在 `from __future__` 之前——那会直接 SyntaxError。
+
+    模型写现代 Python 常带 `from __future__ import annotations`；早期实现直接
+    `prologue + code` 前置，导致这类脚本 100% 跑不起来（实测复现）。
+    """
+    for code in (
+        "from __future__ import annotations\nprint('x')\n",
+        '"""docstring"""\nfrom __future__ import annotations\nprint("x")\n',
+    ):
+        merged = rl.inject_prologue(code)
+        compile(merged, "<test>", "exec")  # 不抛 SyntaxError 即通过
+        assert merged.index("from __future__") < merged.index("import resource")
+
+
+def test_inject_prologue_is_noop_when_disabled():
+    """关闭限制时不能引入多余空行（否则 traceback 行号整体偏移一行）。"""
+    old = os.environ.get("MOSS_RLIMIT")
+    os.environ["MOSS_RLIMIT"] = "0"
+    try:
+        assert rl.inject_prologue("print(1)\n") == "print(1)\n"
+    finally:
+        if old is None:
+            os.environ.pop("MOSS_RLIMIT", None)
+        else:
+            os.environ["MOSS_RLIMIT"] = old
+
+
+def test_ulimit_prefix_never_short_circuits_command():
+    """前缀必须用 `;` 串联：某项 ulimit 设不上时，命令本体仍要执行。
+
+    用 `&&` 时 ulimit 失败会跳过整条命令，而退出码只是个看不出原因的 1，
+    agent 会以为命令跑了但没输出/失败，实际一个字都没执行。
+    """
+    prefix = rl.ulimit_prefix()
+    assert prefix, "默认应产生 ulimit 前缀"
+    assert " && " not in prefix, prefix
+    assert prefix.rstrip().endswith(";"), prefix

@@ -19,10 +19,11 @@ from pathlib import Path
 from typing import Optional
 from langchain_core.tools import tool
 
+from tool_result import annotate_for_model
 from .async_tasks import (  # ponytail: 同包内相对导入；stdlib 'async' 是关键字所以包名是 async_tasks 不冲突
     AsyncTask, register_task, get_task, list_tasks, cancel_task,
 )
-from .resource_limits import ulimit_prefix
+from .resource_limits import popen_kwargs, ulimit_prefix
 
 # ── 工作区路径（ContextVar：每个 async 请求各自独立）──
 _workspace_ctx: ContextVar[Optional[Path]] = ContextVar("shell_tools_workspace", default=None)
@@ -494,8 +495,8 @@ async def _run_shell_sync(
       - 实时输出按调用 key 隔离（见 _SHELL_OUTPUT_QUEUES），并行时不串台。
     保留原语义：短命令直接返回完整结果；≥30s 才 handoff 到后台 task，不 kill 不重跑。
 
-    ponytail: 资源限制仍走 preexec_fn（asyncio 的 subprocess 支持该参数），
-    与同步路径共用 resource_limits.ulimit_prefix()（资源限制在命令前置施加）。
+    ponytail: 资源限制默认由命令前的 ulimit 前缀施加（exec 之后，与父进程线程状态无关）；
+    MOSS_RLIMIT_MODE=preexec 时改由 popen_kwargs() 传 preexec_fn 回退。
     """
     _key = _output_key()
     _clear_shell_output(_key)
@@ -509,7 +510,10 @@ async def _run_shell_sync(
         "stderr": asyncio.subprocess.STDOUT,
         "cwd": str(_ws) if _ws else None,
         **_popen_group_kwargs(),
-        # 资源限制已由前置 ulimit 施加（见 ulimit_prefix），不再传 preexec_fn
+        # 默认 {}：限制由命令前的 ulimit 施加。
+        # 仅 MOSS_RLIMIT_MODE=preexec 时在这里带 preexec_fn（排障回退路径）——
+        # 不回传的话该模式会让 run_shell 完全失去资源限制，与文档承诺不符。
+        **popen_kwargs(),
     }
     try:
         proc = await asyncio.create_subprocess_exec(*(shell_cmd + [cmd]), **kwargs)
@@ -537,7 +541,7 @@ async def _run_shell_sync(
         returncode = proc.returncode or 0
         # 注意：不在这里清队列。最后一块输出要留给 on_tool_end 的兜底 drain（实时预览尾部），
         # 并且下一次调用开始时 _clear_shell_output(_key) 只清自己的（key 每次调用不同）。
-        # 回收交给「调用结束时清理自己」——见 _finish_output_key。
+        # 回收交给「调用结束时清理自己」——见 _mark_output_finished。
         _mark_output_finished(_key)
         return _format_shell_result(raw_output, returncode, elapsed, _ws, before_files)
     except asyncio.TimeoutError:
@@ -564,6 +568,9 @@ async def _run_shell_sync(
             finally:
                 task.finished_at = time.time()
                 task.proc = None
+                # handoff 分支原来不回收输出 key，队列字典会随长命令次数无界增长；
+                # 在这里标记结束，让 _FINISHED_KEY_MAX 的 FIFO 回收生效。
+                _mark_output_finished(_key)
 
         asyncio.create_task(_continue())
 
@@ -675,11 +682,18 @@ def _format_shell_result(raw_output: str, returncode: int, elapsed: float, _ws, 
     #   grep 无匹配=1、diff 有差异=1、[ -f ] 不成立=1、git diff --quiet 有改动=1。
     # 把它们标红会让模型误以为工具坏了而重试或改策略，前端也无谓报红。
     # 故：非零退出用中性的「已执行 (exit code: N)」，只有工具自身硬失败才用 ❌。
-    if returncode != 0:
+    #
+    # 例外：126/127 不是「命令跑完后的语义退出码」，而是命令根本没跑起来
+    # （127=命令不存在，126=无执行权限）。此时说「已执行」是事实错误，
+    # 前端还会显示绿色成功卡 —— 单独按硬失败报。
+    if returncode in (126, 127):
+        reason = "命令不存在" if returncode == 127 else "命令不可执行（权限不足）"
+        mark = f"❌ 命令未执行 (exit code: {returncode}: {reason}, 耗时: {elapsed:.1f}s)"
+    elif returncode != 0:
         mark = f"✅ 命令已执行 (exit code: {returncode}, 耗时: {elapsed:.1f}s)"
     elif not raw_output.strip():
-        # 明确告知模型：成功但无输出，不是失败
-        mark = f"✅ 命令已执行 (exit code: 0, 耗时: {elapsed:.1f}s，无输出)[状态: empty] 不要原样重试同一命令。"
+        # 明确告知模型：成功但无输出，不是失败（文案由 tool_result 统一维护）
+        mark = f"✅ 命令已执行 (exit code: 0, 耗时: {elapsed:.1f}s，无输出) " + annotate_for_model("", "empty")
     else:
         mark = f"✅ 命令已执行 (exit code: 0, 耗时: {elapsed:.1f}s)"
     summary = (
