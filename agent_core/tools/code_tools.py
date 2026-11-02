@@ -1,5 +1,6 @@
 """代码执行工具"""
 import difflib
+import asyncio
 import json
 import os
 import subprocess
@@ -13,6 +14,7 @@ from typing import Optional
 from langchain_core.tools import tool
 
 from tools.file_tools import resolve_workspace
+from tools.resource_limits import python_prologue
 
 MAX_PYTHON_OUTPUT_CHARS = 20000
 PYTHON_OUTPUT_HEAD_CHARS = 8000
@@ -146,8 +148,12 @@ def _snapshot_files(workspace: Path) -> dict[str, str]:
 
 
 @tool
-def run_python(code: str) -> str:
-    """执行 Python 代码并返回 stdout 输出。对于计算、数据分析、脚本测试非常有用。"""
+async def run_python(code: str) -> str:
+    """执行 Python 代码并返回 stdout 输出。对于计算、数据分析、脚本测试非常有用。
+
+    资源限制由 resource_limits 统一控制（见 README「子进程资源限制」），
+    超限时进程被操作系统终止，表现为 MemoryError / 非零退出码 / ⌛ 超时。
+    """
     global _progress_running, _progress_lines
 
     # ── 重置进度记录 ──
@@ -155,55 +161,58 @@ def run_python(code: str) -> str:
         _progress_lines = []
         _progress_running = True
 
-    # ── 执行前文件内容快照 ──
+    # ── 执行前文件内容快照（走线程池：递归读盘会阻塞事件循环）──
     workspace = resolve_workspace()
-    before_snapshot = _snapshot_files(workspace)
+    before_snapshot = await asyncio.to_thread(_snapshot_files, workspace)
 
-    # ── 执行代码（在独立子进程中运行，避免阻塞事件循环并支持超时）──
+    # ── 执行代码（独立子进程，不阻塞事件循环，支持超时）──
     output = ""
     temp_path = None
     try:
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".py", delete=False, encoding="utf-8", dir=workspace
         ) as f:
-            f.write(code)
+            # 资源限制：在脚本首部插 setrlimit 代码（评审 P1-7：不用 preexec_fn，
+            # 避免多线程进程 fork 后 exec 前死锁）。
+            f.write(python_prologue() + "\n" + code)
             temp_path = f.name
 
-        proc = subprocess.Popen(
-            [sys.executable, temp_path],
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable, temp_path,
             cwd=workspace,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
             env={**os.environ, "PYTHONIOENCODING": "utf-8"},
         )
 
-        def _reader():
+        async def _reader() -> None:
             nonlocal output
-            for line in proc.stdout:
-                line = line.rstrip("\n")
+            assert proc.stdout is not None
+            while True:
+                raw = await proc.stdout.readline()
+                if not raw:
+                    break
+                line = raw.decode("utf-8", errors="replace").rstrip("\n")
                 output += line + "\n"
                 with _progress_lock:
                     _progress_lines.append(line)
 
-        reader_thread = threading.Thread(target=_reader, daemon=True)
-        reader_thread.start()
-
         # 设置超时，避免脚本无限阻塞（默认 300s = 5 分钟）
         PYTHON_TIMEOUT = int(os.environ.get("PYTHON_TIMEOUT", "300"))
+        reader_task = asyncio.create_task(_reader())
         try:
-            proc.wait(timeout=PYTHON_TIMEOUT)
-        except subprocess.TimeoutExpired:
+            await asyncio.wait_for(asyncio.shield(proc.wait()), timeout=PYTHON_TIMEOUT)
+        except asyncio.TimeoutError:
             proc.kill()
-            proc.wait(timeout=5)
-            reader_thread.join(timeout=5)
+            await asyncio.wait_for(proc.wait(), timeout=5)
             return (
-                f"❌ 脚本执行超时（{PYTHON_TIMEOUT}s），已强制终止。\n"
+                f"⌛ 脚本执行超时（{PYTHON_TIMEOUT}s），已强制终止。\n"
                 f"已输出 {len(output)} 字符:\n{output[-2000:] if output else '（无输出）'}"
             )
-        reader_thread.join(timeout=5)
+        try:
+            await asyncio.wait_for(reader_task, timeout=5)
+        except asyncio.TimeoutError:
+            reader_task.cancel()
 
         if proc.returncode != 0:
             return f"❌ 执行出错 (exit {proc.returncode}): {output or '（无输出）'}"
@@ -218,9 +227,9 @@ def run_python(code: str) -> str:
             except Exception:
                 pass
 
-    # ── 执行后检测文件内容变化 ──
+    # ── 执行后检测文件内容变化（同样走线程池）──
     diffs = []
-    after_snapshot = _snapshot_files(workspace)
+    after_snapshot = await asyncio.to_thread(_snapshot_files, workspace)
     for fp_str, before_content in before_snapshot.items():
         after_content = after_snapshot.get(fp_str, "")
         if after_content != before_content:
@@ -241,7 +250,8 @@ def run_python(code: str) -> str:
 
     # ── 组装输出 ──
     if not output:
-        output = "（代码执行完成，无输出）"
+        # 让模型知道「成功但无输出」不等于失败（annotate_for_model 的内部承诺）
+        output = "[状态: empty] 代码执行完成，但没有任何输出。这不代表失败，不要原样重试。"
     elif len(output) > MAX_PYTHON_OUTPUT_CHARS:
         output = (
             "⚠️ Python 输出较大，未将完整日志放入模型上下文。\n"

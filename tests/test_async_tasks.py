@@ -10,6 +10,7 @@ import time
 import subprocess
 import sys
 import os
+import asyncio
 
 from agent_core.main import app  # noqa: F401  (sys.path 注入)
 from agent_core.tools import shell_tools
@@ -79,8 +80,13 @@ def test_cancel_already_done_task():
 
 
 def test_run_shell_short_path_sync():
-    """短任务（timeout=10 < 30s 阈值）走同步路径，立即返回完整结果。"""
-    result = shell_tools.run_shell.invoke({"command": "echo hello_async_test", "timeout": 10})
+    """短任务（timeout=10 < 30s 阈值）走前台完成路径，立即返回完整结果。
+
+    P0-1：run_shell 已改为 async 工具，同步 invoke 不再支持，必须用 ainvoke。
+    """
+    result = asyncio.run(
+        shell_tools.run_shell.ainvoke({"command": "echo hello_async_test", "timeout": 10})
+    )
     assert "hello_async_test" in result
     assert "exit code: 0" in result
     # 短任务不该启动后台任务

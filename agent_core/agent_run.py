@@ -49,7 +49,9 @@ from agent_helpers import (
     resolve_outer_idle_timeout,
 )
 from loop_guard import _detect_tool_loop  # 原版 agent.py:169 的文件中间导入,拆分时需显式补回
-from tools.shell_tools import drain_shell_output  # run_shell 实时输出（心跳循环 drain 队列）
+from tool_result import classify as classify_tool_output
+from tool_result import is_error as tool_status_is_error
+from tools.shell_tools import drain_all_shell_output  # run_shell 实时输出（心跳循环 drain 各调用的隔离队列）
 
 logger = get_logger(__name__)
 
@@ -772,6 +774,11 @@ class AgentRunMixin:
         subagent_end_sent_at = 0.0           # 子代理结束事件发送时间戳
         _subagent_results: list[dict] = []   # 子代理完成后收集的结果（防循环触发时用于生成真实汇总）
         last_model_activity_at = 0.0         # 最后一次模型活动（token/thought/tool）时间戳
+        # P0-1：并行工具调用的批次标识。LangGraph 同一轮发出的多个 tool_call 共享同一个
+        # parent run_id（实测确认），用它作为「同一批」的 key。
+        # 用途：工具前压缩会写 checkpoint，并行时多个工具同时写会互相覆盖 ——
+        # 只允许每批的第一个工具真正做一次压缩。
+        _compacted_batches: set[str] = set()
         # fix #1: 单次 LLM 调用硬墙钟超时状态
         llm_call_in_flight = False           # 当前是否有 LLM 调用在飞（node=agent）
         llm_silent_since = 0.0               # 硬超时计时钟：上次真实输出/调用开始的时刻；空 keepalive 不刷新
@@ -915,21 +922,29 @@ class AgentRunMixin:
                             "elapsed": elapsed,
                             "message": f"{label}，已耗时 {elapsed}s",
                         })
-                    # run_shell 实时输出转发：drain 工具执行期间入队的输出块，SSE 推给前端
-                    # （方案B：心跳注入，粒度 ≈ heartbeat_interval，2s 一次）
+                    # run_shell 实时输出转发：drain 各调用队列，按顺序分配给在飞的 run_shell 卡片。
+                    # P0-1：旧实现只有一个全局队列 + 盲猜「第一个 run_shell」，并行时多路
+                    # 输出会全塞进同一张卡片。现在每个调用有独立队列（不互相清空），
+                    # 这里按 running_tools 中 run_shell 的顺序逐个配送。
+                    # ponytail: 并行多个 run_shell 时，实时预览按启动顺序对应卡片，
+                    # 可能不严格同源；但这只是「尽力而为的预览」——最终结果以 tool_result
+                    # 为准（那里是按 run_id 精确匹配的），不影响正确性。
                     try:
-                        _shell_chunk = drain_shell_output()
+                        _shell_chunks = drain_all_shell_output()
                     except Exception:
-                        _shell_chunk = ""
-                    if _shell_chunk:
-                        for _rid, _tinfo in list(running_tools.items()):
-                            if _tinfo["name"] == "run_shell":
+                        _shell_chunks = []
+                    if _shell_chunks:
+                        _shell_dests = [
+                            _t for _t in running_tools.values() if _t["name"] == "run_shell"
+                        ]
+                        for _idx, (_key, _text) in enumerate(_shell_chunks):
+                            _dest = _shell_dests[_idx] if _idx < len(_shell_dests) else (_shell_dests[0] if _shell_dests else None)
+                            if _dest:
                                 yield _sse({
                                     "type": "tool_output",
-                                    "step": _tinfo["step"],
-                                    "content": _shell_chunk,
+                                    "step": _dest["step"],
+                                    "content": _text,
                                 })
-                                break
                     if running_tools:
                         last_progress_at = now
                     else:
@@ -1103,6 +1118,10 @@ class AgentRunMixin:
                 
                 # ── 工具开始 ──
                 elif kind == "on_tool_start":
+                    # P0-1：并行工具共享同一 parent run → 用 parent_ids[-1] 作为批次 key。
+                    # 拿不到 parent（防御性）时退化为各自独立批次。
+                    _parents = event.get("parent_ids") or []
+                    _batch_key = _parents[-1] if _parents else event.get("run_id", "")
                     step_count += 1
                     graph_steps += 1
                     tool_name = event.get("name", "")
@@ -1134,8 +1153,17 @@ class AgentRunMixin:
                     # 避免上下文滚雪球到下次 LLM 调用才压。失败不中断工具执行。
                     # compress_context 手动工具例外：压缩由工具自身在其执行中完成
                     # （结果文本即压缩报告），此处跳过避免同一轮压缩两次。
+                    #
+                    # P0-1 并发保护：并行工具会在同一时刻到达这里，而压缩是
+                    # 「读 checkpoint → 改 → 写回」的读改写序列，并发执行会互相覆盖。
+                    # 同一批（同一 parent run）只让第一个工具做压缩，其余跳过——
+                    # 本批第一个工具已经压过，后续工具再压也没有新增信息可减。
                     try:
-                        if tool_name != "compress_context":
+                        # compress_context 自己会在工具内部压缩，不在这里重复；
+                        # 且它不算「本批已压缩」——否则同批的其它工具会白跑一次压缩机会。
+                        if _batch_key not in _compacted_batches and tool_name != "compress_context":
+                            # 先占位再 await：占位是同步的，避免两个协程同时通过检查
+                            _compacted_batches.add(_batch_key)
                             # 压缩耗时不可预知且期间零图事件 → 标「忙」，避免被外层空闲看门狗误杀
                             with OpBusy():
                                 _report = await self._compact_checkpoint_before_tool(run_config, model_override=model_override, provider_override=provider_override)
@@ -1281,7 +1309,9 @@ class AgentRunMixin:
                     # 顺序在 tool_result 之前，前端先追加实时输出、再展示完整结果。
                     if tool_name == "run_shell":
                         try:
-                            _tail_chunk = drain_shell_output()
+                            # 此时已确定 step，把所有残留队列的输出都补给本卡片
+                            _tail_chunks = drain_all_shell_output()
+                            _tail_chunk = "".join(t for _k, t in _tail_chunks)
                         except Exception:
                             _tail_chunk = ""
                         if _tail_chunk:
@@ -1290,7 +1320,10 @@ class AgentRunMixin:
                                 "step": step_for_tool,
                                 "content": _tail_chunk,
                             })
-                    is_error = bool(output_str.strip().startswith("❌"))
+                    # P1-5：统一状态归类（ok/empty/error/timeout），不再只靠 emoji 前缀。
+                    # empty 与 error 的区别很关键：前者是「跑成功但没输出」，模型不该重试。
+                    _tool_status = classify_tool_output(full_output_raw)
+                    is_error = tool_status_is_error(_tool_status)
                     self._record_tool_call(tool_name, thread_id=tid)
 
                     # 插件事件钩子：on_tool_end（工具调用结束后广播）。
@@ -1344,7 +1377,7 @@ class AgentRunMixin:
                         if _marker in raw_output:
                             idx = raw_output.index(_marker)
                             output_str = raw_output[:idx].strip()[:500]  # 重新截断不含 diff 的部分
-                            is_error = bool(output_str.strip().startswith("❌"))
+                            is_error = tool_status_is_error(classify_tool_output(output_str))
                             try:
                                 diff_data = json.loads(raw_output[idx + len(_marker):])
                                 logger.debug("[DIFF] 成功提取 diff: added=%s removed=%s",
@@ -1384,6 +1417,7 @@ class AgentRunMixin:
                         "result": _truncate(output_str, 400),
                         "result_full": full_output if tool_name == "run_python" else "",
                         "error": is_error,
+                        "status": _tool_status,
                         "error_kind": error_kind,
                         "error_msg": error_msg,
                         "diff": diff_data,

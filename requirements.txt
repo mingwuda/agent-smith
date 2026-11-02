@@ -1,12 +1,24 @@
+# 直接依赖的版本区间（"声明范围"，供 pip 解析）
+#
+# 刻意不用精确锁定：本项目要跨 macOS / Linux / Windows 多个平台分发，
+# 精确版本会因平台 wheel 差异装不上。可复现性交给 requirements.lock。
+#
+# 关键约束（见 CHANGELOG / 架构评审 P1-6）：
+# - langgraph 系列必须 <2.0：代码依赖 `langgraph.prebuilt.create_react_agent`，
+#   该函数自 LangGraph V1.0 起被标记 LangGraphDeprecatedSinceV10，
+#   V2.0 将移除。锁定大版本上限，避免某次 pip install 直接把服务装挂。
+# - langchain / langchain-core 跟随 langgraph 1.x 主版本，同样设上限。
 fastapi>=0.139.0,<1.0.0
 starlette>=1.3.1,<2.0.0
 uvicorn>=0.23.0,<0.33.0
 pydantic>=2.0.0
-langchain>=0.3.0
-langchain-openai>=0.2.0
+langchain>=0.3.0,<2.0.0
+langchain-core>=0.3.0,<2.0.0
+langchain-openai>=0.2.0,<2.0.0
+langchain-anthropic>=0.3.0,<2.0.0
+langgraph>=0.2.0,<2.0.0
+langgraph-checkpoint>=2.0.0,<5.0.0
 socksio>=1.0.0  # SOCKS 代理支持（httpx[socks] 的可选依赖，启动 LLM 客户端时需要）
-langgraph>=0.2.0
-langgraph-checkpoint>=2.0.0
 duckduckgo_search>=8.0.0
 requests>=2.31.0
 beautifulsoup4>=4.12.0
@@ -20,5 +32,4 @@ qrcode[pil]>=7.4,<8.0
 playwright>=1.40.0
 Pillow>=10.0.0
 mcp>=1.27,<2  # 官方 MCP SDK(stdio/SSE/HTTP 传输,支持协议版本协商)
-langchain-anthropic>=0.3.0
 tiktoken>=0.8.0  # 精确 token 计数（压缩预算 / should_compact 判定）；缺失时自动回退启发式估算

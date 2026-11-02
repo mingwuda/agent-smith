@@ -3,8 +3,10 @@
 支持 Linux / macOS 的 sh/bash/zsh 和 Windows 的 cmd/powershell。
 自动检测当前操作系统选择合适的 shell。
 """
+import asyncio
 import os
 import re
+import secrets
 import shlex
 import subprocess
 import sys
@@ -20,7 +22,7 @@ from langchain_core.tools import tool
 from .async_tasks import (  # ponytail: 同包内相对导入；stdlib 'async' 是关键字所以包名是 async_tasks 不冲突
     AsyncTask, register_task, get_task, list_tasks, cancel_task,
 )
-from .resource_limits import describe_limits, popen_kwargs
+from .resource_limits import ulimit_prefix
 
 # ── 工作区路径（ContextVar：每个 async 请求各自独立）──
 _workspace_ctx: ContextVar[Optional[Path]] = ContextVar("shell_tools_workspace", default=None)
@@ -60,32 +62,102 @@ _DEFAULT_TIMEOUT = 120
 _ASYNC_THRESHOLD_SECONDS = 30
 
 # ── 实时输出缓冲（方案B：心跳注入）──
-# run_shell 执行期间，_reader() 线程把读取到的输出分块 push 到队列；
+# run_shell 执行期间，reader 把读取到的输出分块 push 到队列；
 # agent_run.py 的心跳循环每 ~2s drain 一次，通过 SSE 事件转发给前端实时展示。
-# ponytail: 分块 decode 用 utf-8+replace，多字节字符可能被切到中间产生个别乱码字符，
-# 但完整结果仍走 _smart_decode 全量解码，工具返回值不受影响（实时展示允许小瑕疵）。
-_SHELL_OUTPUT_QUEUE: deque = deque()
+#
+# P0-1 并行修正：原来是一个全局队列 + 每次开始 _clear()，两个 run_shell 并行时
+# 后启动的会清掉先启动的实时输出，且两路输出混在一起、卡片内容串台。
+# 改为「按调用 key 隔离」：每个 run_shell 自己的小队列，drain 时按 key 取。
+_SHELL_OUTPUT_QUEUES: "dict[str, deque]" = {}
 _SHELL_OUTPUT_LOCK = threading.Lock()
 
+# 当前调用的隔离 key（ContextVar：随 asyncio/线程上下文传递）
+_output_key_ctx: ContextVar[str] = ContextVar("shell_output_key", default="default")
 
-def drain_shell_output() -> str:
-    """取出并清空实时输出缓冲，返回拼接后的字符串（无新内容返回 ''）。
 
-    线程安全：被 agent_run.py 心跳循环（事件循环线程）与 _reader()（子线程）并发调用。
+def new_output_key() -> str:
+    """为一次 run_shell 调用分配唯一输出 key。
+
+    ponytail: 工具内部拿不到 LangGraph 的 run_id（实测 config.get('run_id') 为 None），
+    所以由工具自己在入口生成一个随机 key。心跳循环按 key 把输出推出，
+    具体落到哪张卡片由 agent_run 结合 running_tools 的 step 决定。
     """
+    return "sh-" + secrets.token_hex(4)
+
+
+def _output_key() -> str:
+    """当前 run_shell 调用的隔离 key。
+
+    ponytail: 用 ContextVar 而非线程局部——工具在线程池/事件循环里执行，
+    线程不可靠，ContextVar 会随调用传递。未设置时退回 "default"（兼容旧调用点/测试）。
+    """
+    return _output_key_ctx.get()
+
+
+def set_output_key(key: str):
+    """为本轮工具调用设置隔离 key（由工具层根据 run_id 设置）。"""
+    _output_key_ctx.set(key)
+
+
+def drain_shell_output(key: str = "") -> str:
+    """取出并清空指定调用的实时输出缓冲（无新内容返回 ''）。
+
+    key 为空时 drain 默认 key；传具体 key 可定点取某个并行调用的输出。
+    线程安全：被 agent_run.py 心跳循环（事件循环线程）与 reader 线程并发调用。
+    """
+    k = key or _output_key()
     with _SHELL_OUTPUT_LOCK:
-        if not _SHELL_OUTPUT_QUEUE:
+        q = _SHELL_OUTPUT_QUEUES.get(k)
+        if not q:
             return ""
         parts = []
-        while _SHELL_OUTPUT_QUEUE:
-            parts.append(_SHELL_OUTPUT_QUEUE.popleft())
+        while q:
+            parts.append(q.popleft())
         return "".join(parts)
 
 
-def _clear_shell_output() -> None:
-    """清空实时输出缓冲。每次 run_shell 开始/结束时调用，防止残留混入下一次调用。"""
+def drain_all_shell_output() -> list[tuple[str, str]]:
+    """取出所有调用队列的增量输出，返回 [(key, text), ...]。心跳循环并行时需要它。"""
     with _SHELL_OUTPUT_LOCK:
-        _SHELL_OUTPUT_QUEUE.clear()
+        out: list[tuple[str, str]] = []
+        for k, q in _SHELL_OUTPUT_QUEUES.items():
+            if not q:
+                continue
+            parts = []
+            while q:
+                parts.append(q.popleft())
+            out.append((k, "".join(parts)))
+        return out
+
+
+def _emit_output(text: str, key: str = "") -> None:
+    """把一段输出追加到指定调用的队列（内部使用）。"""
+    if not text:
+        return
+    k = key or _output_key()
+    with _SHELL_OUTPUT_LOCK:
+        _SHELL_OUTPUT_QUEUES.setdefault(k, deque()).append(text)
+
+
+def _clear_shell_output(key: str = "") -> None:
+    """清空指定调用的实时输出缓冲（只清自己的，不影响并行中的其它调用）。"""
+    k = key or _output_key()
+    with _SHELL_OUTPUT_LOCK:
+        _SHELL_OUTPUT_QUEUES.pop(k, None)
+
+
+# 已结束调用的 key：它们的队列保留到最后一块被 drain（on_tool_end 兜底），
+# 但最多保留 _FINISHED_KEY_MAX 个，超出的按 FIFO 回收，防止长进程无界增长。
+_finished_keys: "deque[str]" = deque()
+_FINISHED_KEY_MAX = 32
+
+
+def _mark_output_finished(key: str) -> None:
+    """标记某次调用的输出已结束；队列保留供尾部 drain，但限制总个数。"""
+    with _SHELL_OUTPUT_LOCK:
+        _finished_keys.append(key)
+        while len(_finished_keys) > _FINISHED_KEY_MAX:
+            _SHELL_OUTPUT_QUEUES.pop(_finished_keys.popleft(), None)
 
 
 _SHELL_CMD_CACHE: Optional[list[str]] = None
@@ -333,7 +405,7 @@ def _clean_command_for_cmd(command: str) -> str:
 
 
 @tool
-def run_shell(command: str, timeout: int = _DEFAULT_TIMEOUT, description: str = "") -> str:
+async def run_shell(command: str, timeout: int = _DEFAULT_TIMEOUT, description: str = "") -> str:
     """执行 Shell 命令并返回 stdout/stderr 输出。
     自动检测操作系统选择合适的 shell（Linux/macOS 用 bash，Windows 用 cmd）。
 
@@ -345,9 +417,9 @@ def run_shell(command: str, timeout: int = _DEFAULT_TIMEOUT, description: str = 
 
     允许的命令类型：文件操作、文本处理、网络工具、系统信息等。
     禁止的操作：提权（sudo/su）、格式化、写裸设备、fork bomb 等。
-    资源限制：CPU 时间 600s、单文件 512MB、进程数 512（Linux 额外有约 2GB 内存上限）。
-    macOS 内核对内存 rlimit 不生效，内存失控靠 CPU 时间超限被杀兑底。
-    超限时进程被操作系统终止，表现为非零退出码 / MemoryError，而不是拖垮整台机器。
+    资源限制由 resource_limits 统一控制（见 README「子进程资源限制」）。
+    超限时进程被操作系统终止，表现为非零退出码。
+    注意：非零退出码不一定是失败——grep 无匹配、git diff 有改动都是 1。
 
     示例:
       run_shell("pip install -r requirements.txt", description="安装依赖")
@@ -375,7 +447,9 @@ def run_shell(command: str, timeout: int = _DEFAULT_TIMEOUT, description: str = 
     #   - 未配置 key / 调用失败 / 超时 → 静默放行，绝不阻塞 run_shell；
     #   - 可在设置中通过 JEV_RISK_GATE=0 全局关闭。
     if _jev_risk_gate_enabled() and not risky and not _is_command_approved(_current_user_ctx.get(), command):
-        _jev_gate = _jev_risk_gate(cmd)
+        # P0-1：Jev 门控是同步 HTTP（≤2s），在 async 工具里直接调会阻塞事件循环，
+        # 把其它并行工具一起卡住。丢到线程池执行，保持事件循环畅通。
+        _jev_gate = await asyncio.to_thread(_jev_risk_gate, cmd)
         if _jev_gate and _jev_gate.get("needs_confirmation"):
             return f"__CONFIRM_NEEDED__::{_jev_gate['reason']}::__CMD__::{command}"
 
@@ -384,6 +458,9 @@ def run_shell(command: str, timeout: int = _DEFAULT_TIMEOUT, description: str = 
 
     # ── 剥离末尾 '| tail -N' 管道（tail 全缓冲会掐死实时输出，见 _strip_tail_pipe 注释）──
     cmd = _strip_tail_pipe(cmd)
+
+    # ── 资源限制（评审 P1-7）：命令前拼 ulimit，避开 preexec_fn 的多线程 fork 死锁 ──
+    cmd = ulimit_prefix() + cmd
 
     # ── 选择 shell ──
     shell_cmd = _detect_shell()
@@ -399,108 +476,100 @@ def run_shell(command: str, timeout: int = _DEFAULT_TIMEOUT, description: str = 
     # 到后台。原来"按 timeout 预判走异步"的逻辑被移除，因为它会过度异步化（默认
     # timeout=120 > 阈值 30，导致 echo 这种 0.1s 命令也被错放后台）。
     start_time = time.time()
-    return _run_shell_sync(
+    # P0-1：每次调用自己的输出 key，并行时各自入各自的队列，不互相清空/串台
+    set_output_key(new_output_key())
+    return await _run_shell_sync(
         command, cmd, timeout, shell_cmd, before_files, _ws, start_time, description
     )
 
 
-def _run_shell_sync(
+async def _run_shell_sync(
     command, cmd, timeout, shell_cmd, before_files, _ws, start_time, description=""
 ):
-    """run_shell 同步执行路径：先前台跑 30s，超时则把进程转后台任务（handoff），
-    立即返回 task_id。
+    """run_shell 主执行路径（async）：先前台跑 30s，超时则把进程转后台任务（handoff）。
 
-    ponytail: 这是 P0 修复——把"按 timeout 预判走异步"改成"先前台真跑，
-    30s 真超时再 handoff 到后台"。短命令 (<30s) 行为完全不变（agent 拿到完整结果）；
-    长命令 (>=30s) 切后台后立即返回 task_id，agent 拿到 task_id 后用跟进工具查结果。
+    P0-1 改造：从「subprocess.Popen + reader 线程」改为「asyncio subprocess + 协程读」。
+    好处：
+      - 真正并行：多个 run_shell 在同一事件循环里并发，不再各占一个线程池槽位；
+      - 实时输出按调用 key 隔离（见 _SHELL_OUTPUT_QUEUES），并行时不串台。
+    保留原语义：短命令直接返回完整结果；≥30s 才 handoff 到后台 task，不 kill 不重跑。
 
-    ponytail: handoff 设计——同步路径下的 Popen 进程 + reader 线程 + 已累积的 raw_bytes
-    全部转移到新 task 上；后台补一个 wait_and_collect 线程读剩余输出并终结 task。
-    这种"前台进程→后台任务"的桥接比"kill + 重启"更省：不会丢失已跑的 30s 进度，
-    已累积输出也已经写进 task.output。
+    ponytail: 资源限制仍走 preexec_fn（asyncio 的 subprocess 支持该参数），
+    与同步路径共用 resource_limits.ulimit_prefix()（资源限制在命令前置施加）。
     """
-    raw_bytes = b""
-    _clear_shell_output()
-    proc: Optional[subprocess.Popen] = None
-    reader_thread: Optional[threading.Thread] = None
+    _key = _output_key()
+    _clear_shell_output(_key)
+    chunks: list[bytes] = []
 
     if sys.platform == "win32" and shell_cmd[0] == "cmd":
         cmd = f"@chcp 65001 >nul && {cmd}"
-    proc = subprocess.Popen(
-        shell_cmd + [cmd],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        cwd=str(_ws) if _ws else None,
-        **_popen_group_kwargs(),
-        **popen_kwargs(),
-    )
 
-    def _reader():
-        nonlocal raw_bytes
+    kwargs = {
+        "stdout": asyncio.subprocess.PIPE,
+        "stderr": asyncio.subprocess.STDOUT,
+        "cwd": str(_ws) if _ws else None,
+        **_popen_group_kwargs(),
+        # 资源限制已由前置 ulimit 施加（见 ulimit_prefix），不再传 preexec_fn
+    }
+    try:
+        proc = await asyncio.create_subprocess_exec(*(shell_cmd + [cmd]), **kwargs)
+    except Exception as e:  # noqa: BLE001 — 启动失败要原样告知模型（权限/路径等）
+        return f"❌ 执行失败: {e}"
+
+    async def _pump() -> None:
+        """持续读 stdout，追加到 chunks + 推实时队列。"""
+        assert proc.stdout is not None
         while True:
-            chunk = proc.stdout.read1(4096)
+            chunk = await proc.stdout.read(4096)
             if not chunk:
                 break
-            raw_bytes += chunk
-            with _SHELL_OUTPUT_LOCK:
-                _SHELL_OUTPUT_QUEUE.append(chunk.decode("utf-8", errors="replace"))
+            chunks.append(chunk)
+            _emit_output(chunk.decode("utf-8", errors="replace"), _key)
 
-    reader_thread = threading.Thread(target=_reader, daemon=True)
-    reader_thread.start()
+    pump_task = asyncio.create_task(_pump())
 
     try:
-        # ponytail: 前台等 30s（阈值），不是 timeout。timeout 仅在"命令真要跑很久"时
-        # 决定 handoff 后最多再跑多久（防止忘关的后台进程无限占资源）。
-        proc.wait(timeout=_ASYNC_THRESHOLD_SECONDS)
-        reader_thread.join(timeout=5)
-        raw_output = _smart_decode(raw_bytes)
+        # 前台等 30s（阈值），不是 timeout。
+        await asyncio.wait_for(asyncio.shield(proc.wait()), timeout=_ASYNC_THRESHOLD_SECONDS)
+        await asyncio.wait_for(pump_task, timeout=5)
+        raw_output = _smart_decode(b"".join(chunks))
         elapsed = time.time() - start_time
-        returncode = proc.returncode
-    except subprocess.TimeoutExpired:
-        # ponytail: 真超过 30s——把已跑的进程 + 已读的输出 handoff 给后台任务。
-        # 不 kill、不重启；让命令继续跑到 timeout 或自然结束，agent 用 task_id 跟进。
+        returncode = proc.returncode or 0
+        # 注意：不在这里清队列。最后一块输出要留给 on_tool_end 的兜底 drain（实时预览尾部），
+        # 并且下一次调用开始时 _clear_shell_output(_key) 只清自己的（key 每次调用不同）。
+        # 回收交给「调用结束时清理自己」——见 _finish_output_key。
+        _mark_output_finished(_key)
+        return _format_shell_result(raw_output, returncode, elapsed, _ws, before_files)
+    except asyncio.TimeoutError:
+        # 真超过 30s：把已跑的进程 + 已读输出 handoff 给后台任务（不 kill、不重跑）。
         task = register_task(command, description=description)
-        task.proc = proc
-        task.status = "running"  # 已 Popen 启动，立即置 running
-        task.output = _smart_decode(raw_bytes)  # 已累积的 30s 输出写进 task
-        _raw_so_far = raw_bytes  # 闭包给后台 reader 用
+        task.proc = _AsyncioProcAdapter(proc)
+        task.status = "running"
+        task.output = _smart_decode(b"".join(chunks))
 
-        def _continue_reader():
-            """后台线程：继续读剩余 stdout，更新 task.status。"""
+        async def _continue() -> None:
+            """后台：继续读剩余输出直到 EOF，更新 task 终态。"""
             try:
-                more = b""
-                while True:
-                    chunk = proc.stdout.read1(4096)
-                    if not chunk:
-                        break
-                    more += chunk
-                    text = chunk.decode("utf-8", errors="replace")
-                    with _SHELL_OUTPUT_LOCK:
-                        _SHELL_OUTPUT_QUEUE.append(text)
-                proc.wait()  # 读到 EOF 后 wait 不阻塞
-                decoded_more = _smart_decode(more)
-                task.output = task.output + decoded_more if task.output else decoded_more
+                await pump_task
+                await proc.wait()
                 if task.status == "cancelled":
                     return
-                task.returncode = proc.returncode
+                task.returncode = proc.returncode or 0
                 task.status = "done" if proc.returncode == 0 else "failed"
-                if proc.returncode != 0:
+                if proc.returncode:
                     task.error = f"exit code {proc.returncode}"
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 task.status = "failed"
                 task.error = str(e)
             finally:
                 task.finished_at = time.time()
                 task.proc = None
 
-        threading.Thread(target=_continue_reader, daemon=True).start()
-        # 同步 reader 线程也让它退出（Popen 已没人引用，但它还在 read1 阻塞）
-        if reader_thread and reader_thread.is_alive():
-            reader_thread.join(timeout=2)  # 等它自然结束（stdout 已被 _continue_reader 持有读）
+        asyncio.create_task(_continue())
 
         elapsed = time.time() - start_time
         return (
-            f"⏱️ 命令前台执行 {elapsed:.0f}s 仍未完成，已转后台继续运行。\n"
+            f"⏱ 命令前台执行 {elapsed:.0f}s 仍未完成，已转后台继续运行。\n"
             f"- task_id: {task.task_id}\n"
             f"- 原 timeout: {timeout}s（后台继续运行至超时）\n"
             f"- 命令: {command[:200]}\n"
@@ -513,90 +582,74 @@ def _run_shell_sync(
             f"\n"
             f"实时输出仍会通过 SSE 推送到前端，无需主动拉取。"
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         return f"❌ 执行失败: {e}"
 
-    return _format_shell_result(raw_output, returncode, elapsed, _ws, before_files)
 
+class _AsyncioProcAdapter:
+    """把 asyncio.subprocess.Process 适配成 async_tasks.cancel_task 能用的形状。
 
-def _run_shell_async(command, cmd, timeout, shell_cmd, before_files, _ws):
-    """run_shell 异步执行路径（长任务，>= 30s）：启动后台进程，立即返回 task_id。
+    ponytail: cancel_task 只需要 pid / poll() / kill() / wait(timeout)。
+    asyncio.Process 的 wait 是协程，而 cancel_task 在同步线程里调用，
+    所以这里用 pid 发信号（配合 start_new_session 的进程组终止），不依赖协程。
 
-    ponytail: 后台线程独立 Popen + 独立 reader，不阻塞主流程。任务调度（get/wait/cancel/list）
-    由 agent 用新工具跟进，状态存于 async_tasks 进程级 dict。
+    ⚠ 关键（评审 P1-4）：wait() 不能用 `time.sleep` 轮询 `proc.returncode`。
+    该属性只由事件循环的 child watcher 更新——若在协程里同步阻塞轮询，
+    循环被堵死，returncode 永远不会被写入，于是「进程已死」也会报「未响应 SIGKILL」，
+    正好复现了它本来要修的「谎报失败」。故改用 `os.kill(pid, 0)` 探测存活，
+    不依赖任何 asyncio 内部状态。
     """
-    task = register_task(command)
-    _clear_shell_output()
 
-    def _runner():
-        """后台线程：跑命令、读输出、更新任务状态。"""
+    _POLL_WAIT = 2.0  # 取消路径的等待上限（评审建议：从 10s 降到 2s）
+
+    def __init__(self, proc):
+        self._proc = proc
+        self.pid = proc.pid
+        self.returncode = proc.returncode
+
+    def _alive(self) -> bool:
+        """进程是否仍存活（信号 0 只探测，不实际发送）。
+
+        ponytail: 先看 returncode（事件循环已回填时最准），再用 os.kill(pid,0)。
+        ESRCH = 进程不存在；EPERM = 存在但无权限（仍算存活）。
+        """
+        if self._proc.returncode is not None:
+            return False
+        if self.pid is None:
+            return False
         try:
-            # ponytail: 进入 Popen 前再 check 一次状态——若 cancel_task 已把 status 标为
-            # cancelled（极短窗口内），则不再启动进程，直接退出。
-            _cur = get_task(task.task_id)
-            if _cur is None or _cur.status == "cancelled":
-                return
-            if sys.platform == "win32" and shell_cmd[0] == "cmd":
-                _async_cmd = f"@chcp 65001 >nul && {cmd}"
-            else:
-                _async_cmd = cmd
-            proc = subprocess.Popen(
-                shell_cmd + [_async_cmd],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                cwd=str(_ws) if _ws else None,
-                **_popen_group_kwargs(),
-                **popen_kwargs(),
-            )
-            task.proc = proc  # 暴露给 cancel_task
-            # ponytail: Popen 启动后立即把 status 升为 running，让 list/wait 看到正确状态。
-            # 此时若 cancel_task 来调用，能正常 kill 进程（不是 pending 路径）。
-            if task.status == "pending":
-                task.status = "running"
-            output_chunks: list[str] = []
-            while True:
-                chunk = proc.stdout.read1(4096)
-                if not chunk:
-                    break
-                text = chunk.decode("utf-8", errors="replace")
-                output_chunks.append(text)
-                task.output += text
-                with _SHELL_OUTPUT_LOCK:
-                    _SHELL_OUTPUT_QUEUE.append(text)
-            proc.wait()
-            # ponytail: 若在 proc.wait() 返回前被 cancel_task 标为 cancelled，
-            # 不要把 status 覆盖为 done/failed，否则 cancel 测试会看到状态在两者间抖动。
-            if task.status == "cancelled":
-                return
-            task.returncode = proc.returncode
-            if proc.returncode == 0:
-                task.status = "done"
-            else:
-                task.status = "failed"
-                task.error = f"exit code {proc.returncode}"
-        except Exception as e:
-            task.status = "failed"
-            task.error = str(e)
-        finally:
-            task.finished_at = time.time()
-            task.proc = None  # 释放 fd
+            os.kill(self.pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True  # 进程在，只是不归我们管
+        except OSError:
+            return self._proc.returncode is None
 
-    threading.Thread(target=_runner, daemon=True).start()
+    def poll(self):
+        if self._proc.returncode is not None:
+            return self._proc.returncode
+        if not self._alive():
+            return -1  # 已退出但事件循环尚未回填
+        return None
 
-    return (
-        f"⏱️ 长任务已在后台启动。\n"
-        f"- task_id: {task.task_id}\n"
-        f"- timeout: {timeout}s（后台继续运行至超时）\n"
-        f"- 命令: {command[:200]}\n"
-        f"\n"
-        f"**请用以下工具跟进，不要干等：**\n"
-        f"- get_async_task(task_id='{task.task_id}')：查状态\n"
-        f"- wait_async_task(task_id='{task.task_id}', timeout=10)：等待完成（短轮询）\n"
-        f"- cancel_async_task(task_id='{task.task_id}')：终止\n"
-        f"- list_async_tasks()：查看所有在飞任务\n"
-        f"\n"
-        f"实时输出仍会通过 SSE 推送到前端，无需主动拉取。"
-    )
+    def wait(self, timeout=None):
+        deadline = time.time() + (timeout if timeout is not None else self._POLL_WAIT)
+        while self._alive() and time.time() < deadline:
+            time.sleep(0.05)
+        self.returncode = self._proc.returncode
+        if self._alive():
+            raise subprocess.TimeoutExpired(cmd="", timeout=timeout or self._POLL_WAIT)
+        return self.returncode if self.returncode is not None else -1
+
+    def kill(self):
+        """回退单进程终止（进程组路径由 _kill_process_tree 的 killpg 处理）。"""
+        if self._proc.returncode is None:
+            try:
+                self._proc.kill()
+            except ProcessLookupError:
+                pass
 
 
 def _format_shell_result(raw_output: str, returncode: int, elapsed: float, _ws, before_files) -> str:
@@ -617,8 +670,20 @@ def _format_shell_result(raw_output: str, returncode: int, elapsed: float, _ws, 
                 + ("\n  ..." if len(changed) > 20 else "")
             )
 
+    # 退出码处理（评审 P0-2）：不要用 ❌ 报非零退出。
+    # 大量命令的退出码本身就是语义，不是失败：
+    #   grep 无匹配=1、diff 有差异=1、[ -f ] 不成立=1、git diff --quiet 有改动=1。
+    # 把它们标红会让模型误以为工具坏了而重试或改策略，前端也无谓报红。
+    # 故：非零退出用中性的「已执行 (exit code: N)」，只有工具自身硬失败才用 ❌。
+    if returncode != 0:
+        mark = f"✅ 命令已执行 (exit code: {returncode}, 耗时: {elapsed:.1f}s)"
+    elif not raw_output.strip():
+        # 明确告知模型：成功但无输出，不是失败
+        mark = f"✅ 命令已执行 (exit code: 0, 耗时: {elapsed:.1f}s，无输出)[状态: empty] 不要原样重试同一命令。"
+    else:
+        mark = f"✅ 命令已执行 (exit code: 0, 耗时: {elapsed:.1f}s)"
     summary = (
-        f"✅ 命令已执行 (exit code: {returncode}, 耗时: {elapsed:.1f}s)"
+        mark
         + workspace_changes
         + "\n\n"
         + _truncate(raw_output)

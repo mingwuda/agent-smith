@@ -321,6 +321,33 @@ git_revert       git_command
 - 输出超过 20000 字符时自动截断（保留头 8000 + 尾 8000）
 - 自动对比执行前后工作区文件变更并汇总
 
+### 子进程资源限制
+
+`run_shell` 与 `run_python` 会执行任意命令/代码，因此默认给子进程加 POSIX rlimit
+上限。超限时进程被操作系统终止（表现为 `MemoryError` / 非零退出码 / `⌛ 超时`），
+而不是拖垮整台机器。
+
+| 环境变量 | 说明 | 默认 |
+|------|------|------|
+| `MOSS_RLIMIT` | `0` 关闭全部限制（排障用） | `1` |
+| `MOSS_RLIMIT_MEMORY_MB` | 内存上限（Linux 生效；macOS 内核忽略） | `4096` |
+| `MOSS_RLIMIT_CPU_SECONDS` | CPU 时间上限 | `600` |
+| `MOSS_RLIMIT_FILESIZE_MB` | 单文件写入上限 | `512` |
+| `MOSS_RLIMIT_NOFILE` | 打开文件数 | `1024` |
+| `MOSS_RLIMIT_NPROC` | 进程数（**按 UID 统计全部进程**，非仅本进程树） | `2048` |
+| `MOSS_RLIMIT_MODE` | `ulimit`（默认）/ `preexec` / `off` | `ulimit` |
+
+**关于注入方式**：默认用 `ulimit` 前缀（shell）与脚本首部 `setrlimit`（Python）施加，
+而**不用** `preexec_fn`。CPython 文档明确警告 `preexec_fn` 在多线程进程中
+fork 后、exec 前可能因锁状态死锁；本项目有常驻后台线程，故默认规避。
+
+**平台差异**：macOS 内核对 `RLIMIT_AS` / `RLIMIT_DATA` 的 `setrlimit` 静默忽略，
+内存上限在 macOS 上**不生效**，只能靠 CPU 时间到顶兜底。需要严格内存隔离请用
+Docker / Linux 部署（见下方部署章节）。
+
+> 注意：rlimit 是「防误伤」不是「沙箱」。它限制单进程资源用量，
+> 不做文件系统隔离；恶意代码仍能读写工作区外你有权限的文件。
+
 ### 浏览器自动化
 
 Moss Agent 内置浏览器自动化，默认采用 **Obscura** 轻量无头浏览器，失败时自动回退到本地 Chromium。双后端引擎通过运行时探测自动选择，agent 调用前即可感知当前后端能力差异。

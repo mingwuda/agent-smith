@@ -1,10 +1,12 @@
 """run_shell 实时输出缓冲测试（方案B：心跳注入）。
 
-背景（ponytail）：run_shell 执行期间，_reader() 线程把输出分块 push 到
-_SHELL_OUTPUT_QUEUE，agent_run.py 心跳循环 drain 后经 SSE 转发前端实时展示。
-这里只验证队列语义（drain/clear）与「工具执行期间中间输出可被读到」，
+背景（ponytail）：run_shell 执行期间把输出分块 push 到「按调用隔离」的队列，
+agent_run.py 心跳循环 drain 后经 SSE 转发前端实时展示。
+P0-1 改造后队列不再是单个全局 deque，而是 _SHELL_OUTPUT_QUEUES[key]。
+这里只验证队列语义（drain/clear/隔离）与「工具执行期间中间输出可被读到」，
 不依赖真实 LLM/LangGraph。
 """
+import asyncio
 import sys
 import threading
 import time
@@ -13,18 +15,23 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "agent_core"))
 
 from tools.shell_tools import (  # noqa: E402
-    _SHELL_OUTPUT_LOCK,
-    _SHELL_OUTPUT_QUEUE,
     _clear_shell_output,
+    _emit_output,
     _strip_tail_pipe,
+    drain_all_shell_output,
     drain_shell_output,
     run_shell,
+    set_output_key,
 )
 
 
-def _push(text: str) -> None:
-    with _SHELL_OUTPUT_LOCK:
-        _SHELL_OUTPUT_QUEUE.append(text)
+def _push(text: str, key: str = "default") -> None:
+    _emit_output(text, key)
+
+
+def _invoke(command: str, **kw) -> str:
+    """同步调用 async 工具（测试便捷包装）。"""
+    return asyncio.run(run_shell.ainvoke({"command": command, **kw}))
 
 
 def test_drain_empty():
@@ -48,21 +55,35 @@ def test_clear_discards():
     assert drain_shell_output() == ""
 
 
+def test_queues_are_isolated_by_key():
+    """P0-1：不同调用的队列互不影响（并行不串台、不互相清空）。"""
+    _clear_shell_output("k1")
+    _clear_shell_output("k2")
+    set_output_key("k1")
+    _push("one", "k1")
+    # k2 开始时只清自己，不应动 k1
+    _clear_shell_output("k2")
+    _push("two", "k2")
+    assert drain_shell_output("k1") == "one"
+    assert drain_shell_output("k2") == "two"
+    set_output_key("default")
+
+
 def test_realtime_output_visible_during_run():
     """工具执行期间（未结束）能读到中间输出块。"""
     _clear_shell_output()
     result: dict = {}
 
     def _run():
-        # ponytail: 显式 timeout=10（< 30s 异步阈值）走同步路径，drain 才能在 invoke 返回前抓到输出。
-        # 不传 timeout 会走异步路径，invoke 立刻返回拿不到中间块。
-        result["out"] = run_shell.invoke({"command": "echo first; sleep 1; echo second; sleep 1; echo done", "timeout": 10})
+        # ponytail: 显式 timeout=10（< 30s 异步阈值）走前台完成路径，
+        # drain 才能在返回前抓到输出。不传 timeout 会走 handoff，拿不到中间块。
+        result["out"] = _invoke("echo first; sleep 1; echo second; sleep 1; echo done", timeout=10)
 
     t = threading.Thread(target=_run, daemon=True)
     t.start()
     chunks = []
     for _ in range(50):
-        c = drain_shell_output()
+        c = "".join(text for _k, text in drain_all_shell_output())
         if c:
             chunks.append(c)
         if not t.is_alive():
@@ -81,19 +102,26 @@ def test_realtime_output_visible_during_run():
 def test_tail_survives_until_tool_end_drain():
     """run_shell 结束后残余不再被 finally 清空——最后一块输出要留给 on_tool_end 兜底 drain 补发。"""
     _clear_shell_output()
-    run_shell.invoke({"command": "echo tail_marker"})
-    tail = drain_shell_output()
+    _invoke("echo tail_marker")
+    tail = "".join(t for _k, t in drain_all_shell_output())
     assert "tail_marker" in tail, f"工具结束前最后一块应保留可 drain，实际: {tail!r}"
 
 
 def test_next_run_clears_previous_residue():
-    """即使上一次残余未被 drain（on_tool_end 未执行等异常路径），下一次 run_shell 开始时自动清空，不串扰。"""
-    _clear_shell_output()
-    _push("stale_residue")  # 模拟上次工具结束未被 drain 的残余
-    run_shell.invoke({"command": "echo fresh"})
-    got = drain_shell_output()
-    assert "fresh" in got, f"应只拿到本次输出，实际: {got!r}"
-    assert "stale_residue" not in got, "上次残余不应串入本次输出"
+    """P0-1：每次调用使用独立 key，互不串扰（不再需要「下次开始清全局队列」）。
+
+    旧设计是一个全局 deque + 每次开始 clear()，并行时后启动会清掉先启动的输出。
+    新设计每个调用自己的 key，因此「上次残余」根本不会进入本次队列。
+    """
+    _clear_shell_output("legacy")
+    _push("stale_residue", "legacy")  # 模拟上一次调用未被 drain 的残余（挂在旧 key 上）
+    _invoke("echo fresh")
+    # 本次调用是新 key，只会拿到新鲜输出
+    got = drain_shell_output("legacy")
+    assert "stale_residue" in got, "旧键的残余应独立于新调用"
+    # 新调用的输出绝不能混入旧残余：用工具返回值佐证
+    fresh = _invoke("echo fresh")
+    assert "stale_residue" not in fresh, f"新调用不应混入旧残余: {fresh!r}"
 
 
 # ── 末尾 '| tail -N' 管道剥离（实时输出被 tail 全缓冲掐死的修复）──
@@ -121,15 +149,15 @@ def test_tail_pipe_command_realtime_visible_during_run():
 
     def _run():
         # 命令带 2>&1 | tail -5 —— 修复前 tail 全缓冲，执行期间读不到任何字节
-        result["out"] = run_shell.invoke({
-            "command": "echo tail_a; sleep 1; echo tail_b; sleep 1; echo tail_c 2>&1 | tail -5",
-        })
+        result["out"] = _invoke(
+            "echo tail_a; sleep 1; echo tail_b; sleep 1; echo tail_c 2>&1 | tail -5"
+        )
 
     t = threading.Thread(target=_run, daemon=True)
     t.start()
     chunks = []
     for _ in range(60):
-        c = drain_shell_output()
+        c = "".join(t for _k, t in drain_all_shell_output())
         if c:
             chunks.append(c)
         if not t.is_alive():
@@ -147,7 +175,7 @@ def test_tail_pipe_command_realtime_visible_during_run():
 
 def test_tail_pipe_stripped_from_executed_command():
     """实际执行的命令不含末尾 '| tail -N'（通过返回值确认剥离生效）。"""
-    out = run_shell.invoke({"command": "echo hi 2>&1 | tail -5"})
+    out = _invoke("echo hi 2>&1 | tail -5")
     # 剥离后命令变成 'echo hi'，输出只有 hi；若未剥离会执行 echo hi | tail -5（结果相同但无法区分）。
     # 用 exit code 0 与不含管道错误佐证剥离后正常执行。
     assert "✅ 命令已执行" in out

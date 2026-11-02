@@ -1098,11 +1098,21 @@ def _extract_steps_from_messages(messages: list) -> list[dict]:
                 result_text = json.dumps(json.loads(raw), ensure_ascii=False) if raw.startswith("{") else raw
             except (json.JSONDecodeError, ValueError):
                 result_text = raw
+            # P1-5：带上状态分类，让历史回放也能区分「空结果」与「报错」
+            try:
+                from tool_result import classify, is_error
+
+                _status = classify(result_text if isinstance(result_text, str) else str(result_text))
+                _is_err = is_error(_status)
+            except Exception:
+                _status, _is_err = "ok", False
             steps.append({
                 "type": "tool_result",
                 "tool": tool_name,
                 "result": _truncate(result_text),
                 "result_full": result_text,
+                "status": _status,
+                "error": _is_err,
             })
         elif msg.type == "ai" and msg.content and not getattr(msg, "tool_calls", None):
             # AI 的纯文本思考（非工具调用）

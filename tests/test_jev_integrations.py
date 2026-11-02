@@ -6,6 +6,7 @@
 
 运行：python -m pytest tests/test_jev_integrations.py -q
 """
+import asyncio
 import os
 import sys
 from pathlib import Path
@@ -119,7 +120,7 @@ def test_shell_run_shell_returns_confirm_marker_on_jev_hit():
          mock.patch(_GATE,
                     return_value={"needs_confirmation": True, "probability": 0.9,
                                   "reason": "Jev 语义风险门控命中", "available": True}):
-        out = shell_tools.run_shell.invoke({"command": safe_cmd, "timeout": 5})
+        out = asyncio.run(shell_tools.run_shell.ainvoke({"command": safe_cmd, "timeout": 5}))
     assert out.startswith("__CONFIRM_NEEDED__")
     assert "Jev" in out
     assert safe_cmd in out
@@ -128,7 +129,7 @@ def test_shell_run_shell_returns_confirm_marker_on_jev_hit():
 def test_shell_run_shell_executes_when_jev_unavailable():
     """Jev 不可用 → 命令照常执行（降级不破坏原有能力）。"""
     with mock.patch(_KEY, return_value=""):
-        out = shell_tools.run_shell.invoke({"command": "echo jev_degraded_ok", "timeout": 5})
+        out = asyncio.run(shell_tools.run_shell.ainvoke({"command": "echo jev_degraded_ok", "timeout": 5}))
     assert "jev_degraded_ok" in out
     assert "__CONFIRM_NEEDED__" not in out
 
@@ -139,7 +140,7 @@ def test_shell_run_shell_skips_gate_when_already_approved():
     with mock.patch(_KEY, return_value="k"), \
          mock.patch(_GATE) as m:
         shell_tools._current_user_ctx.set("u_gate")
-        out = shell_tools.run_shell.invoke({"command": "echo approved_cmd", "timeout": 5})
+        out = asyncio.run(shell_tools.run_shell.ainvoke({"command": "echo approved_cmd", "timeout": 5}))
     assert "approved_cmd" in out
     m.assert_not_called()
 
