@@ -11,7 +11,9 @@ get / wait / cancel / list 工具跟进，避免 agent 主循环被单一工具�
 """
 from __future__ import annotations
 
+import os
 import secrets
+import signal
 import subprocess
 import threading
 import time
@@ -21,6 +23,9 @@ from typing import Optional
 
 # 任务在内存中保留的时长（秒）。任务完成后超过此时间会被清理（list 时不再可见）。
 TASK_TTL_AFTER_DONE = 600  # 10 min
+
+# 终止进程时 SIGTERM → SIGKILL 的等待窗口（秒）。
+_KILL_GRACE_SECONDS = 5.0
 
 
 @dataclass
@@ -103,11 +108,59 @@ def list_tasks(include_done: bool = True) -> list[AsyncTask]:
         return [t for t in _TASKS.values() if t.status in ("pending", "running")]
 
 
+def _kill_process_tree(proc: subprocess.Popen) -> Optional[str]:
+    """终止 proc 及其整个进程组。成功返回 None，失败返回错误描述。
+
+    ponytail: run_shell 的命令都经 `sh -c` 启动，直接 proc.kill() 只杀掉 shell 本身，
+    命令派生的孙进程（如 `sh -c 'sleep 30 &'` 的 sleep）会被 init 收养变孤儿继续跑
+    ——这正是「点停止后后台命令还在耗资源」的根因。故按进程组整组发信号。
+    上限：start_new_session 未开启的子进程不在独立进程组，killpg 会打不动 ——
+    此时回退到单 proc.kill()，最多少杀孙进程，不会误杀调用方进程组。
+    """
+    if proc is None:
+        return None
+    if proc.poll() is not None:
+        return None  # 已自行退出，无需再杀
+    try:
+        # 子进程若非独立进程组，killpg 会连带杀掉本进程所在组，故先确认再发
+        if hasattr(os, "getpgid"):
+            pgid = os.getpgid(proc.pid)
+            if pgid != os.getpgid(0):
+                os.killpg(pgid, signal.SIGTERM)
+                try:
+                    proc.wait(timeout=_KILL_GRACE_SECONDS)
+                except subprocess.TimeoutExpired:
+                    os.killpg(pgid, signal.SIGKILL)
+                    proc.wait(timeout=_KILL_GRACE_SECONDS)
+                return None
+    except (ProcessLookupError, PermissionError, OSError):
+        pass  # 进程组不可用/无权限 → 回退单进程 kill
+    try:
+        proc.kill()
+        proc.wait(timeout=_KILL_GRACE_SECONDS)
+        return None
+    except subprocess.TimeoutExpired:
+        return "进程未响应 SIGKILL"
+    except Exception as e:  # noqa: BLE001 — 需把失败原因原样交给调用方展示
+        # 信号发不出去时不能直接判失败：进程可能恰好在此刻自行退出。
+        # 再 poll 一次，已退出的按成功处理（否则用户会看到「取消失败」但进程实际不在了）。
+        try:
+            if proc.poll() is not None:
+                return None
+        except Exception:  # noqa: BLE001
+            pass
+        return str(e)
+
+
 def cancel_task(task_id: str) -> tuple[bool, str]:
     """终止任务。返回 (是否成功, 状态描述)。
 
     ponytail: 支持 pending 状态——若 Popen 还没启动（极短窗口），标记为 cancelled，
     后台线程检测到 cancelled 后不再 Popen 直接退出。
+
+    返回值语义（P0 修复）：只有进程确实被终止（或本就已退出）才返回成功。
+    终止失败时返回 False 并把原因交给调用方 —— 旧实现在 kill 失败时仍返回
+    True +「已标记取消」，前端会告诉用户「已停止」但进程还在跑，属误导。
     """
     with _TASKS_LOCK:
         task = _TASKS.get(task_id)
@@ -118,17 +171,18 @@ def cancel_task(task_id: str) -> tuple[bool, str]:
         proc = task.proc
         if proc is None and task.status == "running":
             return False, "任务未启动进程"
-        # 标记为 cancelled（pending 也立即标，防后台线程 Popen 后仍跑）
+        # 先置 cancelled（防后台 reader 把终态覆盖回 done/failed），再真正杀进程
         task.status = "cancelled"
         task.finished_at = time.time()
         task.error = "用户取消"
-    # ponytail: 不在锁内调 Popen.kill——子进程终止是阻塞调用，会拖住其他任务查询。
-    # 锁外执行 kill 完再回到锁内更新状态。
-    if proc is not None:
-        try:
-            proc.kill()
-        except Exception as e:
-            return True, f"已标记取消（终止进程失败: {e}）"
+    # ponytail: 不在锁内调 kill/wait——等进程退出是阻塞调用，会拖住其他任务查询。
+    err = _kill_process_tree(proc)
+    if err:
+        with _TASKS_LOCK:
+            if task.task_id in _TASKS:
+                task.status = "failed"
+                task.error = f"用户取消，但终止进程失败: {err}"
+        return False, f"终止进程失败: {err}（进程可能仍在运行，请手动检查 PID {getattr(proc, 'pid', '?')}）"
     return True, "已终止"
 
 

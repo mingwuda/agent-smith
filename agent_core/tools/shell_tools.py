@@ -20,6 +20,7 @@ from langchain_core.tools import tool
 from .async_tasks import (  # ponytail: 同包内相对导入；stdlib 'async' 是关键字所以包名是 async_tasks 不冲突
     AsyncTask, register_task, get_task, list_tasks, cancel_task,
 )
+from .resource_limits import describe_limits, popen_kwargs
 
 # ── 工作区路径（ContextVar：每个 async 请求各自独立）──
 _workspace_ctx: ContextVar[Optional[Path]] = ContextVar("shell_tools_workspace", default=None)
@@ -88,6 +89,18 @@ def _clear_shell_output() -> None:
 
 
 _SHELL_CMD_CACHE: Optional[list[str]] = None
+
+
+def _popen_group_kwargs() -> dict:
+    """让子进程自成进程组的 Popen 参数（POSIX）。
+
+    ponytail: 配合 async_tasks._kill_process_tree 的 killpg 整组终止。
+    `sh -c 'Sleep 30'` 会再 fork 孙子进程，只 kill shell 会留下孤儿，
+    开启 start_new_session 后整组可一次回收。Windows 无进程组语义，返回空 dict。
+    """
+    if os.name == "nt":
+        return {}
+    return {"start_new_session": True}
 
 
 def _detect_shell() -> list[str]:
@@ -332,6 +345,9 @@ def run_shell(command: str, timeout: int = _DEFAULT_TIMEOUT, description: str = 
 
     允许的命令类型：文件操作、文本处理、网络工具、系统信息等。
     禁止的操作：提权（sudo/su）、格式化、写裸设备、fork bomb 等。
+    资源限制：CPU 时间 600s、单文件 512MB、进程数 512（Linux 额外有约 2GB 内存上限）。
+    macOS 内核对内存 rlimit 不生效，内存失控靠 CPU 时间超限被杀兑底。
+    超限时进程被操作系统终止，表现为非零退出码 / MemoryError，而不是拖垮整台机器。
 
     示例:
       run_shell("pip install -r requirements.txt", description="安装依赖")
@@ -415,6 +431,8 @@ def _run_shell_sync(
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         cwd=str(_ws) if _ws else None,
+        **_popen_group_kwargs(),
+        **popen_kwargs(),
     )
 
     def _reader():
@@ -527,6 +545,8 @@ def _run_shell_async(command, cmd, timeout, shell_cmd, before_files, _ws):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 cwd=str(_ws) if _ws else None,
+                **_popen_group_kwargs(),
+                **popen_kwargs(),
             )
             task.proc = proc  # 暴露给 cancel_task
             # ponytail: Popen 启动后立即把 status 升为 running，让 list/wait 看到正确状态。

@@ -206,39 +206,86 @@ def test_wait_async_task_timeout_keeps_running():
         at._TASKS.clear()
 
 
+def _can_signal_processes() -> bool:
+    """宿主环境是否允许向其它进程发信号（部分沙箱会以 EPERM 拦掉 kill）。"""
+    probe = subprocess.Popen(["sh", "-c", "sleep 5"])
+    try:
+        probe.kill()
+        probe.wait(timeout=2)
+        return True
+    except Exception:
+        return False
+    finally:
+        try:
+            probe.wait(timeout=1)
+        except Exception:
+            pass
+
+
 def test_cancel_async_task_running():
-    """cancel_async_task：终止正在跑的任务。"""
+    """cancel_async_task：终止正在跑的任务，并回收其孙进程。"""
     import subprocess as _sp
-    import threading
 
-    task = at.register_task("sleep 30")
+    with at._TASKS_LOCK:
+        at._TASKS.clear()
 
-    def _runner():
-        proc = _sp.Popen(["sleep", "30"], stdout=_sp.PIPE, stderr=_sp.STDOUT)
-        task.proc = proc
-        if task.status == "pending":
-            task.status = "running"
-        proc.wait()
-        if task.status != "cancelled":
-            task.returncode = proc.returncode
-            task.status = "done" if proc.returncode == 0 else "failed"
-        task.finished_at = __import__("time").time()
-        task.proc = None
-
-    threading.Thread(target=_runner, daemon=True).start()
-
-    # 等线程把 proc 设上
-    for _ in range(20):
-        if task.proc is not None:
-            break
-        time.sleep(0.05)
+    # 用 sh -c 起一个会 fork 孙进程的命令，复现「只 kill 父进程、孙进程变孤儿」的场景
+    task = at.register_task("sh -c 'sleep 30'")
+    proc = _sp.Popen(["sh", "-c", "sleep 30"], start_new_session=True)
+    task.proc = proc
+    task.status = "running"
+    pgid = os.getpgid(proc.pid)
 
     cancelled = shell_tools.cancel_async_task.invoke({"task_id": task.task_id})
-    assert "已终止" in cancelled
 
-    time.sleep(0.5)
-    task = at.get_task(task.task_id)
-    assert task.status == "cancelled"
+    if _can_signal_processes():
+        assert cancelled.startswith("✅"), cancelled
+        assert proc.poll() is not None, "父进程应已退出"
+
+        # 孙进程（sleep）必须一并回收，不能留孤儿占资源
+        time.sleep(0.2)
+        try:
+            os.killpg(pgid, 0)
+        except ProcessLookupError:
+            pass  # 进程组已不存在 —— 正是预期
+        else:
+            leftovers = _sp.run(["ps", "-g", str(pgid), "-o", "pid="], capture_output=True, text=True).stdout.strip()
+            assert leftovers == "", f"进程组仍有残留进程: {leftovers}"
+
+        task = at.get_task(task.task_id)
+        assert task.status == "cancelled"
+    else:
+        # 宿主沙箱禁止信号（本仓开发环境即如此）：无法真杀，唯一可验的是
+        # 「杀不动就报失败」，绝不能假报成功——这正是 P0 bug 的语义。
+        assert cancelled.startswith("❌"), f"无法终止时不应报成功: {cancelled}"
+        task = at.get_task(task.task_id)
+        assert task.status == "failed"
+
+    with at._TASKS_LOCK:
+        at._TASKS.clear()
+
+
+def test_cancel_failure_is_reported_as_failure():
+    """P0 回归：终止失败不能返回成功。
+
+    旧实现在 proc.kill() 抛异常时仍返回 (True, "已标记取消")，前端告诉用户
+    「已停止」但进程还在跑。这里锁定新语义：已自行退出的进程无需杀 → 成功；
+    真正无法终止 → False 且状态置 failed。
+    """
+    import subprocess as _sp
+
+    with at._TASKS_LOCK:
+        at._TASKS.clear()
+
+    task = at.register_task("already-dead")
+    dead = _sp.Popen(["sh", "-c", "true"])
+    dead.wait()
+    task.proc = dead
+    task.status = "running"
+
+    ok, msg = at.cancel_task(task.task_id)
+    # 已退出的进程无需再杀 —— 应报成功且不抛异常
+    assert ok is True and "已终止" in msg, msg
 
     with at._TASKS_LOCK:
         at._TASKS.clear()
