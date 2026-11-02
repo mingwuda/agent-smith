@@ -1360,6 +1360,23 @@ class AgentRunMixin:
                         if isinstance(tool_input, dict):
                             diff_file_path = tool_input.get("path", "")
 
+                    # P0-B: 失败时提取错误短语（exit code / 错误首行），供前端展示
+                    error_kind = ""
+                    error_msg = ""
+                    if is_error:
+                        # run_shell: 提取退出码
+                        if tool_name == "run_shell":
+                            import re as _re
+                            _m = _re.search(r'exit code[:\s]+(\d+)', output_str, _re.IGNORECASE)
+                            if _m:
+                                error_kind = f"exit_code_{_m.group(1)}"
+                        # 通用: 取首行错误信息（截断）
+                        _first_line = output_str.strip().split('\n')[0] if output_str else ""
+                        # 去掉 emoji 前缀
+                        _first_line = _first_line.lstrip('❌🔴⚠️ \t')
+                        if _first_line:
+                            error_msg = _first_line[:120]
+
                     yield _sse({
                         "type": "tool_result",
                         "tool": tool_name,
@@ -1367,6 +1384,8 @@ class AgentRunMixin:
                         "result": _truncate(output_str, 400),
                         "result_full": full_output if tool_name == "run_python" else "",
                         "error": is_error,
+                        "error_kind": error_kind,
+                        "error_msg": error_msg,
                         "diff": diff_data,
                         "diff_file_path": diff_file_path,
                         # 工具实际耗时（毫秒）：随 SSE 事件收集进历史，

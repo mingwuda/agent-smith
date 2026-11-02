@@ -1679,7 +1679,8 @@ function handleStreamEvent(data) {
           var doneLabel = isError
             ? (t('taskFailed') || '执行失败')
             : (t('taskCompleted') || '已完成');
-          textEl.textContent = getToolLabel(toolNameForLabel, data.args) + ' — ' + doneLabel + ' (' + durText + ')';
+          var errSuffix = isError ? (data.error_kind ? ' (' + data.error_kind + ')' : (data.error_msg ? ' — ' + data.error_msg : '')) : '';
+          textEl.textContent = toolSummary(toolNameForLabel, data.args) + ' — ' + doneLabel + ' (' + durText + ')' + errSuffix;
         }
         // 展开详情显示结果摘要
         var detailEl = _currentActiveLine.querySelector('.active-action-detail');
@@ -2449,8 +2450,91 @@ function getToolIcon(toolName) {
 }
 
 // 生成工具调用摘要文本（用于第二行当前动作）
-function getToolLabel(toolName, args) {
-  const labels = {
+// ponytail: 对齐 agnes-harness tool-step.ts —— 按工具名取"目标键"，路径自动 ~ 缩写
+var _TARGET_KEYS = {
+  // 文件类 → 取 path
+  'read_file': ['path', 'file_path'],
+  'write_file': ['path', 'file_path'],
+  'append_to_file': ['path', 'file_path'],
+  'edit_file': ['path', 'file_path'],
+  'delete_file': ['path'],
+  'list_files': ['path'],
+  'get_workspace_path': [],
+  // 代码/命令类 → 取 code / command / description
+  'run_python': ['code'],
+  'run_shell': ['description', 'command'],
+  'bash': ['command'],
+  'shell': ['command'],
+  // 搜索类 → 取 pattern / query
+  'search_files': ['pattern', 'query'],
+  'web_search': ['query'],
+  'web_fetch': ['url'],
+  // Git 类 → 取 path / message
+  'git_status': ['path'],
+  'git_diff': ['file_path'],
+  'git_log': [],
+  'git_commit': ['message'],
+  'git_commit_all': ['message'],
+  'git_push': ['branch'],
+  'git_revert': ['revision'],
+  'git_show': ['revision'],
+  // 数据库类 → 取 sql / table
+  'db_query': ['sql'],
+  'db_schema': ['table_name'],
+  'db_connections': [],
+  // 记忆/上下文类
+  'recall_memory': ['query'],
+  'remember': ['key'],
+  'forget_memory': ['key'],
+  'list_memories': [],
+  'compress_context': [],
+  // 浏览器类 → 取 url / selector
+  'browser_navigate': ['url'],
+  'browser_click': ['selector'],
+  'browser_fill': ['selector'],
+  'browser_get_text': ['selector'],
+  'browser_select': ['selector'],
+  'browser_wait_for_element': ['selector'],
+  'browser_scroll_to': ['selector'],
+  'browser_screenshot': [],
+  'browser_evaluate': ['script'],
+  'browser_captcha_recognize': ['source'],
+  'browser_captcha_click_sequence': ['selector'],
+  'browser_click_captcha': [],
+  'browser_captcha_refresh': ['selector'],
+  'browser_captcha_scan_grid': [],
+  'browser_form_fill': ['goal'],
+  'browser_drag': ['source'],
+  'browser_slide': ['selector'],
+  // 任务/委派类
+  'manage_todo': ['action'],
+  'delegate_task': ['task'],
+  'delegate_tasks_parallel': ['tasks_json'],
+  // 其他
+  'get_system_info': [],
+  'ocr_image': ['image'],
+  'session_history_search': ['query'],
+  'read_bytes': ['path'],
+  'read_file': ['path'],
+};
+
+function _shortenHome(text) {
+  if (!text) return text;
+  // /Users/xxx/... → ~/...
+  return text.replace(/^\/(?:Users|home)\/[^/\s]+/, '~');
+}
+
+function _truncateText(text, maxLen) {
+  if (!text) return '';
+  var s = text.trim();
+  if (s.length <= maxLen) return s;
+  return s.slice(0, maxLen - 3) + '...';
+}
+
+function toolSummary(toolName, args) {
+  var a = args || {};
+  // 优先用 i18n 标签，没有就拼工具名
+  var label = {
     'read_file': t('readingFile') || '读取文件内容',
     'write_file': t('writingFile') || '写入文件',
     'append_to_file': t('appendingFile') || '追加写入',
@@ -2464,28 +2548,76 @@ function getToolLabel(toolName, args) {
     'web_fetch': t('fetchingWeb') || '抓取网页',
     'bash': t('runningShell') || '运行 Shell 命令',
     'shell': t('runningShell') || '运行 Shell 命令',
+    'run_shell': t('runningShell') || '运行 Shell 命令',
     'compress_context': t('compressingContext') || '压缩上下文',
-  };
-  var label = labels[toolName] || (t('callingTool') || '调用工具: ') + toolName;
-  // 追加关键参数（截断避免过长）
-  if (args) {
-    if (typeof args.file_path === 'string' && args.file_path.length < 80) {
-      label += ': ' + escapeHtml(args.file_path);
-    } else if (typeof args.code === 'string') {
-      var code = args.code.trim();
-      if (code.length > 60) code = code.slice(0, 57) + '...';
-      label += ': ' + escapeHtml(code.split('\n')[0]);
-    } else if (typeof args.command === 'string') {
-      var cmd = args.command;
-      if (cmd.length > 70) cmd = cmd.slice(0, 67) + '...';
-      label += ': ' + escapeHtml(cmd);
-    } else if (typeof args.query === 'string') {
-      var q = args.query;
-      if (q.length > 50) q = q.slice(0, 47) + '...';
-      label += ': ' + escapeHtml(q);
-    }
+    'edit_file': '编辑文件',
+    'insert_lines': '插入行',
+    'replace_lines': '替换行',
+    'git_status': 'Git 状态',
+    'git_diff': 'Git diff',
+    'git_log': 'Git 日志',
+    'git_commit': 'Git 提交',
+    'git_commit_all': 'Git 暂存并提交',
+    'git_push': 'Git 推送',
+    'git_revert': 'Git 回退',
+    'git_show': 'Git 查看',
+    'git_add': 'Git 暂存',
+    'git_command': 'Git 命令',
+    'db_query': '数据库查询',
+    'db_schema': '查看表结构',
+    'db_connections': '数据库连接',
+    'recall_memory': '查找记忆',
+    'remember': '保存记忆',
+    'forget_memory': '删除记忆',
+    'list_memories': '记忆列表',
+    'browser_navigate': '浏览器导航',
+    'browser_click': '点击元素',
+    'browser_fill': '填入内容',
+    'browser_get_text': '获取文本',
+    'browser_select': '下拉选择',
+    'browser_wait_for_element': '等待元素',
+    'browser_scroll_to': '滚动到元素',
+    'browser_screenshot': '截图',
+    'browser_evaluate': '执行 JS',
+    'browser_captcha_recognize': '识别验证码',
+    'browser_captcha_click_sequence': '验证码点击',
+    'browser_click_captcha': '验证码点击',
+    'browser_captcha_refresh': '刷新验证码',
+    'browser_captcha_scan_grid': '验证码网格',
+    'browser_form_fill': '自动填表',
+    'browser_drag': '拖拽元素',
+    'browser_slide': '滑动滑块',
+    'browser_takeover': '接管浏览器',
+    'browser_wait': '等待',
+    'browser_form_inspect': '表单检查',
+    'manage_todo': '任务清单',
+    'delegate_task': '委派子代理',
+    'delegate_tasks_parallel': '并行委派',
+    'ocr_image': '识别图片',
+    'session_history_search': '搜索会话',
+    'read_bytes': '读取字节',
+  }[toolName] || ((t('callingTool') || '调用工具') + ' ' + toolName);
+
+  // 取目标参数
+  var keys = _TARGET_KEYS[toolName] || [];
+  var target = '';
+  for (var i = 0; i < keys.length; i++) {
+    var v = a[keys[i]];
+    if (typeof v === 'string' && v.trim()) { target = v; break; }
+    if (typeof v === 'number' && !isNaN(v)) { target = String(v); break; }
   }
-  return label;
+  if (!target) return label;
+  // 路径类工具：~ 缩写
+  if (/^(read_|write_|append_|edit_|delete_|insert_|replace_|list_files)/.test(toolName)) {
+    target = _shortenHome(target);
+  }
+  target = _truncateText(target, 70);
+  return label + ': ' + target;
+}
+
+// 兼容旧调用
+function getToolLabel(toolName, args) {
+  return toolSummary(toolName, args);
 }
 
 function toggleStep(el) {

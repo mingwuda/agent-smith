@@ -28,6 +28,7 @@ class AsyncTask:
     """一个后台任务的运行时快照。"""
     task_id: str
     command: str              # 原始命令
+    description: str = ""     # 可选：人类可读意图摘要（供前端步骤卡片展示）
     proc: Optional[subprocess.Popen] = None  # 子进程（done/failed 后保留为 None）
     started_at: float = 0.0
     finished_at: float = 0.0
@@ -46,6 +47,7 @@ class AsyncTask:
         return {
             "task_id": self.task_id,
             "command": self.command[:200],
+            "description": self.description[:200] if self.description else "",
             "status": self.status,
             "elapsed": round(self.elapsed, 1),
             "returncode": self.returncode,
@@ -65,12 +67,13 @@ def new_task_id() -> str:
     return secrets.token_hex(6)
 
 
-def register_task(command: str) -> AsyncTask:
+def register_task(command: str, description: str = "") -> AsyncTask:
     """新建任务并加入任务表，返回任务对象。调用方负责在 Popen 启动后 set proc。"""
     tid = new_task_id()
     task = AsyncTask(
         task_id=tid,
         command=command,
+        description=description,
         started_at=time.time(),
         # ponytail: status 立即设为 pending，Popen 启动后再置 running。
         # 避免 cancel_task 在 Popen 启动前被调用时认为"任务未启动"。

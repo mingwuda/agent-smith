@@ -320,20 +320,22 @@ def _clean_command_for_cmd(command: str) -> str:
 
 
 @tool
-def run_shell(command: str, timeout: int = _DEFAULT_TIMEOUT) -> str:
+def run_shell(command: str, timeout: int = _DEFAULT_TIMEOUT, description: str = "") -> str:
     """执行 Shell 命令并返回 stdout/stderr 输出。
     自动检测操作系统选择合适的 shell（Linux/macOS 用 bash，Windows 用 cmd）。
 
     参数:
       command: 要执行的 shell 命令字符串
       timeout: 超时秒数（默认 120，最大 600）
+      description: 可选，本次命令的人类可读意图摘要（如 "安装依赖"、"跑测试"），
+                    供前端在步骤卡片上优先展示，比命令首行更可读。
 
     允许的命令类型：文件操作、文本处理、网络工具、系统信息等。
     禁止的操作：提权（sudo/su）、格式化、写裸设备、fork bomb 等。
 
     示例:
-      run_shell("ls -la /tmp")
-      run_shell("cat /etc/hostname")
+      run_shell("pip install -r requirements.txt", description="安装依赖")
+      run_shell("npm test", description="跑单测")
       run_shell("find . -name '*.py' | head -20")
     """
     # ── 安全检查 ──
@@ -381,10 +383,14 @@ def run_shell(command: str, timeout: int = _DEFAULT_TIMEOUT) -> str:
     # 到后台。原来"按 timeout 预判走异步"的逻辑被移除，因为它会过度异步化（默认
     # timeout=120 > 阈值 30，导致 echo 这种 0.1s 命令也被错放后台）。
     start_time = time.time()
-    return _run_shell_sync(command, cmd, timeout, shell_cmd, before_files, _ws, start_time)
+    return _run_shell_sync(
+        command, cmd, timeout, shell_cmd, before_files, _ws, start_time, description
+    )
 
 
-def _run_shell_sync(command, cmd, timeout, shell_cmd, before_files, _ws, start_time):
+def _run_shell_sync(
+    command, cmd, timeout, shell_cmd, before_files, _ws, start_time, description=""
+):
     """run_shell 同步执行路径：先前台跑 30s，超时则把进程转后台任务（handoff），
     立即返回 task_id。
 
@@ -435,7 +441,7 @@ def _run_shell_sync(command, cmd, timeout, shell_cmd, before_files, _ws, start_t
     except subprocess.TimeoutExpired:
         # ponytail: 真超过 30s——把已跑的进程 + 已读的输出 handoff 给后台任务。
         # 不 kill、不重启；让命令继续跑到 timeout 或自然结束，agent 用 task_id 跟进。
-        task = register_task(command)
+        task = register_task(command, description=description)
         task.proc = proc
         task.status = "running"  # 已 Popen 启动，立即置 running
         task.output = _smart_decode(raw_bytes)  # 已累积的 30s 输出写进 task
