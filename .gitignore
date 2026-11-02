@@ -59,3 +59,10 @@ deps/obscura/
 _bench/
 bench/runs/
 bench/*.log
+
+# 测试运行时在仓库根留下的临时目录（memory / file_search 的 tmp_path 未隔离导致）
+file_search_*/
+mem_fts_*/
+mem_semantic_*/
+mem_test_*/
+pytest-of-unknown/
