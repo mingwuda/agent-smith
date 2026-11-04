@@ -472,7 +472,15 @@ async def inject_session_message(session_id: str, req: InjectRequest, request: R
         raise HTTPException(400, "intervention content cannot be empty")
     from inbox import get_inbox_manager
     m = get_inbox_manager()
-    m.get(uid, session_id).append(target, content)
+    inbox = m.get(uid, session_id)
+    # step 模式只对「正在运行的回合」有意义：没有活跃 run 时消息不会被 claim，
+    # 会滞留在 next_step 桶里、等下一轮 run 开始时被意外重复注入。
+    # 此时直接拒绝（ok=False），由前端改走普通发送，保证「立即生效」语义不落空。
+    if mode == "step" and not inbox.active:
+        logger.info("[inject] rejected(no active run): uid=%s session=%s content=%.80s",
+                    uid, session_id, content)
+        return {"ok": False, "active": False, "reason": "no_active_run"}
+    inbox.append(target, content)
     m.persist(uid, session_id)
     inbox = m.get(uid, session_id)
     logger.info("[inject] uid=%s session=%s mode=%s content=%.80s active=%s",

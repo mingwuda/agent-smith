@@ -76,4 +76,7 @@ function setVisibleSessionKey(key) {
     sessionRuntimes.get(visibleSessionKey).live = false;
   }
   visibleSessionKey = key;
+  // 干预队列属于「可见会话」，切换会话后必须重绘（各会话队列互不串台）。
+  // ponytail: 统一挂在这一个入口，避免在 5 处切会话调用点各写一遍。
+  if (typeof renderInterventionQueue === 'function') renderInterventionQueue();
 }

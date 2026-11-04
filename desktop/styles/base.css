@@ -319,6 +319,15 @@ body[data-theme="dark"] .chat-tab:hover { background:rgba(255,255,255,.05); }
   .msg-delete-item:hover { background: #fff0f0; }
 
   #input-area { padding:12px 24px 20px; background:#fff; border-top:1px solid #ddd; }
+  /* 干预队列：执行中排队的消息，每行可 ↑ 立即干预 */
+  #intervention-queue { display:flex; flex-direction:column; gap:6px; margin:0 0 10px; }
+  #intervention-queue[hidden] { display:none; }
+  .iq-item { display:flex; align-items:center; gap:8px; padding:5px 8px; background:#fff8e8; border:1px solid #ffd591; border-radius:10px; font-size:12.5px; }
+  .iq-up { flex:0 0 auto; width:24px; height:24px; border:none; border-radius:6px; background:#ff9f0a; color:#fff; font-size:14px; font-weight:700; line-height:1; cursor:pointer; }
+  .iq-up:hover { background:#e8890a; }
+  .iq-text { flex:1 1 auto; min-width:0; color:#5c3b00; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .iq-del { flex:0 0 auto; width:20px; height:20px; border:none; border-radius:50%; background:rgba(0,0,0,.08); color:#8e8e93; line-height:1; cursor:pointer; }
+  .iq-del:hover { background:rgba(0,0,0,.16); color:#333; }
   #attachment-preview { display:none; gap:8px; flex-wrap:wrap; margin:0 0 10px; }
   #attachment-preview.show { display:flex; }
   .attachment-chip { position:relative; width:72px; height:72px; border:1px solid #ddd; border-radius:8px; overflow:hidden; background:#f5f5f7; }

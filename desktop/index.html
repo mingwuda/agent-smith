@@ -252,6 +252,8 @@
   
   <div id="loading-bar"><div class="bar-track"><div class="bar-fill"></div></div><span class="label" data-i18n="thinking">AI 思考中...</span></div>
   <div id="input-area">
+    <!-- 干预队列：执行中排队的消息。每行左侧 ↑ 可立即注入当前回合的下一步（不等整轮结束）。 -->
+    <div id="intervention-queue" class="intervention-queue" hidden></div>
     <div id="attachment-preview"></div>
     <div id="composer">
       <textarea id="input" placeholder="说点什么...（Enter 发送，Shift+Enter 换行，Ctrl+Enter 打断）" data-i18n-placeholder="composerPlaceholder" autocomplete="off" rows="1"></textarea>

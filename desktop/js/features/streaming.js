@@ -217,6 +217,113 @@ function stopCurrentRun() {
   }
 }
 
+// ---------- 干预队列（执行中排队消息可视化 + ↑ 立即干预） ----------
+
+// 把一段文本立即注入「当前运行回合」的下一步（mode=step）。
+// 返回 { ok, active }：ok=后端受理；active=确有 run 在跑（false 时消息会被后端拒绝）。
+async function injectStepNow(text, sessionId) {
+  try {
+    const r = await fetch(`/sessions/${encodeURIComponent(sessionId)}/inject`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: text, mode: 'step' }),
+    });
+    if (!r.ok) return { ok: false, active: false };
+    const d = await r.json();
+    return { ok: !!(d && d.ok), active: !!(d && d.active) };
+  } catch (e) {
+    return { ok: false, active: false };
+  }
+}
+
+function _visibleRuntime() {
+  return (typeof sessionRuntimes !== 'undefined') ? sessionRuntimes.get(visibleSessionKey) : null;
+}
+
+// 渲染当前可见会话的干预队列（每行：↑ 立即干预 / 文本 / × 移除）
+function renderInterventionQueue() {
+  const box = document.getElementById('intervention-queue');
+  if (!box) return;
+  const rt = _visibleRuntime();
+  const q = (rt && Array.isArray(rt.interventionQueue)) ? rt.interventionQueue : [];
+  box.innerHTML = '';
+  if (!q.length) { box.hidden = true; return; }
+  box.hidden = false;
+  q.forEach(function (text, idx) {
+    const item = document.createElement('div');
+    item.className = 'iq-item';
+
+    const up = document.createElement('button');
+    up.className = 'iq-up';
+    up.title = '立即干预（在下一步生效，不等本轮结束）';
+    up.textContent = '↑';
+    up.addEventListener('click', function () { promoteQueuedItem(idx); });
+
+    const label = document.createElement('span');
+    label.className = 'iq-text';
+    label.textContent = text;
+    label.title = text;
+
+    const del = document.createElement('button');
+    del.className = 'iq-del';
+    del.title = '从队列移除';
+    del.textContent = '×';
+    del.addEventListener('click', function () {
+      const r = _visibleRuntime();
+      if (!r || !r.interventionQueue) return;
+      r.interventionQueue.splice(idx, 1);
+      renderInterventionQueue();
+    });
+
+    item.appendChild(up);
+    item.appendChild(label);
+    item.appendChild(del);
+    box.appendChild(item);
+  });
+}
+
+// ↑：把该条立即注入当前回合的下一步；没有运行中回合则出队并直接发新一轮。
+async function promoteQueuedItem(idx) {
+  const rt = _visibleRuntime();
+  if (!rt || !rt.interventionQueue || idx < 0 || idx >= rt.interventionQueue.length) return;
+  const text = rt.interventionQueue[idx];
+  const sessionId = rt.sessionId || currentSessionId || threadId;
+
+  if (rt.status === 'streaming') {
+    const res = await injectStepNow(text, sessionId);
+    if (res.ok && res.active) {
+      rt.interventionQueue.splice(idx, 1);
+      renderInterventionQueue();
+      addMessage('⚡ ' + (t('steerQueued') || '打断指令已注入，下一步生效'), 'system');
+      return;
+    }
+    // 正在收尾（后端已无 active run）：保留在队列，本轮 finally 会自动发送
+    addMessage('⚡ 当前回合正在收尾，稍后自动发送', 'system');
+    return;
+  }
+
+  rt.interventionQueue.splice(idx, 1);
+  renderInterventionQueue();
+  send(text);
+}
+
+// 授权成功后立即继续：有运行中回合就 step 注入（立刻生效），否则直接发新一轮。
+// 不走普通 send()，否则会命中 send() 的入队分支被当成排队消息（旧行为：提示「已加入队列」）。
+async function retryAfterGrant() {
+  const rt = _visibleRuntime();
+  const sessionId = (rt && rt.sessionId) || currentSessionId || threadId;
+  if (rt && rt.status === 'streaming') {
+    const res = await injectStepNow('继续', sessionId);
+    if (res.ok && res.active) return 'injected';
+  }
+  if (typeof input !== 'undefined') {
+    input.value = '继续';
+    if (typeof pendingAttachments !== 'undefined') pendingAttachments.length = 0;
+    if (typeof send === 'function') send();
+  }
+  return 'sent';
+}
+
 // ---------- 实时干预（打断注入） ----------
 
 // 立即把输入框内容作为「打断指令」写入后端 inbox(next_step)，
@@ -245,20 +352,19 @@ function steerCurrentRun() {
   resizeComposer();
   addMessage('⚡ ' + (t('steerOutgoing') || '正在打断…'), 'system');
 
-  fetch(`/sessions/${encodeURIComponent(sessionId)}/inject`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ content: text, mode: 'step' }),
-  })
-    .then(res => res.json())
+  injectStepNow(text, sessionId)
     .then(data => {
       if (btn) btn.disabled = false;
-      if (data && data.ok) {
+      if (data && data.ok && data.active) {
         // 后端会在下个 LLM 边界把该消息注入并回放 user_message_injected 事件（见 stream_run），
         // 前端届时把该消息作为正式 user 消息补渲染；这里仅提示已注入。
         addMessage('⚡ ' + (t('steerQueued') || '打断指令已注入（下一步生效）'), 'system');
+      } else if (data && data.active === false) {
+        // 后端已无活跃回合（本轮正在收尾）：改走普通发送，避免消息滞留 next_step 桶被下一轮重复注入
+        addMessage('⚡ 当前回合已结束，改为正常发送', 'system');
+        send(text);
       } else {
-        addMessage('⚡ ' + ((data && data.detail) || '注入失败'), 'system');
+        addMessage('⚡ 注入失败，已在输入框保留原文', 'system');
         // 失败时还原输入
         input.value = text;
       }
@@ -655,11 +761,12 @@ async function send(queuedText) {
     if (!queuedText && text) {
       rt.interventionQueue = rt.interventionQueue || [];
       rt.interventionQueue.push(text);
+      renderInterventionQueue();
       input.value = '';
       pendingAttachments = [];
       renderAttachmentPreview();
       resizeComposer();
-      addMessage('📥 ' + t('pushQueued'), 'system');
+      addMessage('📥 ' + (t('pushQueuedHint') || '已加入干预队列：点 ↑ 立即干预，否则本轮结束后自动发送'), 'system');
     }
     return;
   }
@@ -872,11 +979,14 @@ async function send(queuedText) {
     const pushQueue = rt.interventionQueue;
     if (pushQueue && pushQueue.length) {
       const next = pushQueue.shift();
+      renderInterventionQueue();
       setTimeout(function() {
         send(next).catch(function(err) {
           console.error('[push] 队列消息发送失败:', err);
         });
       }, 0);
+    } else {
+      renderInterventionQueue();
     }
 
     // 内存回收: 后台完成的会话不再需要保留(历史消息从后端加载, reconstruct 不依赖它)
@@ -1764,12 +1874,10 @@ function handleStreamEvent(data) {
                     body: JSON.stringify({path: dirPath}),
                   });
                   inner.innerHTML = '<span style="font-size:12px;color:#30d158;">✅ 已授权，正在重试...</span>';
-                  // 自动补一条「继续」并发送，无需用户手动输入
-                  if (typeof input !== 'undefined') {
-                    input.value = '继续';
-                    if (typeof pendingAttachments !== 'undefined') pendingAttachments.length = 0;
-                    if (typeof send === 'function') send();
-                  }
+                  // 立即继续：运行中则 step 注入（下一步立刻生效），否则直接发新一轮
+                  var how = await retryAfterGrant();
+                  inner.innerHTML = '<span style="font-size:12px;color:#30d158;">✅ 已授权，'
+                    + (how === 'injected' ? '已立即注入下一步' : '已重新发起请求') + '</span>';
                 } else {
                   this.textContent = '授权失败';
                 }
@@ -1820,11 +1928,11 @@ function handleStreamEvent(data) {
                     if (actions) {
                       actions.innerHTML = '<span class="perm-banner-ok">✅ 已授权，正在重试...</span>';
                     }
-                    // 自动补一条「继续」并发送，无需用户手动输入
-                    if (typeof input !== 'undefined') {
-                      input.value = '继续';
-                      if (typeof pendingAttachments !== 'undefined') pendingAttachments.length = 0;
-                      if (typeof send === 'function') send();
+                    // 立即继续：运行中则 step 注入（下一步立刻生效），否则直接发新一轮
+                    var how = await retryAfterGrant();
+                    if (actions) {
+                      actions.innerHTML = '<span class="perm-banner-ok">✅ 已授权，'
+                        + (how === 'injected' ? '已立即注入下一步' : '已重新发起请求') + '</span>';
                     }
                     setTimeout(function() { banner.remove(); }, 4000);
                   } catch(e) {
@@ -2124,6 +2232,7 @@ function handleStreamEvent(data) {
         const rt2 = sessionRuntimes.get(visibleSessionKey);
         rt2.interventionQueue = rt2.interventionQueue || [];
         for (const m of msgs) rt2.interventionQueue.push(m);
+        renderInterventionQueue();
         // 该事件紧跟在 done 之后、[DONE] 之前；send() 的 finally 会 drain interventionQueue 发起新一轮
       }
       break;
