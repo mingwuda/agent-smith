@@ -417,17 +417,14 @@
         <!-- 模型设置 -->
         <div class="settings-tab-panel active" id="panel-model">
           <div class="form-group">
-            <label for="s-provider" data-i18n="providerLabel">模型厂商</label>
-            <div class="provider-row">
-              <select id="s-provider" onchange="onProviderChange()"></select>
-              <div class="order-btns">
-                <button type="button" onclick="moveSelectedProvider(-1)" title="上移">↑</button>
-                <button type="button" onclick="moveSelectedProvider(1)" title="下移">↓</button>
-              </div>
+            <label data-i18n="providerLabel">模型厂商</label>
+            <input type="hidden" id="s-provider" />
+            <div id="provider-order-list" class="provider-order-list"></div>
+            <div class="provider-actions">
               <button type="button" onclick="addCustomProvider()" data-i18n="addCustomProvider">新增自定义</button>
               <button type="button" id="delete-provider-btn" onclick="deleteProvider()" class="btn-danger" style="display:none" data-i18n="deleteProvider">删除</button>
             </div>
-            <div class="hint" id="s-provider-hint" data-i18n="providerHint">选择要使用的模型厂商。</div>
+            <div class="hint" id="s-provider-hint" data-i18n="providerHint">选择要使用的模型厂商。点击行切换当前厂商，拖动手柄调整显示顺序（顺序会同步到顶部切换器和发送框）。</div>
           </div>
           <div class="form-group hidden" id="s-provider-name-group">
             <label for="s-provider-name" data-i18n="providerNameLabel">厂商名称</label>

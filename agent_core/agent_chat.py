@@ -120,7 +120,14 @@ class AgentChatMixin:
         )
         # 优先用审核模型（与主模型解耦、控成本）；未配置则回退主模型
         llm = self._build_review_llm() or self._build_llm()
-        llm.request_timeout = 15  # 短超时，绝不阻塞主流程
+        # P0：`request_timeout` 不是 LangChain ChatOpenAI 的生效属性（旧注释误以为生效），
+        # 真正起作用的是 timeout。这里两个都设，并对不支持属性赋值的实现静默降级；
+        # quick_reflection 的最终硬超时由调用方 asyncio.wait_for 兜底。
+        for _attr in ("request_timeout", "timeout"):
+            try:
+                setattr(llm, _attr, 15)
+            except Exception:
+                pass
         try:
             resp = await llm.ainvoke([HumanMessage(content=context)])
             text = str(resp.content).strip()
@@ -207,7 +214,14 @@ class AgentChatMixin:
 
         # 优先用审核模型（与主模型解耦、控成本）；未配置则回退主模型
         llm = self._build_review_llm() or self._build_llm()
-        llm.request_timeout = 15  # 短超时，绝不阻塞主流程
+        # P0：`request_timeout` 不是 LangChain ChatOpenAI 的生效属性（旧注释误以为生效），
+        # 真正起作用的是 timeout。这里两个都设，并对不支持属性赋值的实现静默降级；
+        # quick_reflection 的最终硬超时由调用方 asyncio.wait_for 兜底。
+        for _attr in ("request_timeout", "timeout"):
+            try:
+                setattr(llm, _attr, 15)
+            except Exception:
+                pass
         try:
             resp = await llm.ainvoke([HumanMessage(content=context)])
             text = str(resp.content).strip()

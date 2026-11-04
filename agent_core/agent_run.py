@@ -87,6 +87,14 @@ _COMPACTION_LLM_TEMPLATE = (
     "----------\n{summary}\n----------"
 )
 
+# ── 过程反思（中途自检偏航）的节奏与硬超时 ──
+# 反思发生在「工具已上报 start、工具本体尚未执行」之间，是纯串行开销：
+# 它花多久，工具结果就晚多久。历史实现只设了 llm.request_timeout（LangChain 里
+# 并非生效属性），实测出现过单次反思阻塞 93.6s，占该轮 15min 的 10%。
+# 因此这里用 asyncio.wait_for 做真正的硬超时，并适当降低触发频率。
+_REFLECTION_INTERVAL = 12      # 每 N 次工具调用触发一次自检（原 8）
+_REFLECTION_TIMEOUT = 5.0      # 单次反思硬超时（秒），超时静默放行
+
 
 class AgentRunMixin:
     async def _llm_enhance_summary(self, rules_summary: str, model_override: str = "",
@@ -1207,13 +1215,18 @@ class AgentRunMixin:
                         "args": inp,
                     })
 
-                    # ── 过程反思：每 8 次工具调用后快速自检是否偏航 ──
-                    # 用审核模型（回退主模型）轻量判断，15s 超时失败静默，绝不阻塞主流程。
+                    # ── 过程反思：每 N 次工具调用后快速自检是否偏航 ──
+                    # 用审核模型（回退主模型）轻量判断，失败静默，绝不阻塞主流程。
                     # 若判定偏航，把纠偏提示写入 checkpoint + 发 reflection 事件给前端。
-                    # ponytail: 触发间隔从 5 提到 8，平衡纠偏价值与噪音（反思卡片过频）。
-                    if len(tool_call_history) % 8 == 0 and len(tool_call_history) > 0:
+                    # P0 修复：反思是「工具 start 之后、工具本体执行之前」的串行开销，
+                    # 之前只有 llm.request_timeout（非生效属性）兜底，实测单次阻塞 93.6s。
+                    # 现改用 asyncio.wait_for 硬超时；超时即放弃本次反思，直接放行工具。
+                    if len(tool_call_history) % _REFLECTION_INTERVAL == 0 and len(tool_call_history) > 0:
                         try:
-                            _advice = await self.quick_reflection(message, tool_call_history)
+                            _advice = await asyncio.wait_for(
+                                self.quick_reflection(message, tool_call_history),
+                                timeout=_REFLECTION_TIMEOUT,
+                            )
                             if _advice:
                                 logger.info("[过程反思] 第 %d 次工具调用后触发纠偏: %s",
                                             len(tool_call_history), _advice)

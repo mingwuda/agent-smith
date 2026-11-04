@@ -36,23 +36,16 @@ function populateProviderOptions(select, data, includeMissing = false) {
 }
 
 function populateProviderSelect(data) {
-  const select = document.getElementById('s-provider');
-  populateProviderOptions(select, data, true);
-  // 按 provider_order 排序（若存在）
+  const provider = document.getElementById('s-provider'); // hidden input，只存"当前选中厂商"
   const order = data.provider_order || [];
-  const entries = Array.from(select.options);
-  entries.sort((a, b) => {
-    const ia = order.indexOf(a.value);
-    const ib = order.indexOf(b.value);
-    if (ia === -1 && ib === -1) return 0;
-    if (ia === -1) return 1;
-    if (ib === -1) return -1;
-    return ia - ib;
-  });
-  select.innerHTML = '';
-  entries.forEach(opt => select.appendChild(opt));
-  select.value = data.active_provider || '';
-  // 同时填充审核模型下拉框
+  // 首次加载跟随激活项；本函数会被重复调用（打开设置页、拖拽改顺序后同步），
+  // 已有值时保留用户选择，避免重置回 active_provider。
+  if (!provider.value) provider.value = data.active_provider || '';
+  // ── 渲染可拖拽的厂商排序列表（替代原下拉框 + ↑↓ 按钮）──
+  // 隐藏域 #s-provider 承载"当前选中厂商"，供 saveSettings / 各 handler 读取，
+  // 因此 renderProviderFields 等调用方无需改动。
+  renderProviderOrderList(data);
+  // 同时填充审核模型下拉框（按 provider_order 排序）
   const reviewSelect = document.getElementById('s-review-provider');
   var curVal = reviewSelect.value;
   reviewSelect.innerHTML = '<option value="">— 不启用 —</option>';
@@ -318,6 +311,90 @@ function moveSelectedProvider(delta) {
   persistOrder();
 }
 
+// ── 可拖拽的厂商排序列表 ──
+// 替代原「下拉框 + ↑↓ 按钮」：每行一个厂商，点击行 = 切换当前厂商，
+// 拖拽左侧手柄 = 调整顺序。与视觉模型列表共用 .vision-model-* 样式。
+function renderProviderOrderList(data) {
+  const list = document.getElementById('provider-order-list');
+  if (!list) return;
+  list.innerHTML = '';
+  const providers = (data.providers || {});
+  const order = data.provider_order ? Array.from(data.provider_order) : Object.keys(providers);
+  // provider_order 中可能残留已删除的厂商 id；补齐未包含的新厂商（与下拉框口径一致）
+  order.push(...Object.keys(providers).filter(id => !order.includes(id)));
+
+  let _dragSrcIdx = null;
+  const activeId = data.active_provider || '';
+
+  order.forEach((pid, idx) => {
+    const provider = providers[pid] || {};
+    const isActive = pid === activeId;
+    const row = document.createElement('div');
+    row.className = 'vision-model-row provider-order-row' + (isActive ? ' is-active' : '');
+    row.dataset.index = idx;
+
+    // 拖拽手柄
+    const handle = document.createElement('span');
+    handle.className = 'vision-drag-handle';
+    handle.textContent = '⠿';
+    handle.title = currentLanguage === 'en' ? 'Drag to reorder' : '拖拽排序';
+
+    // 行主体：点击切换当前厂商
+    const label = document.createElement('span');
+    label.className = 'vision-model-name';
+    label.textContent = providerLabel(provider, pid);
+    if (isActive) label.classList.add('is-active');
+    label.title = currentLanguage === 'en' ? 'Click to select this provider' : '点击切换当前厂商';
+    label.onclick = () => selectProvider(pid);
+
+    row.appendChild(handle);
+    row.appendChild(label);
+    list.appendChild(row);
+
+    row.addEventListener('dragstart', (e) => {
+      _dragSrcIdx = idx;
+      row.classList.add('dragging');
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', idx);
+    });
+    row.addEventListener('dragend', () => {
+      row.classList.remove('dragging');
+      document.querySelectorAll('.provider-order-row.drag-over').forEach(el => el.classList.remove('drag-over'));
+      _dragSrcIdx = null;
+    });
+    row.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      if (_dragSrcIdx !== null && _dragSrcIdx !== idx) row.classList.add('drag-over');
+    });
+    row.addEventListener('dragleave', () => row.classList.remove('drag-over'));
+    row.addEventListener('drop', (e) => {
+      e.preventDefault();
+      row.classList.remove('drag-over');
+      const srcIdx = parseInt(e.dataTransfer.getData('text/plain'), 10);
+      if (srcIdx === idx || isNaN(srcIdx)) return;
+      const arr = Array.from(order);
+      const moved = arr.splice(srcIdx, 1)[0];
+      arr.splice(idx, 0, moved);
+      data.provider_order = arr;
+      settingsData = data;
+      renderProviderOrderList(data);
+      persistOrder();  // 成功后 persistOrder 内部会调 refreshProviderSelects 同步发送框
+    });
+  });
+}
+
+// 点击厂商行 = 选中为当前厂商（原下拉框的行为）
+function selectProvider(pid) {
+  if (!settingsData) return;
+  const select = document.getElementById('s-provider');
+  if (!select) return;
+  select.value = pid;
+  settingsData.active_provider = pid;
+  renderProviderOrderList(settingsData);
+  onProviderChange();
+}
+
 // 渲染"视觉模型"标记区：列出当前厂商每个模型，并标注是否为视觉模型
 function renderVisionModels(provider) {
   const list = document.getElementById('vision-models-list');
@@ -416,6 +493,8 @@ function renderVisionModels(provider) {
       }
       // 重新渲染视觉模型列表（保持当前视觉标记）
       renderVisionModels(provider);
+      // ponytail: 模型增删后同步顶部厂商列表（行标签里的默认模型名会跟着变）
+      populateProviderSelect(settingsData);
       persistOrder();
     });
   });

@@ -4,6 +4,7 @@
 自动检测当前操作系统选择合适的 shell。
 """
 import asyncio
+import logging
 import os
 import re
 import secrets
@@ -24,6 +25,10 @@ from .async_tasks import (  # ponytail: 同包内相对导入；stdlib 'async' �
     AsyncTask, register_task, get_task, list_tasks, cancel_task,
 )
 from .resource_limits import popen_kwargs, ulimit_prefix
+
+# ponytail: 本模块此前直接使用 logger 却没导入（超时/熔断分支一旦命中就 NameError）。
+# 与同目录其它 tools 保持一致，用模块级 stdlib logger。
+logger = logging.getLogger(__name__)
 
 # ── 工作区路径（ContextVar：每个 async 请求各自独立）──
 _workspace_ctx: ContextVar[Optional[Path]] = ContextVar("shell_tools_workspace", default=None)
@@ -326,11 +331,15 @@ def _jev_risk_gate_enabled() -> bool:
 def _jev_risk_gate(command: str) -> Optional[dict]:
     """调用 Jev 判断命令是否存在正则未覆盖的语义风险。
 
-    返回 None = Jev 不可用（未配置/失败/超时），由调用方放行；
+    返回 None = Jev 不可用（未配置/失败/超时/熔断期内），由调用方放行；
     返回 dict 含 needs_confirmation/probability/reason/available。
 
     在独立子线程中加软超时兜底，确保最坏情况也不阻塞 run_shell 主流程
     （urllib 内部已有 timeout，这里防御极端慢 DNS / 代理等）。
+
+    注：「Jev 服务端不可用（如 HTTP 451）」的熔断不在本层做，而在
+    jev_tools._post 内部统一处理——那里才知道确切的 HTTP 状态码，
+    能区分「确定性故障（熔断）」与「单次瞬时异常（仅本次降级）」。
     """
     try:
         from .jev_tools import risk_gate, _load_key
@@ -755,9 +764,10 @@ def wait_async_task(task_id: str, timeout: int = 10) -> str:
 
     参数:
       task_id: 任务 ID
-      timeout: 最长等待秒数（默认 10，最大 60）
+      timeout: 最长等待秒数（默认 10，最大 300）。想要"等它跑完"就直接给足时间
+               （如 120），比反复调用 10s 更省往返；超时会返回进度摘要。
     """
-    timeout = min(max(1, int(timeout)), 60)
+    timeout = min(max(1, int(timeout)), 300)
     deadline = time.time() + timeout
     while time.time() < deadline:
         task = get_task(task_id)
@@ -766,7 +776,10 @@ def wait_async_task(task_id: str, timeout: int = 10) -> str:
         # ponytail: 仅在"已开始执行"（running）时继续轮询；其他终态立即返回
         if task.status not in ("pending", "running"):
             return json.dumps(task.to_dict(), ensure_ascii=False, indent=2)
-        time.sleep(1)
+        # 自适应轮询间隔：前 2s 用 50ms（快速命令秒回），随后按已等时长逐步放大到 1s，
+        # 避免短任务被固定 1s 粒度拖慢，又不至于长任务空转太频繁。
+        waited = timeout - (deadline - time.time())
+        time.sleep(0.05 if waited < 2 else min(1.0, 0.2 + waited * 0.05))
     # 仍 running，返回当前状态摘要，agent 决定下一步
     task = get_task(task_id)
     if task is None:

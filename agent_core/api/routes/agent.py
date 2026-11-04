@@ -210,7 +210,13 @@ async def run_agent(req: RunRequest, request: Request):
             if img_paths:
                 img_urls = _user_image_urls(uid, img_paths, request)
                 url_lines = "\n".join(f"- {url}" for url in img_urls)
-                agent_message += f"\n\n[上传的图片已在服务器保存，以下为图片下载地址可供图生图模型使用：]\n{url_lines}"
+                # 同时给出本地绝对路径：ocr_image / read_bytes 等工具可直接读，
+                # 不必再靠 find / 全盘搜索去猜「用户传的图在哪」。
+                path_lines = "\n".join(f"- {p}" for p in img_paths)
+                agent_message += (
+                    f"\n\n[上传的图片已在服务器保存，本地绝对路径（可直接交给 ocr_image 等工具）：]\n{path_lines}"
+                    f"\n\n[以上图片的下载地址（供图生图模型使用）：]\n{url_lines}"
+                )
         except (json.JSONDecodeError, TypeError):
             pass
     if _is_skill_inventory_query(req.message):
@@ -313,7 +319,13 @@ async def run_agent_stream(req: RunRequest, request: Request):
             if img_paths:
                 img_urls = _user_image_urls(uid, img_paths, request)
                 url_lines = "\n".join(f"- {url}" for url in img_urls)
-                agent_message += f"\n\n[上传的图片已在服务器保存，以下为图片下载地址可供图生图模型使用：]\n{url_lines}"
+                # 同时给出本地绝对路径：ocr_image / read_bytes 等工具可直接读，
+                # 不必再靠 find / 全盘搜索去猜「用户传的图在哪」。
+                path_lines = "\n".join(f"- {p}" for p in img_paths)
+                agent_message += (
+                    f"\n\n[上传的图片已在服务器保存，本地绝对路径（可直接交给 ocr_image 等工具）：]\n{path_lines}"
+                    f"\n\n[以上图片的下载地址（供图生图模型使用）：]\n{url_lines}"
+                )
         except (json.JSONDecodeError, TypeError):
             pass
     if _is_skill_inventory_query(req.message):

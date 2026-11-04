@@ -54,6 +54,16 @@
   .provider-row button:hover { background:#e0e0e0; }
   .provider-row .btn-danger { border-color:#ff4d4f; background:#fff; color:#ff4d4f; }
   .provider-row .btn-danger:hover { background:#ff4d4f; color:#fff; }
+  /* 厂商排序列表（拖拽排序，行内切换当前厂商）——复用 .vision-model-row 行样式 */
+  .provider-order-list { display:flex; flex-direction:column; gap:4px; margin-top:4px; }
+  .provider-order-row { cursor:pointer; }
+  .provider-order-row.is-active { border-color:#007aff; background:#e8f0fe; }
+  .provider-order-row .vision-model-name.is-active { color:#007aff; font-weight:600; }
+  .provider-actions { display:flex; gap:8px; margin-top:8px; }
+  .provider-actions button { padding:6px 12px; border:1px solid #ddd; border-radius:8px; background:#f0f0f0; cursor:pointer; white-space:nowrap; font-size:13px; }
+  .provider-actions button:hover { background:#e0e0e0; }
+  .provider-actions .btn-danger { border-color:#ff4d4f; background:#fff; color:#ff4d4f; }
+  .provider-actions .btn-danger:hover { background:#ff4d4f; color:#fff; }
   .vision-models-list { display:flex; flex-direction:column; gap:4px; margin-top:4px; }
   .vision-model-row {
     display:flex; align-items:center; gap:6px;

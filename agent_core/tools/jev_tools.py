@@ -42,6 +42,26 @@ DEFAULT_MODEL = "jev-latest"
 DEFAULT_TIMEOUT = 15          # 单次调用超时（秒）
 DEFAULT_RETRIES = 1           # 瞬时失败重试次数
 
+# ── 服务端确定性故障的进程级熔断 ─────────────────────────────
+# 实测该端点对本机返回 HTTP 451 时，每次调用都要白付 ~0.5s（连接+响应）并刷一条
+# WARNING；一轮 51 次 run_shell 就是 25s 额外开销 + 55 行噪音日志。所有 Jev 接入点
+# （shell 门控 / loop_guard / 验证码二次校验）都共用 _post，因此在这里统一熔断。
+# 只有「确定性失败」（HTTP 4xx，如 451 法务封锁、401 鉴权失败）才熔断；
+# 超时 / 连接错误等单次瞬时异常只做本次降级，不影响后续调用。
+_JEV_DOWN_UNTIL = 0.0
+_JEV_DOWN_SECONDS = float(os.getenv("JEV_DOWN_SECONDS", "300"))
+
+
+def _jev_cooldown_remaining() -> float:
+    """返回熔断剩余秒数（0 表示未熔断）。测试可用来断言熔断是否生效。"""
+    return max(0.0, _JEV_DOWN_UNTIL - time.time())
+
+
+def reset_jev_breaker() -> None:
+    """清除熔断状态（供测试与「服务恢复后立即重试」场景使用）。"""
+    global _JEV_DOWN_UNTIL
+    _JEV_DOWN_UNTIL = 0.0
+
 # 从环境读取 key（与 agent_core/config.py 的 env 映射保持一致）
 _ENV_KEY = "TYPESAFE_API_KEY"
 # config.json 回退路径（相对 home）
@@ -62,8 +82,13 @@ class JevClient:
 
     def _post(self, payload: dict) -> Optional[dict]:
         """发送请求并解析响应。失败返回 None。"""
+        global _JEV_DOWN_UNTIL
         if not self.api_key:
             logger.debug("Jev: 未配置 TYPESAFE_API_KEY，跳过")
+            return None
+        # 确定性故障熔断期内：直接返回 None（调用方按「Jev 不可用」静默降级）
+        if time.time() < _JEV_DOWN_UNTIL:
+            logger.debug("Jev: 熔断期内跳过调用（剩余 %.0fs）", _JEV_DOWN_UNTIL - time.time())
             return None
         body = json.dumps(payload).encode("utf-8")
 
@@ -85,8 +110,12 @@ class JevClient:
                 last_err = e
                 # 鉴权/参数错误等确定性失败不重试；瞬时（5xx/限流）重试
                 if e.code < 500:
-                    logger.warning("Jev: HTTP %s %s（第 %d/%d 次，不重试）",
-                                   e.code, e.reason, attempt + 1, self.retries + 1)
+                    # 确定性失败 → 熔断，后续调用不再逐个付超时/连接成本
+                    _JEV_DOWN_UNTIL = time.time() + _JEV_DOWN_SECONDS
+                    logger.warning(
+                        "Jev: HTTP %s %s —— 熔断 %.0fs（期间静默降级，不再逐条探测）",
+                        e.code, e.reason, _JEV_DOWN_SECONDS,
+                    )
                     return None
             except Exception as e:
                 last_err = e
