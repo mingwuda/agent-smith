@@ -54,6 +54,9 @@ for package in (
     "starlette",
     "typing_extensions",
     "uvicorn",
+    # uvicorn 运行时用 importlib 动态加载 WebSocket 后端，静态分析扫不到；
+    # 缺了它 /ws/terminal 与 /ws/tool-progress 在打包版里会握手失败。
+    "websockets",
 ):
     hiddenimports += collect_submodules(package)
 

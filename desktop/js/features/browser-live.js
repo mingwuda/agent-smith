@@ -27,6 +27,9 @@
 
   // ---------- 自动弹出（由 streaming.js 在 browser_* tool_start 时调用） ----------
   window.showBrowserFloat = function () {
+    // 浮动窗已搬进右侧工作台：agent 有 browser_* 操作时自动展开工作台，
+    // 已展开则不打断用户当前所在的 tab。
+    if (typeof Workbench !== 'undefined' && Workbench.onBrowserActivity) Workbench.onBrowserActivity();
     const el = _els();
     if (!el) return;
     el.classList.remove('bl-hidden');

@@ -12,10 +12,12 @@
 <script src="/static/libs/katex.min.js"></script>
 <script src="/static/libs/highlight.min.js"></script>
 <link rel="stylesheet" href="/static/libs/github-dark.min.css">
+<link rel="stylesheet" href="/static/libs/xterm.css">
 
 <!-- 本地样式 -->
 <link rel="stylesheet" href="/static/styles/base.css">
 <link rel="stylesheet" href="/static/styles/modals.css">
+<link rel="stylesheet" href="/static/styles/workbench.css">
 <link rel="stylesheet" href="/static/styles/responsive.css">
 </head>
 <body>
@@ -241,6 +243,14 @@
           <span data-i18n="logoutButton">登出</span>
         </div>
       </div>
+      <!-- 右侧工作台收缩开关：文件 / 更改 / 终端 / 浏览器 -->
+      <button class="workbench-toggle" id="workbench-toggle" onclick="Workbench.toggle()" data-i18n-title="wbToggleWorkbench" title="展开/收起工作台" aria-label="展开/收起工作台" aria-expanded="false" aria-controls="workbench-dock">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round">
+          <rect x="3" y="4" width="18" height="16" rx="2"></rect>
+          <path d="M15 4v16"></path>
+          <rect x="15" y="4" width="6" height="16" rx="2" fill="currentColor" stroke="none" opacity=".22"></rect>
+        </svg>
+      </button>
     </div>
   </div>
   
@@ -773,6 +783,68 @@
   <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5l5 5 5-5"/><path d="M3 9l5 5 5-5"/></svg>
 </button>
 
+<!-- 右侧工作台：文件 / 更改 / 终端 / 浏览器（右上角按钮收缩）
+     #file-preview-panel 与 #browser-float 由 workbench.js 在初始化时搬进对应容器，
+     保留原有 id，文件预览/diff/编辑/浏览器轮询的代码无需改动。 -->
+<aside id="workbench-dock" class="workbench-dock" hidden>
+  <div class="wb-resize" id="wb-resize" title="拖动调整宽度"></div>
+  <div class="wb-tabbar">
+    <div class="wb-tabs" role="tablist">
+      <button class="wb-tab active" data-tab="files" onclick="Workbench.setTab('files')"><span data-i18n="wbFiles">文件</span></button>
+      <button class="wb-tab" data-tab="changes" onclick="Workbench.setTab('changes')"><span data-i18n="wbChanges">更改</span> <span class="wb-badge" id="wb-count-changes" hidden></span></button>
+      <button class="wb-tab" data-tab="terminal" onclick="Workbench.setTab('terminal')"><span data-i18n="wbTerminal">终端</span> <span class="wb-badge" id="wb-count-terminal" hidden></span></button>
+      <button class="wb-tab" data-tab="browser" onclick="Workbench.setTab('browser')"><span data-i18n="wbBrowser">浏览器</span></button>
+    </div>
+    <div class="wb-actions">
+      <button class="wb-icon-btn" id="wb-maximize" onclick="Workbench.toggleMaximize()" title="最大化 / 还原">⤢</button>
+      <button class="wb-icon-btn" onclick="Workbench.close()" title="收起工作台">✕</button>
+    </div>
+  </div>
+  <div class="wb-body">
+    <!-- 文件：左侧树 + 右侧多文件预览 -->
+    <section class="wb-panel active" id="wb-panel-files">
+      <div class="wb-files-left" id="wb-files-left">
+        <div class="wb-toolbar">
+          <select class="wb-select" id="wb-project-select" onchange="WorkbenchFiles.setProject(this.value)" title="选择项目"></select>
+          <button class="wb-icon-btn" onclick="WorkbenchFiles.refresh()" title="刷新">⟳</button>
+          <input class="wb-filter" id="wb-tree-filter" data-i18n-placeholder="wbFilterFile" placeholder="筛选文件" oninput="WorkbenchFiles.filter(this.value)" />
+        </div>
+        <div class="wb-tree" id="wb-tree"></div>
+      </div>
+      <div class="wb-files-split" id="wb-files-split" title="拖动调整树宽"></div>
+      <div class="wb-files-right">
+        <div class="wb-file-tabs" id="wb-file-tabs"></div>
+        <div class="wb-file-actions">
+          <span class="wb-file-meta" id="wb-file-meta"></span>
+          <div class="wb-segmented" id="wb-mode-switch">
+            <button class="active" data-mode="source" onclick="WorkbenchFiles.setMode('source')"><span data-i18n="wbSource">源码</span></button>
+            <button data-mode="preview" onclick="WorkbenchFiles.setMode('preview')"><span data-i18n="wbPreview">预览</span></button>
+          </div>
+          <button class="wb-mention" onclick="WorkbenchFiles.mentionActive()"><span data-i18n="wbMention">@ 引用</span></button>
+        </div>
+        <div class="wb-preview-host" id="wb-preview-host"></div>
+      </div>
+    </section>
+    <!-- 更改：变更文件列表 + diff -->
+    <section class="wb-panel" id="wb-panel-changes">
+      <div class="wb-changes-list" id="wb-changes-list"><div class="wb-empty" data-i18n="wbLoading">加载中…</div></div>
+      <div class="wb-changes-diff" id="wb-changes-diff"><div class="wb-empty" data-i18n="wbPickFile">选择文件查看差异</div></div>
+    </section>
+    <!-- 终端：xterm + PTY WebSocket -->
+    <section class="wb-panel" id="wb-panel-terminal">
+      <div class="wb-term-toolbar">
+        <span class="wb-term-status" id="wb-term-status" data-i18n="wbTermIdle">未连接</span>
+        <span class="wb-term-hint" id="wb-term-cwd"></span>
+        <button class="wb-icon-btn" onclick="WorkbenchTerminal.restart()" title="新建终端">＋</button>
+        <button class="wb-icon-btn" onclick="WorkbenchTerminal.clear()" title="清屏">⌫</button>
+      </div>
+      <div class="wb-term" id="wb-term"></div>
+    </section>
+    <!-- 浏览器：原浮动窗搬进来后铺满 -->
+    <section class="wb-panel" id="wb-panel-browser"></section>
+  </div>
+</aside>
+
 <!-- 本地脚本（按依赖顺序加载） -->
 <script src="/static/js/core/state.js"></script>
 <script src="/static/js/core/chat-tabs.js"></script>
@@ -796,6 +868,11 @@
 <script src="/static/js/features/permissions.js"></script>
     <script src="/static/js/features/auth.js"></script>
     <script src="/static/js/features/mcp.js"></script>
+    <script src="/static/libs/xterm.js"></script>
+    <script src="/static/libs/xterm-addon-fit.js"></script>
+    <script src="/static/js/features/workbench-files.js"></script>
+    <script src="/static/js/features/workbench-terminal.js"></script>
+    <script src="/static/js/features/workbench.js"></script>
     <script src="/static/js/main.js"></script>
 </body>
 </html>

@@ -1389,9 +1389,10 @@ function openFileDiffPreview(diffData) {
   _currentDiffText = diffData.diff_text || '';
   renderDiffHtml(diffWrap, _currentDiffText || '(无差异)');
 
-  // 显示面板
+  // 显示面板（面板搬进右侧工作台后由 dock 统一让位，不再叠加 margin）
   panel.classList.add('open');
-  document.body.classList.add('file-preview-open');
+  if (typeof Workbench !== 'undefined' && Workbench.onFilePreview) Workbench.onFilePreview();
+  if (!panel.closest('#workbench-dock')) document.body.classList.add('file-preview-open');
 }
 
 /**

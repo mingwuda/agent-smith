@@ -569,23 +569,17 @@ from api.routes.cron import router as cron_router
 from api.routes.files import router as files_router
 from api.routes.admin_evolution import router as admin_evolution_router
 from api.routes.browser import router as browser_router
+from api.routes.terminal import router as terminal_router
 
-app.include_router(auth_router)
-app.include_router(agent_router)
-app.include_router(sessions_router)
-app.include_router(skills_router)
-app.include_router(artifacts_router)
-app.include_router(db_router)
-app.include_router(system_router)
-app.include_router(wechat_router)
-app.include_router(monitoring_router)
-app.include_router(update_router)
-app.include_router(mcp_router)
-app.include_router(projects_router)
-app.include_router(cron_router)
-app.include_router(files_router)
-app.include_router(admin_evolution_router)
-app.include_router(browser_router)
+# composition root 的注册顺序即 tuple 顺序。用循环而非逐条 include_router，
+# 避免每新增一个路由模块就往 main.py 堆两行（行数守护要求 main.py 保持精简）。
+for _router in (
+    auth_router, agent_router, sessions_router, skills_router, artifacts_router,
+    db_router, system_router, wechat_router, monitoring_router, update_router,
+    mcp_router, projects_router, cron_router, files_router,
+    admin_evolution_router, browser_router, terminal_router,
+):
+    app.include_router(_router)
 
 
 # ---------- 入口 ----------

@@ -1,0 +1,213 @@
+/* workbench.css — 右侧工作台 dock（参考 agnes-harness workbench 的布局与交互）
+   配色沿用左侧 #sidebar 的深色，避免与浅色聊天区混搭时显得割裂。
+   面板是 fixed 覆盖层，靠 body.wb-open 给聊天区让位（与旧 file-preview-panel 同一套路）。 */
+
+:root { --wb-width: 720px; }
+
+body.wb-open #header,
+body.wb-open #chat-tabs-container,
+body.wb-open #messages,
+body.wb-open #loading-bar,
+body.wb-open #input-area { margin-right: var(--wb-width); }
+
+/* 悬浮按钮是 fixed 居中于视口，工作台展开后要挪回聊天区中心，否则被盖住半边 */
+body.wb-open .scroll-to-bottom-btn { left: calc(140px + (100vw - var(--wb-width)) / 2); }
+
+/* 右上角收缩按钮：外框 + 右侧竖条，展开时竖条点亮 */
+.workbench-toggle {
+  width: 30px; height: 28px; padding: 4px; border: 1px solid transparent;
+  background: transparent; color: #6e6e73; border-radius: 6px; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto;
+}
+.workbench-toggle:hover { background: #f0f0f5; color: #333; }
+.workbench-toggle.active { color: #007aff; background: #eaf3ff; }
+.workbench-toggle svg { width: 18px; height: 18px; display: block; }
+
+.workbench-dock {
+  position: fixed; top: 0; right: 0; bottom: 0; width: var(--wb-width);
+  z-index: 1500; display: flex; flex-direction: column;
+  background: #1c1c1e; color: #f5f5f7;
+  border-left: 1px solid #2c2c2e; box-shadow: -8px 0 32px rgba(0,0,0,.28);
+  font-size: 13px;
+}
+.workbench-dock[hidden] { display: none !important; }
+.workbench-dock.wb-maximized { width: 60vw; }
+
+/* 左侧拖拽把手 */
+.wb-resize {
+  position: absolute; left: -4px; top: 0; bottom: 0; width: 8px;
+  cursor: col-resize; z-index: 5; touch-action: none;
+}
+.wb-resize:hover, .wb-resize.dragging { background: rgba(0,122,255,.35); }
+
+/* ── 顶部 tab 条 ── */
+.wb-tabbar {
+  flex: 0 0 auto; height: 40px; display: flex; align-items: stretch;
+  justify-content: space-between; border-bottom: 1px solid #2c2c2e; background: #202023;
+}
+.wb-tabs { display: flex; align-items: stretch; overflow-x: auto; scrollbar-width: none; }
+.wb-tabs::-webkit-scrollbar { display: none; }
+.wb-tab {
+  border: none; background: transparent; color: #8e8e93; cursor: pointer;
+  padding: 0 14px; font-size: 13px; font-weight: 500; white-space: nowrap;
+  border-bottom: 2px solid transparent; display: inline-flex; align-items: center; gap: 6px;
+}
+.wb-tab:hover { color: #f5f5f7; background: rgba(255,255,255,.04); }
+.wb-tab.active { color: #f5f5f7; border-bottom-color: #0a84ff; }
+.wb-badge {
+  min-width: 17px; height: 17px; padding: 0 4px; border-radius: 9px;
+  background: #3a3a3d; color: #d1d1d6; font-size: 10px; font-weight: 600;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.wb-badge[hidden] { display: none; }
+.wb-actions { display: flex; align-items: center; gap: 2px; padding-right: 8px; }
+.wb-icon-btn {
+  width: 26px; height: 26px; border: none; background: transparent; color: #8e8e93;
+  border-radius: 5px; cursor: pointer; font-size: 14px; line-height: 1;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.wb-icon-btn:hover { background: #2c2c2e; color: #f5f5f7; }
+
+.wb-body { flex: 1; min-height: 0; position: relative; }
+.wb-panel { display: none; position: absolute; inset: 0; min-height: 0; }
+.wb-panel.active { display: flex; }
+.wb-empty { padding: 28px 16px; color: #6e6e73; font-size: 12px; text-align: center; }
+
+/* ── 文件 tab：树 | 分隔 | 预览 ── */
+#wb-panel-files { flex-direction: row; }
+.wb-files-left { width: 240px; min-width: 150px; display: flex; flex-direction: column; border-right: 1px solid #2c2c2e; }
+.wb-toolbar { flex: 0 0 auto; display: flex; align-items: center; gap: 4px; padding: 6px 8px; border-bottom: 1px solid #2c2c2e; flex-wrap: wrap; }
+.wb-select {
+  flex: 1 1 110px; min-width: 0; background: #2c2c2e; color: #f5f5f7;
+  border: 1px solid #3a3a3d; border-radius: 5px; padding: 4px 6px; font-size: 11.5px;
+}
+.wb-filter {
+  flex: 1 1 100%; background: #161618; color: #f5f5f7; border: 1px solid #3a3a3d;
+  border-radius: 5px; padding: 4px 7px; font-size: 11.5px; outline: none;
+}
+.wb-filter:focus { border-color: #0a84ff; }
+.wb-tree { flex: 1; overflow: auto; padding: 6px 0 20px; scrollbar-width: thin; scrollbar-color: #4a4a4d transparent; }
+.wb-node {
+  display: flex; align-items: center; gap: 5px; padding: 3px 8px; cursor: pointer;
+  white-space: nowrap; font-size: 12.5px; color: #d1d1d6; user-select: none;
+}
+.wb-node:hover { background: #2c2c2e; }
+.wb-node.selected { background: #0a84ff33; color: #fff; }
+.wb-node .wb-chevron { width: 12px; flex: 0 0 12px; font-size: 9px; color: #8e8e93; transition: transform .12s; }
+.wb-node .wb-chevron.open { transform: rotate(90deg); }
+.wb-node .wb-name { overflow: hidden; text-overflow: ellipsis; }
+.wb-node .wb-at { visibility: hidden; margin-left: auto; color: #8e8e93; font-size: 11px; }
+.wb-node:hover .wb-at { visibility: visible; }
+.wb-node .wb-at:hover { color: #0a84ff; }
+.wb-files-split { width: 5px; flex: 0 0 5px; cursor: col-resize; background: #2c2c2e; touch-action: none; }
+.wb-files-split:hover, .wb-files-split.dragging { background: #0a84ff66; }
+.wb-files-right { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+
+.wb-file-tabs {
+  flex: 0 0 auto; display: flex; align-items: stretch; gap: 2px; padding: 4px 6px 0;
+  overflow-x: auto; scrollbar-width: none; min-height: 32px; background: #1c1c1e;
+}
+.wb-file-tabs::-webkit-scrollbar { display: none; }
+.wb-file-tab {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 190px;
+  padding: 5px 8px; border: 1px solid transparent; border-radius: 7px 7px 0 0;
+  background: #2c2c2e; color: #8e8e93; font-size: 11.5px; cursor: pointer; white-space: nowrap;
+}
+.wb-file-tab.active { background: #fff; color: #1c1c1e; border-color: #e0e0e3; }
+.wb-file-tab .wb-tab-name { overflow: hidden; text-overflow: ellipsis; }
+.wb-file-tab .wb-tab-x { color: inherit; opacity: .6; font-size: 13px; }
+.wb-file-tab .wb-tab-x:hover { opacity: 1; color: #ff453a; }
+
+.wb-file-actions {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 8px;
+  padding: 6px 10px; background: #f5f5f7; border-bottom: 1px solid #e0e0e3;
+}
+.wb-file-meta {
+  flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  font-size: 11px; color: #6e6e73; font-family: "SF Mono", Menlo, monospace;
+}
+.wb-segmented { display: inline-flex; background: #e5e5ea; border-radius: 6px; padding: 2px; }
+.wb-segmented button {
+  border: none; background: transparent; color: #6e6e73; cursor: pointer;
+  font-size: 11.5px; padding: 3px 10px; border-radius: 5px;
+}
+.wb-segmented button.active { background: #fff; color: #1c1c1e; box-shadow: 0 1px 2px rgba(0,0,0,.12); }
+.wb-mention {
+  border: 1px solid #d1d1d6; background: #fff; color: #333; cursor: pointer;
+  font-size: 11.5px; padding: 4px 9px; border-radius: 6px;
+}
+.wb-mention:hover { border-color: #0a84ff; color: #0a84ff; }
+.wb-preview-host { flex: 1; min-height: 0; position: relative; overflow: hidden; background: #161618; }
+.wb-preview-host .wb-preview-empty {
+  position: absolute; inset: 0; z-index: 2; background: #161618;
+  display: flex; align-items: center; justify-content: center;
+  color: #6e6e73; text-align: center; font-size: 12.5px;
+}
+
+/* 把原 #file-preview-panel 嵌进预览区：去掉 fixed 覆盖层定位，保留内部所有 fpp-* 结构 */
+#wb-preview-host .file-preview-panel {
+  position: absolute; inset: 0; width: auto; z-index: 1;
+  border-left: none; box-shadow: none; display: flex;
+}
+#wb-preview-host .fpp-header { background: #202023; border-bottom-color: #2c2c2e; }
+#wb-preview-host .fpp-title { color: #f5f5f7; }
+/* 路径已在上方操作行显示，避免同一路径重复两遍 */
+#wb-preview-host .fpp-meta { display: none; }
+#wb-preview-host .fpp-btn { color: #a1a1a6; }
+#wb-preview-host .fpp-btn:hover { background: #2c2c2e; color: #fff; }
+#wb-preview-host .fpp-md { background: #fff; }
+#wb-preview-host .fpp-outer-preview { position: absolute; inset: 0; background: #fff; overflow: auto; }
+#wb-preview-host .fpp-outer-preview iframe { width: 100%; height: 100%; border: 0; display: block; }
+#wb-preview-host .fpp-outer-preview img { max-width: 100%; }
+
+/* ── 更改 tab ── */
+#wb-panel-changes { flex-direction: row; }
+.wb-changes-list { width: 260px; min-width: 160px; overflow: auto; border-right: 1px solid #2c2c2e; padding: 6px 0; }
+.wb-change-item {
+  display: flex; align-items: center; gap: 8px; padding: 6px 12px; cursor: pointer;
+  font-size: 12px; color: #d1d1d6; white-space: nowrap;
+}
+.wb-change-item:hover { background: #2c2c2e; }
+.wb-change-item.active { background: #0a84ff33; color: #fff; }
+.wb-change-item .wb-change-status { font-size: 10px; width: 14px; color: #ffd60a; }
+.wb-change-item .wb-change-path { overflow: hidden; text-overflow: ellipsis; }
+.wb-changes-diff { flex: 1; min-width: 0; overflow: auto; background: #161618; }
+.wb-changes-diff .fpp-diff-wrap { display: block; min-height: 100%; }
+.wb-changes-toolbar {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 6px;
+  padding: 6px 10px; border-bottom: 1px solid #2c2c2e; color: #8e8e93; font-size: 11.5px;
+}
+
+/* ── 终端 tab ── */
+#wb-panel-terminal { flex-direction: column; background: #121214; }
+.wb-term-toolbar {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 8px;
+  padding: 5px 10px; border-bottom: 1px solid #2c2c2e; font-size: 11.5px;
+}
+.wb-term-status { color: #8e8e93; }
+.wb-term-status.connected { color: #4ade80; }
+.wb-term-status.error { color: #ff6b6b; }
+.wb-term-hint { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #6e6e73; font-family: "SF Mono", Menlo, monospace; }
+.wb-term { flex: 1; min-height: 0; padding: 6px 0 0 10px; overflow: hidden; }
+.wb-term .xterm { height: 100%; }
+
+/* ── 浏览器 tab：复用原浮窗，改成静态铺满 ── */
+#wb-panel-browser .bl-float {
+  position: static !important; width: 100% !important; height: 100% !important;
+  max-width: none; inset: auto; display: flex; flex-direction: column;
+  border: none; border-radius: 0; box-shadow: none;
+}
+#wb-panel-browser .bl-float.bl-hidden { display: flex !important; }
+#wb-panel-browser .bl-float-header { cursor: default; }
+#wb-panel-browser .bl-float-body { flex: 1; min-height: 0; overflow: auto; padding: 12px; }
+
+@media (max-width: 900px) {
+  :root { --wb-width: min(560px, calc(100vw - 40px)); }
+  body.wb-open #header,
+  body.wb-open #chat-tabs-container,
+  body.wb-open #messages,
+  body.wb-open #loading-bar,
+  body.wb-open #input-area { margin-right: 0; }
+  body.wb-open .scroll-to-bottom-btn { left: 50%; }
+  .workbench-dock { width: min(var(--wb-width), calc(100vw - 40px)); }
+}

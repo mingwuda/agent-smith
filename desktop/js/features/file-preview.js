@@ -37,9 +37,19 @@ function fileIcon(name) {
   return map[ext] || '📄';
 }
 
-function openFilePreview(name, content, meta) {
+function openFilePreview(name, content, meta, ctx) {
   const panel = document.getElementById('file-preview-panel');
   if (!panel) return;
+  // 面板被搬进右侧工作台后，旧入口（左侧文件浏览器 / 编辑保存）统一交给 dock 的
+  // 多文件标签渲染，避免两套视图共用一个 DOM 互相覆盖。
+  const inDock = !!panel.closest('#workbench-dock');
+  if (inDock) {
+    if (window.Workbench) Workbench.onFilePreview();
+    if (ctx && ctx.path && window.WorkbenchFiles) {
+      WorkbenchFiles.openPath(ctx.path, ctx.projectId || '');
+      return;
+    }
+  }
   const icon = document.getElementById('fpp-icon');
   const title = document.getElementById('fpp-title');
   const metaEl = document.getElementById('fpp-meta');
@@ -101,7 +111,8 @@ function openFilePreview(name, content, meta) {
   }
 
   panel.classList.add('open');
-  document.body.classList.add('file-preview-open');
+  // dock 内不需要 margin-right 让位（整个工作台已经让位了）
+  if (!inDock) document.body.classList.add('file-preview-open');
   const body = panel.querySelector('.fpp-body');
   if (body) body.scrollTop = 0;
 }
