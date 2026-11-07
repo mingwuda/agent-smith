@@ -558,9 +558,9 @@ async function openFileBrowser(projectId) {
   const p = projectsCache.find(x => x.id === projectId);
   currentProjectDir = (p && p.directory_path) ? p.directory_path : '';
   currentProjectId = projectId;
-  _isChangesView = false;
+  // 左侧面板已定位为「变更清单」：默认直接展示工作区变更，不再渲染文件树
+  _isChangesView = true;
   _isStashListView = false;
-  _resetChangesBtn();
 
   const listEl = document.getElementById('project-list');
   const fbEl = document.getElementById('file-browser-panel');
@@ -569,10 +569,10 @@ async function openFileBrowser(projectId) {
   if (fbEl) fbEl.style.display = 'flex';
   document.querySelectorAll('.sidebar-accordion').forEach(a => a.style.display = 'none');
 
-  const path = currentProjectDir || '';
-  await browseDirectory(path, projectId);
-  // 预加载变更数量，显示角标
-  prefetchChangesCount();
+  // 激活「变更文件」菜单项并直接加载变更清单（替代原来的文件树 browseDirectory）
+  const menuItem = document.getElementById('fb-menu-changes');
+  if (menuItem) menuItem.classList.add('active');
+  await loadChangedFiles();
   // 检测未推送提交，显示推送图标
   checkUnpushedCommits();
 }
@@ -597,7 +597,9 @@ function exitFileBrowser() {
 }
 
 function refreshFileBrowser() {
-  browseDirectory(currentBrowsePath, currentProjectId);
+  // 左侧面板定位为变更清单：刷新时重新拉取变更（而非重新 browse 文件树）
+  if (_isChangesView) loadChangedFiles();
+  else browseDirectory(currentBrowsePath, currentProjectId);
   checkUnpushedCommits();
 }
 
@@ -616,7 +618,7 @@ function toggleProjectMenu(btn, projectId) {
   menu.dataset.pid = String(projectId);
   menu.className = 'proj-more-menu';
   const items = [
-    { icon: '📂', label: t('viewFiles') || '查看文件', fn: () => openFileBrowser(projectId) },
+    { icon: '📝', label: t('viewChanges') || '查看变更清单', fn: () => openFileBrowser(projectId) },
     { icon: '🕘', label: t('viewCommits') || '查看提交清单', fn: () => openCommitsPanel(projectId) },
     { icon: '✎', label: t('editProject') || '编辑', fn: () => editProject(projectId) },
     { icon: '⏰', label: t('cronTasks') || '定时任务', fn: () => openCronPanel(projectId) },
