@@ -8,7 +8,7 @@ const sendBtn = document.getElementById('send');
 const attachmentPreview = document.getElementById('attachment-preview');
 const statusDot = document.getElementById('status-dot');
 const statusText = document.getElementById('status-text');
-const settingsBtn = document.getElementById('settings-btn');
+const settingsBtn = document.getElementById('settings-menu-item');
 const languageSelect = document.getElementById('language-select');
 
 // ── 通用状态变量 ──

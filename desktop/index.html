@@ -52,8 +52,8 @@
       <button class="fb-refresh" onclick="refreshFileBrowser()" title="刷新">⟳</button>
       <button class="fb-more-btn" id="fb-more-btn" onclick="toggleFbMoreMenu()" title="更多操作">▾<span class="fb-badge" id="fb-changes-badge" style="display:none;"></span></button>
       <div class="fb-more-menu" id="fb-more-menu">
-        <button class="fb-menu-item" id="fb-menu-changes" onclick="toggleChangesView()" title="变更文件">
-          <span class="fb-menu-icon">📝</span> 变更文件
+        <button class="fb-menu-item" id="fb-menu-changes" onclick="toggleChangesView()" title="提交变更">
+          <span class="fb-menu-icon">📝</span> 提交变更
         </button>
         <button class="fb-menu-item" id="fb-menu-stash" onclick="stashChanges()" title="将当前改动存入 git stash">
           <span class="fb-menu-icon">📥</span> 暂存改动
@@ -213,13 +213,16 @@
         <div id="mcp-list"></div>
         <div id="mcp-empty" class="mcp-empty" data-i18n="mcpNoServer">未配置 MCP Server</div>
       </div>
-      <button class="header-btn" id="settings-btn" style="display:none;" data-i18n="settingsButton">⚙️ 设置</button>
       <div id="user-avatar" onclick="toggleUserMenu(event)">
         <span id="avatar-text"></span>
       </div>
       <div id="user-menu" class="user-menu-dropdown">
         <div class="user-menu-header">
           <span id="user-menu-name"></span>
+        </div>
+        <div class="user-menu-item" id="settings-menu-item" style="display:none;" onclick="openSettings()">
+          <span class="umi-icon">⚙️</span>
+          <span data-i18n="settingsButton">设置</span>
         </div>
         <div class="user-menu-item" onclick="openMemory()">
           <span class="umi-icon">🧠</span>

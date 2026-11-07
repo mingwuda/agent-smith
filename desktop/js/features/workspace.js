@@ -952,7 +952,7 @@ async function loadChangedFiles() {
 
   // 更新路径显示
   const repoName = currentProjectDir ? currentProjectDir.split('/').pop() : '';
-  pathEl.textContent = '📝 变更文件' + (repoName ? (' · ' + repoName) : '');
+  pathEl.textContent = '📝 提交变更' + (repoName ? (' · ' + repoName) : '');
 
   treeEl.innerHTML = '<div class="fb-empty">加载中…</div>';
 
@@ -977,7 +977,7 @@ async function loadChangedFiles() {
         menuItem.title = '提交变更';
         menuItem.onclick = openCommitDialog;
       } else {
-        menuItem.title = '变更文件';
+        menuItem.title = '提交变更';
         menuItem.onclick = toggleChangesView;
       }
     }
@@ -990,7 +990,7 @@ async function loadChangedFiles() {
 function _resetChangesBtn() {
   const menuItem = document.getElementById('fb-menu-changes');
   if (!menuItem) return;
-  menuItem.title = '变更文件';
+  menuItem.title = '提交变更';
   menuItem.onclick = toggleChangesView;
 }
 
